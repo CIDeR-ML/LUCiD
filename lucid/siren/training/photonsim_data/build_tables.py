@@ -7,7 +7,7 @@ Two variants share one base:
   * `DedxLookupBuilder`    → `dedx_lookup_table.h5`    (energy loss:    dE/dx × s/s_max)
 
 Both read per-cell `<data-dir>/<material>/<particle>/<E>MeV/photonsim.root` files
-emitted by `lucid/production/jobs/siren_inputs/`. The 3rd axis is now the
+emitted by `lucid/production/siren_inputs/`. The 3rd axis is now the
 dimensionless `s / s_max(E)` with `s_max(E) = A · E^B` fit per (material,
 particle); the fit comes from `PhotonSim/data/<m>/<p>/smax_fit.csv` and is
 welded into the .h5's `metadata.attrs` so downstream LUCiD code (training,
@@ -29,8 +29,7 @@ import json
 import logging
 import os
 import re
-import sys
-from abc import ABC, abstractmethod
+from abc import ABC
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,23 +38,12 @@ import numpy as np
 import uproot
 from tqdm import tqdm
 
+from lucid.siren.emitter import SMAX_PARAMS, make_smax_fn
+
 logger = logging.getLogger(__name__)
 
 FORMAT_VERSION = "2.0"
 CELL_DIR_RE = re.compile(r"^(\d+)MeV$")
-
-# Per-form param columns expected in smax_fit.csv.  Keep in sync with the
-# canonical FORMS dict in PhotonSim/tools/smax/analyze_smax.py.
-# For "piecewise": low-piece params live in the standard (a, b1, b2, E0)
-# columns; high-piece params in (a_hi, b1_hi, b2_hi, E0_hi); plus the
-# scalar join energy in e_join_mev.
-_SMAX_PARAM_COLS = {
-    "A*E^B":            ("A", "B"),
-    "smooth_two_power": ("a", "b1", "b2", "E0"),
-    "piecewise":        ("a", "b1", "b2", "E0",
-                         "e_join_mev",
-                         "a_hi", "b1_hi", "b2_hi", "E0_hi"),
-}
 
 # Columns that every row has (in addition to form-specific params).
 _SMAX_SHARED_COLS = (
@@ -64,80 +52,32 @@ _SMAX_SHARED_COLS = (
 )
 
 
-def _eval_smax(form: str, params: Dict[str, Any], energy_mev: float) -> float:
-    """Evaluate s_max(E) using the named form. `params` may contain string
-    values (raw CSV cells) or floats (h5 attrs); coerced to float on use.
-    Keep in sync with FORMS in PhotonSim/tools/smax/analyze_smax.py.
+def _fit_n_photons(energy_values: np.ndarray, per_event_total: np.ndarray,
+                   degree: int = 7) -> Dict[str, Any]:
+    """Fit the per-energy photons/event to ``N(E) = exp(sum_k c_k t^k)``, ``t = (ln E - u0)/du``.
+
+    ``per_event_total`` is the photon table summed over (angle, s/s_max). Least squares in ln N,
+    unweighted, i.e. equal fractional weight at every energy. The basis is centred on the fitted
+    ln E range (``u0`` its midpoint, ``du`` its half-width), which keeps the float32 evaluation of
+    ``lucid.siren.emitter.make_n_photons_fn`` at the fit's accuracy. Returns the emitter's
+    ``n_photons`` block; ``rms_frac``/``max_frac`` are the fit's fractional residuals.
     """
-    if form == "A*E^B":
-        A, B = float(params["A"]), float(params["B"])
-        return A * energy_mev ** B
-    if form == "smooth_two_power":
-        a, b1, b2, E0 = (float(params[k]) for k in ("a", "b1", "b2", "E0"))
-        return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
-    if form == "piecewise":
-        ej = float(params["e_join_mev"])
-        if energy_mev < ej:
-            a, b1, b2, E0 = (float(params[k]) for k in ("a", "b1", "b2", "E0"))
-        else:
-            a, b1, b2, E0 = (float(params[k]) for k in ("a_hi", "b1_hi", "b2_hi", "E0_hi"))
-        return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
-    raise ValueError(f"unknown smax form: {form!r}")
-
-
-# Keys of the N_photons(E) fit dict, in the order the validator expects them.
-_NPHOT_FORM = "A*E^B+C"
-_NPHOT_KEYS = ("form", "a", "b", "c", "fit_min_mev", "fit_max_mev", "r_squared")
-
-
-def _fit_nphot_power_law(energy_values: np.ndarray,
-                         per_event_total: np.ndarray) -> Dict[str, Any]:
-    """Fit per-energy total counts-per-event to a smooth power law a*E^b+c.
-
-    `per_event_total` is the sum of the average table over the (x, distance)
-    axes — total photons/event (photon table) or entries/event (dedx table).
-    LUCiD inference uses this as the absolute normalization N_photons(E): the
-    SIREN supplies only the shape (a PMF), this fit supplies the scale.
-
-    Least-squares on raw counts is dominated by the high-energy points (where
-    the bulk of the light is); the `+c` term absorbs the low-E / Cherenkov-
-    threshold offset. Returns a dict keyed by `_NPHOT_KEYS`.
-    """
-    from scipy.optimize import curve_fit
-
     E = np.asarray(energy_values, dtype=np.float64)
-    y = np.asarray(per_event_total, dtype=np.float64)
+    N = np.asarray(per_event_total, dtype=np.float64)
+    if np.any(N <= 0):
+        raise ValueError(f"N_photons(E) fit: no photons at E = {E[N <= 0].tolist()} MeV; "
+                         f"drop those cells (below the Cherenkov threshold) and rebuild")
+    lnE = np.log(E)
+    u0, du = 0.5 * (lnE.min() + lnE.max()), 0.5 * (lnE.max() - lnE.min())
+    t = (lnE - u0) / du
+    coeffs = np.polynomial.polynomial.polyfit(t, np.log(N), degree)
+    frac = np.exp(np.polynomial.polynomial.polyval(t, coeffs)) / N - 1.0
+    return {"form": "logpoly", "coeffs": coeffs.tolist(), "u0": float(u0), "du": float(du),
+            "fit_min_mev": int(E.min()), "fit_max_mev": int(E.max()),
+            "rms_frac": float(np.sqrt(np.mean(frac ** 2))), "max_frac": float(np.max(np.abs(frac)))}
 
-    def power_law(x, a, b, c):
-        return a * np.power(x, b) + c
 
-    # Seed from a log-log slope of the upper-half points (above any knee).
-    hi = E >= np.median(E)
-    if hi.sum() >= 2 and np.all(y[hi] > 0):
-        b0 = float(np.polyfit(np.log(E[hi]), np.log(y[hi]), 1)[0])
-        a0 = float(y[hi][-1] / E[hi][-1] ** b0)
-    else:
-        a0, b0 = 1.0, 1.0
-
-    try:
-        popt, _ = curve_fit(power_law, E, y, p0=[a0, b0, 0.0], maxfev=20000)
-        a, b, c = (float(v) for v in popt)
-        resid = y - power_law(E, a, b, c)
-        ss_res = float(np.sum(resid ** 2))
-        ss_tot = float(np.sum((y - y.mean()) ** 2))
-        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
-    except Exception as exc:  # noqa: BLE001 — degrade gracefully, never abort a build
-        logger.warning("N_photons power-law fit failed (%s); storing flat "
-                        "fallback (a=0, b=1, c=mean)", exc)
-        a, b, c, r2 = 0.0, 1.0, float(y.mean()), 0.0
-
-    return {
-        "form": _NPHOT_FORM,
-        "a": a, "b": b, "c": c,
-        "fit_min_mev": int(E.min()),
-        "fit_max_mev": int(E.max()),
-        "r_squared": r2,
-    }
+_NPHOT_KEYS = ("form", "coeffs", "u0", "du", "fit_min_mev", "fit_max_mev", "rms_frac", "max_frac")
 
 
 # --- smax_fit.csv reader (private to the builder) ---------------------------
@@ -189,13 +129,13 @@ def _read_smax_fit_csv(photonsim_dir: Path, material: str,
     form = row.get("form")
     if not form:
         raise ValueError(f"s_max fit at {path} is missing the `form` column.")
-    if form not in _SMAX_PARAM_COLS:
+    if form not in SMAX_PARAMS:
         raise ValueError(
             f"s_max fit at {path} declares unknown form {form!r}. "
-            f"Known forms: {sorted(_SMAX_PARAM_COLS)}.")
+            f"Known forms: {sorted(SMAX_PARAMS)}.")
     try:
         out: Dict[str, Any] = {"form": form}
-        for p in _SMAX_PARAM_COLS[form]:
+        for p in SMAX_PARAMS[form]:
             out[p] = float(row[p])
         out["fit_min_mev"]         = int(row["fit_min_mev"])
         out["fit_max_mev"]         = int(row["fit_max_mev"])
@@ -257,7 +197,6 @@ class LookupTableBuilder(ABC):
         self.average_table: Optional[np.ndarray] = None
         self.x_edges: Optional[np.ndarray] = None
         self.distance_edges: Optional[np.ndarray] = None
-        self.nphot_fit: Optional[Dict[str, Any]] = None
 
     # ---- cell discovery + per-cell read ------------------------------------
 
@@ -357,18 +296,6 @@ class LookupTableBuilder(ABC):
             if n_events > 0:
                 self.average_table[idx] = counts / n_events
 
-        # Per-energy total counts/event = sum of the average table over the
-        # (x, distance) axes. Fit N_photons(E) = a*E^b+c for LUCiD inference.
-        per_event_total = self.average_table.sum(axis=(1, 2))
-        self.nphot_fit = _fit_nphot_power_law(
-            np.asarray(self.energy_values, dtype=np.float64), per_event_total,
-        )
-        logger.info(
-            "N_photons(E) fit: %.6g * E^%.6g + %.6g  (R^2=%.6f, %s..%s MeV)",
-            self.nphot_fit["a"], self.nphot_fit["b"], self.nphot_fit["c"],
-            self.nphot_fit["r_squared"],
-            self.nphot_fit["fit_min_mev"], self.nphot_fit["fit_max_mev"],
-        )
 
     # ---- h5 write ----------------------------------------------------------
 
@@ -432,8 +359,6 @@ class LookupTableBuilder(ABC):
             meta.attrs[self.TOTAL_KEY] = float(self.raw_table.sum())
             for k, v in self.smax.items():
                 meta.attrs[f"smax_{k}"] = v
-            for k, v in self.nphot_fit.items():
-                meta.attrs[f"nphot_{k}"] = v
             self._write_extra_attrs(meta)
 
             meta.create_dataset("events_per_file", data=events_data)
@@ -468,24 +393,18 @@ class LookupTableBuilder(ABC):
             smax_form = attrs.get("smax_form")
             if isinstance(smax_form, bytes):
                 smax_form = smax_form.decode()
-            if smax_form not in _SMAX_PARAM_COLS:
+            if smax_form not in SMAX_PARAMS:
                 raise AssertionError(
                     f"smax_form attr is missing or unknown ({smax_form!r}); "
-                    f"known: {sorted(_SMAX_PARAM_COLS)}")
+                    f"known: {sorted(SMAX_PARAMS)}")
             required_attrs = {"smax_form"}
             required_attrs |= {f"smax_{c}" for c in _SMAX_SHARED_COLS}
-            required_attrs |= {f"smax_{p}" for p in _SMAX_PARAM_COLS[smax_form]}
-            required_attrs |= {f"nphot_{k}" for k in _NPHOT_KEYS}
+            required_attrs |= {f"smax_{p}" for p in SMAX_PARAMS[smax_form]}
+            if self.TABLE_KEY == "photon_table":
+                required_attrs |= {f"nphot_{k}" for k in _NPHOT_KEYS}
             for k in required_attrs:
                 if k not in attrs:
                     raise AssertionError(f"missing metadata attr: {k}")
-            nphot_form = attrs.get("nphot_form")
-            if isinstance(nphot_form, bytes):
-                nphot_form = nphot_form.decode()
-            if nphot_form != _NPHOT_FORM:
-                raise AssertionError(
-                    f"nphot_form attr is missing or unknown ({nphot_form!r}); "
-                    f"expected {_NPHOT_FORM!r}")
             if attrs.get("distance_axis") != b"s_over_smax" and \
                attrs.get("distance_axis") != "s_over_smax":
                 raise AssertionError(
@@ -542,24 +461,17 @@ class LookupTableBuilder(ABC):
                 )
 
             params = {p: float(attrs[f"smax_{p}"])
-                      for p in _SMAX_PARAM_COLS[smax_form]}
+                      for p in SMAX_PARAMS[smax_form]}
             param_str = ", ".join(f"{p}={params[p]:.6f}"
-                                  for p in _SMAX_PARAM_COLS[smax_form])
+                                  for p in SMAX_PARAMS[smax_form])
             logger.info(
                 "validate(): OK. smax form=%s  %s  fit_min=%s  fit_max=%s  "
                 "s_max@1GeV = %.1f mm",
                 smax_form, param_str,
                 attrs["smax_fit_min_mev"], attrs["smax_fit_max_mev"],
-                _eval_smax(smax_form, params, 1000.0),
+                make_smax_fn({"form": smax_form, "params": params}, np)(1000.0),
             )
 
-            n_a, n_b, n_c = (float(attrs[f"nphot_{k}"]) for k in ("a", "b", "c"))
-            logger.info(
-                "validate(): OK. N_photons(E) = %.6g*E^%.6g + %.6g  "
-                "(R^2=%.4f)  N@1GeV = %.1f",
-                n_a, n_b, n_c, float(attrs["nphot_r_squared"]),
-                n_a * 1000.0 ** n_b + n_c,
-            )
 
             # Cross-check the same smax row against the on-disk CSV.
             csv_smax = _read_smax_fit_csv(
@@ -590,6 +502,14 @@ class PhotonLookupBuilder(LookupTableBuilder):
     AVERAGE_UNITS = "photons/event"
     TOTAL_KEY = "total_photons"
     DEFAULT_OUTPUT_NAME = "photon_lookup_table.h5"
+
+    def _write_extra_attrs(self, meta_group: h5py.Group) -> None:
+        # N_photons(E), the Cherenkov emitter's absolute scale (the net supplies only the shape).
+        fit = _fit_n_photons(self.energy_values, self.average_table.sum(axis=(1, 2)))
+        logger.info("N_photons(E) logpoly fit: %s..%s MeV, rms %.2g, max %.2g (fractional)",
+                    fit["fit_min_mev"], fit["fit_max_mev"], fit["rms_frac"], fit["max_frac"])
+        for k, v in fit.items():
+            meta_group.attrs[f"nphot_{k}"] = v
 
 
 class DedxLookupBuilder(LookupTableBuilder):

@@ -1,0 +1,91 @@
+{
+ "schema": 1,
+ "kind": "dedx",
+ "net": {
+  "hidden_features": 256,
+  "hidden_layers": 3,
+  "w0": 30.0
+ },
+ "domain": {
+  "energy_mev": [
+   1.0,
+   100000.0
+  ],
+  "dedx_kev_per_mm": [
+   1.0,
+   999.0
+  ],
+  "s_over_smax": [
+   0.001,
+   0.999
+  ]
+ },
+ "target": {
+  "log10_min": -3.000000238418579,
+  "log10_max": 1.614763855934143,
+  "offset": 0.001
+ },
+ "grid_bins": 250,
+ "s_max_mm": {
+  "form": "piecewise",
+  "params": {
+   "a": 7.021325,
+   "b1": 1.850682,
+   "b2": 0.091481,
+   "E0": 36.708075,
+   "e_join_mev": 500.0,
+   "a_hi": 145.864074,
+   "b1_hi": 1.36911,
+   "b2_hi": 0.096865,
+   "E0_hi": 13.077515
+  },
+  "fit_min_mev": 10,
+  "fit_max_mev": 100000,
+  "quantile": 0.9999,
+  "quantile_multiplier": 1.1,
+  "generated_at_utc": "2026-05-21T13:18:26+00:00"
+ },
+ "provenance": {
+  "material": "water",
+  "particle": "e-",
+  "emission": "dedx",
+  "data_type": "dedx",
+  "selected_from_scan": "water_el_dedx_seed_scan_p100_ti02_n150k",
+  "selected_seed": "seed7",
+  "selection_criterion": "lowest final val_loss across 10-seed scan",
+  "num_steps": 150000,
+  "losses": {
+   "final_train": 0.005716,
+   "final_val": 0.005252,
+   "best_val": 0.004707
+  },
+  "trained_against_h5": "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/electron/dedx_lookup_table.h5",
+  "source_scan_dir": "/sdf/data/neutrino/cjesus/SIREN_files/training_tests/water_el_dedx_seed_scan_p100_ti02_n150k/seed7",
+  "promoted_at_utc": "2026-05-29T14:53:36.394660+00:00"
+ },
+ "training": {
+  "recipe": {
+   "hidden_features": 256,
+   "hidden_layers": 3,
+   "w0": 30.0,
+   "optimizer": "adam",
+   "learning_rate": 0.0001,
+   "weight_decay": 0.0,
+   "grad_clip_norm": 1.0,
+   "use_patience_scheduler": true,
+   "patience": 100,
+   "lr_reduction_factor": 0.5,
+   "min_lr": 5e-07,
+   "batch_size": 25000,
+   "num_steps": 150000,
+   "val_every": 50,
+   "zero_threshold": 0.001,
+   "zero_keep_frac": 0.5,
+   "energy_balance": "uniform",
+   "target_importance": 0.2,
+   "val_split": 0.01,
+   "seed": 7
+  },
+  "recipe_note": "the recipe is lucid/siren/training/nominal.json with this seed; zero_threshold, zero_keep_frac, energy_balance, target_importance and val_split are the production nominal recipe and agree with target.log10_min = log10(1e-3), and the run itself did not record them (the trainer overwrote config.json); the other fields are the run's config.json"
+ }
+}

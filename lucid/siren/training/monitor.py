@@ -2,7 +2,8 @@
 Training Monitor Module for SIREN Training
 
 This module provides classes for monitoring training progress in real-time,
-designed to be used from Jupyter notebooks or scripts.
+designed to be used from Jupyter notebooks or scripts, and the ``--notebook-mode`` display hook
+of the training and validation CLIs.
 """
 from __future__ import annotations
 
@@ -10,13 +11,40 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, Optional, Tuple, Any
 import numpy as np
 import matplotlib.pyplot as plt
-from IPython.display import display, clear_output
 import threading
 
 logger = logging.getLogger(__name__)
+
+
+def setup_matplotlib_for_notebook():
+    """Show figures inline when a training or validation CLI runs inside Jupyter.
+
+    Switches matplotlib to the Agg backend and replaces ``plt.show`` with a function that
+    renders the current figure as a PNG in the notebook output (``--notebook-mode``).
+    """
+    import matplotlib
+
+    print("📊 Jupyter notebook environment - configuring matplotlib for inline display")
+    matplotlib.use('Agg')
+
+    def notebook_show(*args, **kwargs):
+        if plt.get_fignums():
+            import tempfile
+            from IPython.display import Image, display
+
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                temp_path = tmp_file.name
+            try:
+                plt.savefig(temp_path, dpi=150, bbox_inches='tight', facecolor='white')
+                display(Image(temp_path))
+            finally:
+                plt.close()
+                Path(temp_path).unlink(missing_ok=True)
+
+    plt.show = notebook_show
 
 
 class TrainingMonitor:
@@ -63,8 +91,8 @@ class TrainingMonitor:
         self._load_config()
         
     def _load_config(self):
-        """Load training configuration if available."""
-        config_file = self.training_dir / "config.json"
+        """Load the run's recipe (``recipe.json``, written by ``lucid-train-siren``) if available."""
+        config_file = self.training_dir / "recipe.json"
         if config_file.exists():
             with open(config_file) as f:
                 self.config = json.load(f)
@@ -331,8 +359,9 @@ class TrainingMonitor:
             while self.monitoring_active:
                 try:
                     if self.live_plotting:
+                        from IPython.display import clear_output
                         clear_output(wait=True)
-                        fig = self.plot_progress()
+                        self.plot_progress()
                         plt.show()
                         
                     time.sleep(update_interval)
@@ -453,6 +482,7 @@ class LiveTrainingCallback:
             })
             
         if step % self.plot_every == 0 and self.monitor.live_plotting:
+            from IPython.display import clear_output
             clear_output(wait=True)
-            fig = self.monitor.plot_progress()
+            self.monitor.plot_progress()
             plt.show()

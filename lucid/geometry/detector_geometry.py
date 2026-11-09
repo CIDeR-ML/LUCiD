@@ -1,18 +1,18 @@
 """DetectorGeometry container — aggregates geometry + propagator + medium."""
+import os
 from typing import NamedTuple, Optional, Callable
 
 import jax.numpy as jnp
 
-from lucid.geometry import generate_detector, get_material_from_config
-from lucid.wavelength.medium import MediumProperties, make_medium
+from lucid.geometry import get_detector_class, load_detector_config
+from lucid.wavelength.medium import MediumProperties, load_medium
 from lucid.propagation.shared import create_propagator as create_shared_propagator
 
 
 class DetectorGeometry(NamedTuple):
     """Everything about the detector that is independent of the simulation mode.
 
-    Built once via ``from_config()`` and reused across different SimConfig /
-    ParticleModel combinations.
+    Built once via ``from_config()`` and reused across simulation configurations.
     """
     detector_type: str                          # as written in the geometry JSON, NOT normalised:
                                                 # 'cylinder', 'sphere', 'box' or 'string'
@@ -23,22 +23,18 @@ class DetectorGeometry(NamedTuple):
     medium: MediumProperties                    # material physics
     detector: object = None                     # the Detector instance
     propagator: Optional[Callable] = None       # JIT-compiled propagate_photons
+    grid: Optional[NamedTuple] = None           # the propagator's frozen grid (surface detectors)
 
     @staticmethod
     def from_config(json_filename: str,
                     temperature: float = 0.2,
-                    max_candidates_per_ray: int = 4,
-                    detector_type: str = 'Cylinder',
-                    overlap_st_width_frac: float = 0.35,
-                    overlap_renorm: float = 1.0,
-                    overlap_mode: str = 'interp',
-                    deposit_leg_bound: bool = False,
+                    medium: Optional[MediumProperties] = None,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
-        This does everything the old inline code in ``setup_event_simulator``
-        did: load config, create detector, build propagator, derive speed of
-        light from the medium.
+        Reads the JSON once: the detector class is the one registered under its
+        ``detector_type``, the medium comes from its ``material`` (unless given), and the
+        speed of light from the medium.
 
         Parameters
         ----------
@@ -46,22 +42,9 @@ class DetectorGeometry(NamedTuple):
             Path to detector geometry JSON.
         temperature : float or None
             Soft-assignment temperature for propagation. None uses step function.
-        max_candidates_per_ray : int
-            Grid cell sensor limit.
-        detector_type : str
-            'cylinder', 'sphere', 'box' or 'string'; case-insensitive. Validated only -- the
-            class is dispatched from the JSON's own detector_type, not from this argument.
-        overlap_st_width_frac : float
-            Straight-through overlap surrogate width (fraction of r); default 0.35.
-        overlap_renorm : float
-            Soft-overlap renormalization constant C; default 1.0 = OFF.
-        overlap_mode : str
-            Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
-        deposit_leg_bound : bool
-            Bound the deposit to the travelled leg rather than the unbounded ray line. Default
-            False (unbounded ray line). Surface detectors only: a string telescope uses its own
-            propagator and deposit, and ignores it. See
-            :func:`lucid.propagation.shared.create_propagator`.
+        medium : MediumProperties, optional
+            The loaded medium (a physics config's ``medium_model``); it must be the JSON's
+            ``material``. None loads ``config/materials/<material>.json``.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -69,22 +52,18 @@ class DetectorGeometry(NamedTuple):
             Box: n_x, n_y, n_z.
             If not provided, auto-derived from detector geometry.
         """
-        # Normalize casing. 'string' = telescope / volume detector (IceCube-style).
-        dt_key = detector_type.lower()
-        if dt_key not in ('cylinder', 'sphere', 'box', 'string'):
-            raise ValueError(
-                f"detector_type must be 'cylinder', 'sphere', 'box', or 'string', got {detector_type}")
+        cfg = load_detector_config(json_filename)
+        if medium is None:
+            medium = load_medium(cfg['material'])
+        elif medium.material != cfg['material']:
+            # The geometry's material sets n, c and the emission processes; the physics config's
+            # medium_model sets the optical curves and scintillation defaults: one medium.
+            raise ValueError(f"{json_filename} is {cfg['material']!r} but the physics config's "
+                             f"medium_model is {medium.material!r}")
 
-        # Material
-        material = get_material_from_config(json_filename)
-        medium = make_medium(material)
-
-        # Geometry — the actual class is dispatched from the JSON's detector_type
-        # (the detector_type arg may be the caller default 'Cylinder').
-        detector = generate_detector(json_filename)
-        import json as _json
-        with open(json_filename) as _f:
-            actual_type = _json.load(_f).get('detector_type', detector_type)
+        # Relative file paths in geometry_definitions resolve against the JSON's directory.
+        detector = get_detector_class(cfg['detector_type']).from_config(
+            cfg['geometry_definitions'], os.path.dirname(os.path.abspath(json_filename)))
         sensor_points = jnp.array(detector.all_points)
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
@@ -94,22 +73,17 @@ class DetectorGeometry(NamedTuple):
         from lucid.geometry.string import StringTelescope
         if isinstance(detector, StringTelescope):
             from lucid.propagation.string.string_propagator import create_string_propagator
-            propagator = create_string_propagator(
-                detector, sensor_radius, temperature=temperature,
-                n_closest=max(1, max_candidates_per_ray // 2))
+            propagator = create_string_propagator(detector, sensor_radius,
+                                                  temperature=temperature)
+            grid = None
         else:
-            propagator = create_shared_propagator(
+            propagator, grid = create_shared_propagator(
                 detector, sensor_points, sensor_radius,
                 temperature=temperature,
-                max_candidates_per_ray=max_candidates_per_ray,
-                overlap_st_width_frac=overlap_st_width_frac,
-                overlap_renorm=overlap_renorm,
-                overlap_mode=overlap_mode,
-                deposit_leg_bound=deposit_leg_bound,
                 **grid_params)
 
         return DetectorGeometry(
-            detector_type=actual_type,
+            detector_type=cfg['detector_type'],
             sensor_points=sensor_points,
             sensor_radius=sensor_radius,
             num_sensors=num_sensors,
@@ -117,4 +91,5 @@ class DetectorGeometry(NamedTuple):
             medium=medium,
             detector=detector,
             propagator=propagator,
+            grid=grid,
         )

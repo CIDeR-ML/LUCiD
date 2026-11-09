@@ -1,0 +1,84 @@
+{
+ "schema": 1,
+ "kind": "dedx",
+ "net": {
+  "hidden_features": 256,
+  "hidden_layers": 3,
+  "w0": 30.0
+ },
+ "domain": {
+  "energy_mev": [
+   150.0,
+   100000.0
+  ],
+  "dedx_kev_per_mm": [
+   1.0,
+   999.0
+  ],
+  "s_over_smax": [
+   0.001,
+   0.999
+  ]
+ },
+ "target": {
+  "log10_min": -3.000000238418579,
+  "log10_max": 1.2278984785079956,
+  "offset": 0.001
+ },
+ "grid_bins": 250,
+ "s_max_mm": {
+  "form": "A*E^B",
+  "params": {
+   "A": 6.122104,
+   "B": 0.978952
+  },
+  "fit_min_mev": 500,
+  "fit_max_mev": 50000,
+  "quantile": 0.9999,
+  "quantile_multiplier": 1.1,
+  "generated_at_utc": "2026-05-13T11:14:34+00:00"
+ },
+ "provenance": {
+  "material": "water",
+  "particle": "mu-",
+  "emission": "dedx",
+  "data_type": "dedx",
+  "selected_from_scan": "water_mu_dedx_seed_scan_nominal",
+  "selected_seed": "seed9",
+  "selection_criterion": "lowest final val_loss across 10-seed scan",
+  "num_steps": 150000,
+  "losses": {
+   "final_train": 0.0081,
+   "final_val": 0.008425,
+   "best_val": 0.007885
+  },
+  "trained_against_h5": "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/muon/dedx_lookup_table.h5",
+  "source_scan_dir": "/sdf/data/neutrino/cjesus/SIREN_files/training_tests/water_mu_dedx_seed_scan_nominal/seed9",
+  "promoted_at_utc": "2026-05-28T16:13:51.702814+00:00"
+ },
+ "training": {
+  "recipe": {
+   "hidden_features": 256,
+   "hidden_layers": 3,
+   "w0": 30.0,
+   "optimizer": "adam",
+   "learning_rate": 0.0001,
+   "weight_decay": 0.0,
+   "grad_clip_norm": 1.0,
+   "use_patience_scheduler": true,
+   "patience": 100,
+   "lr_reduction_factor": 0.5,
+   "min_lr": 5e-07,
+   "batch_size": 25000,
+   "num_steps": 150000,
+   "val_every": 50,
+   "zero_threshold": 0.001,
+   "zero_keep_frac": 0.5,
+   "energy_balance": "uniform",
+   "target_importance": 0.2,
+   "val_split": 0.01,
+   "seed": 9
+  },
+  "recipe_note": "the recipe is lucid/siren/training/nominal.json with this seed; zero_threshold, zero_keep_frac, energy_balance, target_importance and val_split are the production nominal recipe and agree with target.log10_min = log10(1e-3), and the run itself did not record them (the trainer overwrote config.json); the other fields are the run's config.json"
+ }
+}

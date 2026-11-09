@@ -1,211 +1,94 @@
-# PhotonSim SIREN Module
+# SIREN emitters
 
-This directory contains the SIREN (Sinusoidal Representation Networks) implementation for photon simulation, including training and validation tools.
+`lucid.siren` holds the trained emission models (SIREN, sinusoidal representation networks) that
+the forward simulator draws Cherenkov photons and dE/dx deposits from, and the tools that train
+and validate them.
 
-## Structure
+- `net.py` - the SIREN network
+- `emitter.py` - `load_emitter(particle, material, kind)` -> `Emitter`: one trained emitter (net,
+  weights, domain, the s_max / N_photons / t0 fits, the Cherenkov emission band); `density`, the
+  one evaluator; `write_emitter`
+- `training/` - training and validation, not on the forward path; its modules and Python API are in
+  [`training/README.md`](training/README.md)
 
-- `core.py` - Core SIREN model implementation
-- `train.py` - Training script for PhotonSim SIREN models
-- `validate.py` - Validation suite for trained models
-- `training/` - Training utilities and modules
-  - `trainer.py` - Main training logic
-  - `dataset.py` - PhotonSim dataset handling
-  - `inference.py` - Model inference utilities
-  - `monitor.py` - Training monitoring and visualization
-  - `analyzer.py` - Training analysis tools
+## Emitters on disk
+
+- Shipped emitters: `data/{material}/{particle}/{cherenkov,dedx}/` (`emitter.json` tracked,
+  `weights.npz` installed by `scripts/download_data.py`), loaded with `load_emitter`. A material
+  JSON names the set it runs (`"siren": "water"` for wbls and ice).
+- Training output: `--output-dir` (the emitter, history, plots, checkpoints).
+- Validation output: `--output`, or `output/siren/{material}/{particle}/` with `--save`.
 
 ## Training
 
-Train SIREN models for different materials and particles:
+The pipeline that produces an emitter (PhotonSim scans, the s_max fit, the lookup tables, the
+training scans) is in
+[`docs/guides/production/siren-training-inputs.md`](../../docs/guides/production/siren-training-inputs.md).
+The tables are built by `lucid-build-photon-table` / `lucid-build-dedx-table`; training is
+`lucid-train-siren` (`python -m lucid.siren.training.train`):
 
 ```bash
-# Train with default settings (water/muon)
-python train.py
-
-# Train for specific material/particle
-python train.py --material ice --particle electron
-
-# Custom training parameters
-python train.py --batch-size 32768 --num-steps 50000 --learning-rate 5e-5
-
-# Resume training from checkpoint
-python train.py --resume
+# one seed of the nominal recipe, with the t0 fit the simulator needs (a Cherenkov emitter)
+lucid-train-siren --h5-path photon_lookup_table.h5 --output-dir runs/s1 --seed 1 --t0 t0.json
 ```
 
-### Training Options
+The kind (Cherenkov or dE/dx), material and particle come from the table. The working point is
+[`training/nominal.json`](training/nominal.json), the recipe of every shipped emitter, unless
+`--recipe` names another; every recipe field can be overridden by its flag. `--t0` takes the
+`t0.json` written by PhotonSim's `PhotonSim/tools/t0_correction/calculate_t0.py`. `lucid-train-siren --help`
+lists the flags; [`docs/reference/cli.md`](../../docs/reference/cli.md) gives the outputs and how
+to judge convergence.
 
-- `--material` - Material type (default: water)
-- `--particle` - Particle type (default: muon)
-- `--data-type` - `photon` or `dedx` (default: photon)
-- `--h5-path` - Override the conventional .h5 path. `--material` / `--particle` / `--data-type` still drive the output directory (e.g. for training off a non-standard build at `/tmp/photon_lookup_table_mu.h5`).
-- `--hidden-features` - Hidden layer size (default: 256)
-- `--hidden-layers` - Number of hidden layers (default: 3)
-- `--learning-rate` - Initial learning rate (default: 1e-4)
-- `--batch-size` - Batch size (default: 65536)
-- `--num-steps` - Total training steps (default: 30000)
-- `--resume` - Resume from latest checkpoint
+### Installing a new emitter
 
-Models are saved to: `data/{material}/{particle}/siren_training/trained_model/`
-
-### In-training prediction-vs-truth plots
-
-`lucid-train-siren` saves a PNG every `--prediction-plot-every` steps comparing
-the model's current predictions against the source lookup table at a handful
-of representative anchors. The figure has two views:
-
-- **Top**: intensity vs angle (or dE/dx for the dedx variant) at four fixed
-  `s/s_max` slices (default `0.1, 0.25, 0.5, 0.75`), one panel per slice.
-- **Bottom**: intensity vs `s/s_max`, summed over the 2nd axis.
-
-Truth curves are dashed, predictions solid, matched colour per energy.
-Output: `data/{material}/{particle}/{photon,dedx}_siren_training/prediction_plots/step_NNNNNN.png`.
-
-Flags:
-
-- `--prediction-plots` / `--no-prediction-plots` — default on.
-- `--prediction-plot-every <N>` — refresh interval (default 500).
-- `--prediction-plot-energies` — comma list of MeV (default `1000,2000,5000,10000,80000`).
-- `--prediction-plot-distance-slices` — comma list in [0, 1] (default `0.1,0.25,0.5,0.75`).
-
-Fresh runs wipe the `prediction_plots/` folder; `--resume` leaves existing
-PNGs intact so a single training produces one continuous PNG stream.
+Copy `emitter.json` and `weights.npz` from the output directory to
+`data/<material>/<particle>/<cherenkov|dedx>/`. A Cherenkov emitter also needs
+`emission_band_nm` (`[lo, hi]` in nm, the band its N_photons(E) counts) at the top level of its
+`emitter.json`. The trainer does not write it; without it, `setup_event_simulator` raises for a
+wavelength-mode track simulation unless the caller passes `cherenkov_emission_band`. The shipped
+Cherenkov emitters carry it.
 
 ## Validation
 
-The validation suite provides three main validation functions:
+The acceptance checks of a trained emitter:
 
-1. **Cut-off Study** (`cutoff`) - Analyzes different threshold values for photon weight filtering
-2. **N-Photon Integral** (`integral`) - Validates photon count predictions vs. real data
-3. **Ray Generation Validation** (`rays`) - Validates ray generation patterns across different energies
-
-### Quick Start
-
-```bash
-# Run all validations for default water/muon
-python validate.py all
-
-# Run all validations for specific material/particle
-python validate.py all --material ice --particle electron
-
-# Run specific validation with custom parameters
-python validate.py cutoff --energy 500 --thresholds 1,2,4,8 --save
-python validate.py integral --energies 100,1000,50 --nphot 1000000 --save
-python validate.py rays --energies 200,1000,10 --nphot 500000 --save
-```
-
-### Global Options
-
-All validation commands support:
-- `--material` - Material type (default: water)
-- `--particle` - Particle type (default: muon)
-- `--output` - Custom output directory
-- `--save` - Save results to output directory
-
-Results are saved to: `data/{material}/{particle}/siren_training/validation/`
-
-### Commands
-
-#### `cutoff` - Cut-off Threshold Analysis
-
-Analyzes the PhotonSim SIREN model output at different threshold values.
+1. **Energy study** (`energy`) - the density over (opening angle or dE/dx, distance) at a few
+   energies (`--kind dedx` for the dE/dx emitter); the paper's `fig_siren_profile`
+2. **N-photon integral** (`integral`) - the shape's phase-space integral vs N_photons(E) and the
+   table sum
+3. **Ray generation** (`rays`) - histograms of the generated rays across energies
 
 ```bash
-python validate.py cutoff [OPTIONS]
+python -m lucid.siren.training.validate all --material water --particle muon --save
+python -m lucid.siren.training.validate energy --energies 500,1000,1500 --threshold 0.005 --save
+python -m lucid.siren.training.validate energy --kind dedx --save
+python -m lucid.siren.training.validate integral --energies 100,1000,50 --nphot 1000000 --save
+python -m lucid.siren.training.validate rays --energies 200,1000,10 --nphot 500000 --save
 ```
 
-**Options:**
-- `--energy ENERGY`: Analysis energy in MeV (default: 500)
-- `--thresholds THRESHOLDS`: Comma-separated thresholds (default: 1,2,4,8)
+Every command takes `--material` (the emitter set, `data/{material}/`; default water),
+`--particle` (muon or electron), `--kind` (cherenkov or dedx), `--output DIR` and `--save`
+(results to `output/siren/{material}/{particle}/`). `integral` and `rays` are Cherenkov only.
+Energy formats: an explicit list `200,500,800` or a range `100,1000,50` (start,end,count).
+Only `integral` (and so `all`) reads a lookup table (`data/{material}/{particle}/photon_lookup_table.h5`);
+the other checks evaluate the emitter alone. No lookup table is distributed: build one from a
+PhotonSim scan first ([SIREN training inputs](../../docs/guides/production/siren-training-inputs.md)).
 
-#### `integral` - N-Photon Integral Analysis
+## The s/s_max input axis
 
-Compares predicted photon counts with real PhotonSim data. Linear fits use only data ≥ 200 MeV.
-
-```bash
-python validate.py integral [OPTIONS]
-```
-
-**Options:**
-- `--energies ENERGIES`: Energy specification (see formats below)
-- `--nphot NPHOT`: Number of photons for analysis (default: 1000000)
-
-**Energy Formats:**
-- Explicit list: `200,500,800,1000`
-- Range specification: `100,1000,50` (start,end,count)
-
-#### `rays` - Ray Generation Validation
-
-Validates ray generation patterns by creating 2D histograms of photon distribution.
-
-```bash
-python validate.py rays [OPTIONS]
-```
-
-**Options:**
-- `--energies ENERGIES`: Energy specification (same formats as integral)
-- `--nphot NPHOT`: Number of photons for ray generation (default: 1000000)
-
-## Data Requirements
-
-Both training and validation require an HDF5 lookup table at
-`data/{material}/{particle}/photon_lookup_table.h5`. To build it from
-PhotonSim ROOT output, see
-[`docs/guides/production/siren-training-inputs.md`](../../docs/guides/production/siren-training-inputs.md).
-
-### s/s_max input axis
-
-Starting with `format_version = "2.0"`, the third SIREN input is
-`s / s_max(E) ∈ [0, 1]` rather than absolute distance in mm — this is what
-lets the training energy range extend up to 100 GeV. The per-(material,
-particle) fit `s_max(E) = A·E^B` is welded into the `.h5` as
-`metadata.attrs/smax_{A, B, fit_min_mev, fit_max_mev, quantile,
-quantile_multiplier, generated_at_utc}`, so the file is self-contained — no
-external `smax_fit.csv` is needed at training or inference time. The trainer
-itself doesn't touch these attrs; they exist for the inference path
-(`lucid/sources/siren_rays.py`, not yet migrated) to convert physical `s`
-into `s/s_max` at sample time.
-
-## Model Paths
-
-The tools automatically handle model paths:
-- Models: `data/{material}/{particle}/siren_training/trained_model/photonsim_siren`
-- Training output: `data/{material}/{particle}/siren_training/` (checkpoints, history, etc.)
-- Validation output: `data/{material}/{particle}/siren_training/validation/`
-
-## Examples
-
-### Complete Workflow
-
-```bash
-# 1. Train a model for water/muon
-python train.py --material water --particle muon
-
-# 2. Validate the trained model
-python validate.py all --material water --particle muon --save
-
-# 3. Train another model for ice/electron
-python train.py --material ice --particle electron --batch-size 32768
-
-# 4. Run specific validation
-python validate.py integral --material ice --particle electron --energies 100,1000,100
-```
-
-### Advanced Usage
-
-```bash
-# High-resolution training
-python train.py --hidden-layers 4 --hidden-features 512 --num-steps 50000
-
-# Fast validation for testing
-python validate.py rays --energies 200,1000,5 --nphot 100000
-
-# Custom output organization
-python validate.py all --output my_results/$(date +%Y%m%d)
-```
+Since the lookup table's `format_version = "2.0"`, the third SIREN input is
+`s / s_max(E) ∈ [0, 1]` rather than the absolute distance in mm; this is what lets the training
+energy range extend up to 100 GeV. The per-(material, particle) fit `s_max(E)` has one of three
+forms (`SMAX_PARAMS` in `emitter.py`): `A*E^B`, `smooth_two_power` (`a, b1, b2, E0`) or
+`piecewise` (two `smooth_two_power` pieces joined at `e_join_mev`). The table records it as the
+attribute `metadata.attrs/smax_form` plus that form's parameters and the shared fit columns, each
+prefixed `smax_`, so no external `smax_fit.csv` is needed at training or inference time. The
+trainer copies the fit, and the table's N_photons(E) fit (`nphot_*`), into the emitter's
+`emitter.json` (`s_max_mm`, `n_photons`), which the ray samplers read to convert `s/s_max` into a
+distance along the track. The shipped muon emitters use `A*E^B`, the electron emitters
+`piecewise`.
 
 ## Notes
 
-- Training uses JAX/Flax for GPU acceleration
-- Validation automatically detects trained models
-- All tools support automatic path resolution based on material/particle
-- Live plotting available during training with `--no-monitoring` to disable
+- Training uses JAX, Flax and Optax.
+- Live loss plots in Jupyter with `--monitoring` need IPython, which no extra installs.
