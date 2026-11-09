@@ -41,3 +41,22 @@
 **/trained_model/
 **/siren_training/
 **/debug/
+
+# Fetched example data. `COPY LUCiD /opt/LUCiD` otherwise bakes whatever
+# scripts/download_data.py left in data/ into a published image — ~2.8 GB of
+# ROOT per particle here, and data nobody agreed to redistribute. No *.root or
+# *.h5 is tracked, so these patterns cost the build nothing. The SIREN weights
+# are fetched like the ROOT files; the small tracked emitter.json files beside
+# them are deliberately still copied.
+**/*.root
+**/*.h5
+data/*/*/*/weights.npz
+
+# Credentials and personal state. user_paths.sh is untracked by design (the
+# three .template files say so) and carries a developer's absolute paths and
+# account names. It does not belong in an image published to ghcr.io.
+**/user_paths.sh
+**/.netrc
+**/.env
+**/*.pem
+**/id_rsa*

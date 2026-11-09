@@ -33,11 +33,29 @@ with particle-level correspondence.
 # Against a real dataset (production output or regenerated sample)
 python3 serve_viewer.py /path/to/dataset_root --open
 
-# Against the stub dataset in this repo
-python3 serve_viewer.py ./sample_data --port 8765 --open
+# Against a stub dataset (make_test_data.py writes one to ./test_data, gitignored)
+python3 make_test_data.py --out ./test_data
+python3 serve_viewer.py ./test_data --port 8765 --open
 ```
 
 Then open **http://127.0.0.1:8765/**. The page shows `html loaded, waiting for viewer.js...` while modules parse; proceeds to mount/fetch status; then drops you into the viewer.
+
+The server binds `127.0.0.1` by default (`--host` to change it) and reads the
+files fresh per request, so a hard-reload of the browser picks up a rewritten
+dataset. It serves the first batch only (see Known deferrals).
+
+### A dataset on a cluster node (SSH tunnel)
+
+Run the server on the node that sees the data, then forward its port from your
+laptop. On S3DF (replace the node with the one `hostname -f` prints there):
+
+```bash
+python3 LUCiD/viewer/serve_viewer.py <dataset_dir> --port 8765     # on the node
+ssh -J <user>@s3df.slac.stanford.edu -L 8765:127.0.0.1:8765 <user>@<node>.sdf.slac.stanford.edu
+# then open http://127.0.0.1:8765/ on the laptop
+```
+
+Two viewers of the same events = two ports.
 
 ## UI
 
@@ -51,9 +69,9 @@ Then open **http://127.0.0.1:8765/**. The page shows `html loaded, waiting for v
 - **LABEL** — categorical override.
   - `None` (default): use FIELD (continuous).
   - `Particle` — hashed hue per particle (PMTs via argmax over `hits.PE`; segs via `track → particle_idx`).
-  - `Category` — fixed hue per LUCiD category (Primary / DecayElec / SecPion / Gamma / …).
-  - `Ancestor` — hashed hue per primary track_id (root of each track's parent chain, from `labl/per_track/ancestor`).
-  - `Interaction` — hashed hue per interaction rank (`labl/per_track/interaction` — 0-based index among the event's primaries).
+  - `PDG` — fixed hue per PDG bucket (μ⁻, μ⁺, π⁺, π⁻, π⁰, e⁻, e⁺, p, n, γ, ν, other meson, other), from each particle's own PDG with a π⁰-ancestor override.
+  - `Interaction` — hashed hue per interaction (`labl/per_track/interaction`, the 0-based index of the source interaction).
+  - `Segment` — hashed hue per truth segment (PMTs via argmax over `step/sensor_hits.PE`; blank when the dataset was written without `sensor_hits`).
 - **TIME SWEEP** — fade PMTs and segments in as `simTime` crosses each primitive's arrival/emission time. Scrubber + play/pause shown at the bottom of the 3D panel. The fade also applies to the 2D panel.
 - **RESET** — everything back to defaults.
 - **ROTATE** — toggle auto-rotate of the 3D camera.
@@ -63,7 +81,9 @@ Then open **http://127.0.0.1:8765/**. The page shows `html loaded, waiting for v
 
 The sidebar contents depend on the current Label:
 - `None` or `Particle`: lists every particle with its category, Σ PE, and swatch.
-- `Category` / `Ancestor` / `Interaction`: lists distinct group IDs with their particle count and total PE.
+- `PDG`: the particles sorted by PDG bucket, coloured by the bucket palette.
+- `Interaction`: lists distinct interaction IDs with their particle count and total PE.
+- `Segment`: lists the segments.
 
 Click a row to isolate that particle (or union of particles in the group): its PMT contributions pop at near-full brightness, non-contributors fade to ~8% alpha, and segments belonging to the selection stay bright. Click the same row again to deselect. Changing Label clears the selection.
 
@@ -85,25 +105,25 @@ Per [`docs/reference/dataset-schema.md`](../docs/reference/dataset-schema.md). T
 - `config/attrs`: `n_events`, `n_sensors`, `detector_type`, `dataset_name`, provenance.
 - `config/sensor_positions` — (n_sensors, 3) float32, **in meters**.
 - `event_NNN/attrs`: `source_event_idx`, `n_hits`.
-- `event_NNN/{sensor_idx (u16), PE (f32), T (f32)}`.
+- `event_NNN/{sensor_idx (u16), PE (f32), T (f64)}`.
 
 **hits.h5**
 - `config/…` same as sensor.
 - `event_NNN/attrs`: `source_event_idx`, `n_particles`, `n_particle_hits`.
-- `event_NNN/{particle_idx (i32), sensor_idx (u16), PE (f32), T (f32)}`.
+- `event_NNN/{particle_idx (i32), sensor_idx (u16), PE (f32), T (f64)}`.
 
 **step.h5**
 - `config/attrs`: `detector_shape`, `detector_radius`, `detector_half_height`, plus provenance.
 - `event_NNN/attrs`: `source_event_idx`, `n_tracks`, `n_segments`.
-- `event_NNN/{track_idx, start_{x,y,z}, end_{x,y,z}, dir_{x,y,z} (f16), time, edep, beta_start, n_cherenkov, contained (bool)}`.
+- `event_NNN/{track_idx, start_{x,y,z}, end_{x,y,z}, dir_{x,y,z} (f16), time (f64), edep, beta_start, n_cherenkov, contained (bool)}`.
 
 **labl.h5**
 - `config/attrs/label_names` e.g. `['category']`.
 - `event_NNN/attrs`: `source_event_idx`, `n_particles`, `n_tracks`.
-- `event_NNN/per_event/{t0 (f32 scalar), contained (bool scalar)}`.
+- `event_NNN/per_event/{t0 (f64 scalar), contained (bool scalar)}`.
 - `event_NNN/per_interaction/{..., contained (bool)}` — True iff every meaningful segment of every particle in this interaction is contained; False for empty interactions.
 - `event_NNN/per_particle/{category (u8), contained (bool), genealogy_data (i32), genealogy_offsets (u32), ext_genealogy_data, ext_genealogy_offsets}`.
-- `event_NNN/per_track/{track_id (i32), parent_id (i32), pdg (i16), initial_energy (f32), n_cherenkov (i32), particle_idx (i32), ancestor (i32), interaction (i32)}`.
+- `event_NNN/per_track/{track_id (i32), parent_id (i32), pdg (i32), initial_energy (f32), n_cherenkov (i32), particle_idx (i32), ancestor (i32), interaction (i32)}`.
 
 Cross-file integrity: `source_event_idx` is compared across all four files on each event load; a mismatch is logged to the browser console (non-fatal).
 
@@ -111,10 +131,10 @@ Cross-file integrity: `source_event_idx` is compared across all four files on ea
 
 These caught me out during development — documenting so they don't catch you:
 
-- **Sentinel rows in `sensor.h5`**. The writer emits a row per sensor-of-interest even when no real photon arrived, with `PE = 0` and `T = −t0` (i.e. shifted zero). The viewer filters these: a PMT is treated as "has signal" only if accumulated `PE > 0`. Sentinel sensors render as the gray silhouette.
-- **`t0` can be negative**. The writer jitters each event's emission time within roughly ±15 ns so the detector reads events at random clock phases (matches real-data triggering). Sensor/step/hits times are stored as `t − t0` (detector frame, t=0 = trigger moment); the raw truth `t0` lives in `labl/per_event/t0`.
+- **Zero-charge rows in `sensor.h5`**. The current writer stores only recorded digits, but the viewer still treats a PMT as "has signal" only if its accumulated `PE > 0`, so a dataset that carries `PE = 0` rows (one per sensor of interest, written by older versions) renders those sensors as the gray silhouette.
+- **`t0` can be negative**. Each interaction's emission time is drawn uniformly within ±250 ns (`T0_HALF_WINDOW_NS` in `lucid/production/dataprod/drivers.py`), so the detector reads events at random clock phases; a supernova burst adds the interactions' true times (seconds). Sensor/step/hits times are stored in the detector frame (they include `t0`) as float64; the event's `t0` lives in `labl/per_event/t0`. The worker subtracts that `t0` in float64 before narrowing to float32, so the viewer shows and colours `T − t0`, and supernova times keep their sub-ns precision.
 - **Units**. `sensor_positions` and all `step/*` coordinates are in **meters**. Times are in **ns**. Energies in MeV.
-- **Ancestor/interaction are per-track** and consistent across all tracks of a given particle. The viewer derives per-particle ancestor/interaction by picking any one of the particle's tracks.
+- **Interaction is per-track** and consistent across all tracks of a given particle. The viewer derives a particle's interaction by picking any one of its tracks.
 
 ## Implementation notes
 
@@ -123,7 +143,7 @@ These caught me out during development — documenting so they don't catch you:
 - **Correspondence** is precomputed at event load: `particle → {sensor: PE}` map, `sensor → dominant_particle` array, plus per-particle ancestor/interaction. Selection resolves to a set of particle IDs; `hl = 0.35 + 0.65·sqrt(pe/max)` for any contributor guarantees visibility.
 - **Segments as a point cloud**. WebGL draws `LineSegments` at 1 px regardless of materials, which gets lost against 10k PMT sprites. Instead each segment is expanded into 6 evenly-spaced points rendered with the PMT shader — always visible, same color/sweep/correspondence machinery.
 - **2D unwrapping** per geometry (see `geometry_layout.js`):
-  - **Cylinder** — barrel (θ × z) strip in the middle, top/bottom caps above and below (T-shape). Matches `good_notebooks/cylinder_2D_displays.ipynb`.
+  - **Cylinder** — barrel (θ × z) strip in the middle, top/bottom caps above and below (T-shape). Matches the paper's `analysis/paper/fig_cylinder_2d_displays.py`.
   - **Box** — four side faces unrolled as one strip (back → right → front → left), caps above/below. Face boundaries drawn as dashed seams.
   - **Sphere** — equirectangular Plate carrée. 2:1 aspect.
 - **Time sweep** uses per-vertex `arrivalT` + `simTime` uniform; shader `smoothstep` fades each primitive as simTime crosses arrivalT. Quantile transform replaces `arrivalT` (and continuous `contVal` in TIME mode) with rank fraction. The 2D panel re-renders each frame while the sweep plays.
@@ -134,7 +154,7 @@ These caught me out during development — documenting so they don't catch you:
 - Multi-batch navigation — the manifest exposes only batch `0000` even when more exist.
 - No light theme.
 - No 2D pan/zoom/expand; panels are fixed-fit.
-- Categorical Ancestor/Interaction uses golden-ratio hashed hues; can turn out similar for distinct small ids. For typical 2-primary events (ancestor ∈ {1,2}, interaction ∈ {0,1}) the colors are unambiguous.
+- Categorical Particle/Interaction/Segment use golden-ratio hashed hues; they can turn out similar for distinct small ids. For typical events with two interactions (ids 0, 1) the colors are unambiguous.
 
 ## Development
 

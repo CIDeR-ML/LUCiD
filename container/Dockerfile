@@ -11,7 +11,7 @@
 # On S3DF, Apptainer pulls the same image directly:
 #   apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest
 #
-# See docs/guides/production/docker.md and docs/guides/production/deploy-s3df.md.
+# See docs/guides/production/container.md and docs/guides/production/clusters.md.
 
 FROM --platform=linux/amd64 nuisancemc/tutorial:nuint2024
 
@@ -88,10 +88,10 @@ COPY LUCiD /opt/LUCiD
 RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LUCID_SIM=0.0.0+docker \
     pip install --no-deps -e /opt/LUCiD \
  && command -v lucid-run-job \
- && python3 -c "import lucid.production.run_job as m; print(m.__file__)"
+ && python3 -c "import lucid.production.dataprod.run_job as m; print(m.__file__)"
 
 # Warm the overlap-integral lookup cache for the detectors we ship, at the library's default
-# temperature (0.2); each table takes about a minute to build. The cache is gitignored, so it is
+# temperature (0.2); each table takes a minute or two to build. The cache is gitignored, so it is
 # never in the build context. Production jobs run at temperature 0 (the hard step) and never read
 # these tables; the warm entries serve interactive use of the image and keep a read-only install
 # off the write path.
@@ -135,14 +135,17 @@ ENV PHOTONSIM_BIN=/opt/PhotonSim/build/PhotonSim \
 # Build provenance. The build context excludes .git/, so without this an image
 # cannot say which sources it was built from — which is how a .sif drifted four
 # months behind the registry unnoticed. Recorded both as a file the image can
-# print about itself and as OCI labels readable without running it.
+# print about itself and as OCI labels readable without running it. lucid.utils.code_version
+# reads lucid_sha and lucid_dirty (true/false: tracked changes in the build context) into every
+# dataset batch's config/git_commit and git_dirty; keep the key=value format.
 # -----------------------------------------------------------------------------
 ARG LUCID_SHA=unknown
+ARG LUCID_DIRTY=unknown
 ARG PHOTONSIM_SHA=unknown
 ARG PHOTONSIM_REF=unknown
 ARG BUILD_DATE=unknown
-RUN printf 'lucid_sha=%s\nlucid_source=%s\nphotonsim_sha=%s\nphotonsim_ref=%s\nphotonsim_source=%s\nbuild_date=%s\ngeant4=%s\n' \
-      "$LUCID_SHA" "https://github.com/CIDeR-ML/LUCiD" \
+RUN printf 'lucid_sha=%s\nlucid_dirty=%s\nlucid_source=%s\nphotonsim_sha=%s\nphotonsim_ref=%s\nphotonsim_source=%s\nbuild_date=%s\ngeant4=%s\n' \
+      "$LUCID_SHA" "$LUCID_DIRTY" "https://github.com/CIDeR-ML/LUCiD" \
       "$PHOTONSIM_SHA" "$PHOTONSIM_REF" "https://github.com/cesarjesusvalls/PhotonSim" \
       "$BUILD_DATE" "$(/opt/conda/bin/geant4-config --version 2>/dev/null || echo unknown)" \
       > /opt/VERSIONS \

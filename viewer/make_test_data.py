@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Synthesize a minimal v5 LUCiD dataset for viewer smoke tests.
+"""Synthesize a minimal LUCiD dataset (format_version 6) for viewer smoke tests.
 
 Produces four HDF5 files matching `docs/reference/dataset-schema.md` — sensor, hits,
 step, labl — with a small number of events and synthetic but reasonable
 content. Intended to exercise the browser viewer without running the
-full production pipeline. Emits the v5 schema: per_interaction/ with
+full production pipeline. Emits per_interaction/ with
 one row per source interaction (not per primary), per_interaction fields
 include CSR primary_{track_ids,pdgs,energies} lists plus neutrino probe
 metadata, and per_event/t0 derived as min(per_interaction/t0).
@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import os
 from pathlib import Path
 import numpy as np
 import h5py
@@ -179,14 +178,14 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
         ('time', 'f4'), ('edep', 'f4'), ('beta', 'f4'), ('ncher', 'i4')])
     # Synthetic per-segment contained flag (random; this stub doesn't
     # know the detector geometry). Real datasets compute it against
-    # detector_bounds in `_compute_contained`.
+    # detector_bounds in `compute_containment`.
     edep_contained = rng.integers(0, 2, size=len(edep_rows)).astype(bool)
     track_rows = np.array(track_rows, dtype=[
         ('track_id', 'i4'), ('parent_id', 'i4'), ('pdg', 'i2'),
         ('init_e', 'f4'), ('n_cher', 'i4'), ('particle_idx', 'i4')])
 
     # v6 per_track direction: the earliest-time segment of each track, the same
-    # rule the real writer uses (lucid/sources/writer.py).
+    # rule the real writer uses (lucid/dataset/writer.py).
     track_dir = np.zeros((len(track_rows), 3), dtype=np.float32)
     for i, tid in enumerate(track_rows['track_id']):
         sel = np.flatnonzero(edep_rows['track_idx'] == tid)

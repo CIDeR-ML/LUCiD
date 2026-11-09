@@ -268,9 +268,8 @@ function workerCall(action, data, timeoutMs = 60000) {
 //     to signal-bearing entries. Masked-out entries still get a normalized
 //     value (for continuity), but don't influence vmin/vmax.
 //   - Time fields (`isTime=true`): linear scale, percentile over ALL finite
-//     values in mask (negatives allowed — v4 stores sensor.T in absolute
-//     detector frame = G4 + t0_interaction, so hit times can be large
-//     positive or large negative depending on the randomly drawn t0).
+//     values in mask (negatives allowed — times arrive relative to the
+//     event's t0 (h5_worker.js), and a dark digit can precede it).
 //     No-signal rows are excluded upstream via the PE > 0 mask.
 //   - Non-time fields: the LUCiD notebook's rule applies — percentile over
 //     positive values only, optional log scale.
@@ -2208,7 +2207,7 @@ function labelText() {
   if (curLabel === 'segment') return 'Segment';
   if (curField === 'beta') return 'β (Č-remapped)';
   if (curField === 'cher_frac') return 'Č fraction';
-  return curField === 'charge' ? 'PE' : 'T (ns)';
+  return curField === 'charge' ? 'PE' : 'T − t0 (ns)';
 }
 
 // ── Three.js scene setup ───────────────────────────────────────────────
@@ -2410,7 +2409,7 @@ function updateSweepUI() {
   const isRank = (simTMax - simTMin) <= 1.5 && simTMin >= -0.001 && simTMax <= 1.001;
   $('sweepTimeLabel').textContent = isRank
     ? (simTime * 100).toFixed(1) + ' %'
-    : simTime.toFixed(2) + ' ns';
+    : 't0 + ' + simTime.toFixed(2) + ' ns';
   const btn = $('sweepPlayPause');
   btn.innerHTML = sweepPlaying ? '&#x23F8;' : '&#x25B6;';
   btn.classList.toggle('active', sweepPlaying);
