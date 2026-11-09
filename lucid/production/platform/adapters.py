@@ -96,7 +96,7 @@ class ClusterAdapter(ABC):
     def render_command_job(self, *, command: str, cell_dir: Path, job_name: str,
                            log_stem: str, partition: str, use_gpu: bool = False,
                            request_disk_mb: int = 4096,
-                           request_memory_mb: int = 0) -> str:
+                           request_memory_mb: int = 0, gpus: str | None = None) -> str:
         """Submit description for an arbitrary command run inside the container.
 
         The stage-specific renderers above each bake in one entry point. Some
@@ -105,7 +105,10 @@ class ClusterAdapter(ABC):
         which is a shell command, not a `lucid-run-job` invocation.
 
         ``request_memory_mb`` overrides the cluster default for the merges that
-        hold a whole dense table in memory; 0 keeps the default.
+        hold a whole dense table in memory; 0 keeps the default. ``gpus`` sets the
+        GPU request outright (``"0"`` for a CPU-only job on a site whose
+        ``DEFAULT_GPUS`` is 1); left out, it is 1 with ``use_gpu`` and the site's
+        ``DEFAULT_GPUS`` otherwise.
         """
         raise NotImplementedError
 
@@ -284,12 +287,12 @@ class SlurmAdapter(ClusterAdapter):
 
     def render_command_job(self, *, command, cell_dir, job_name, log_stem,
                            partition, use_gpu=False, request_disk_mb=4096,
-                           request_memory_mb=0):
+                           request_memory_mb=0, gpus=None):
         header = self._common_header(
             partition=partition, job_name=job_name, cell_dir=cell_dir,
             log_stem=log_stem,
             cpus=self.env.get("DEFAULT_CPUS", "1"),
-            gpus="1" if use_gpu else self.env.get("DEFAULT_GPUS", "0"),
+            gpus=gpus or ("1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")),
             memory=(str(request_memory_mb) if request_memory_mb
                     else self.env.get("DEFAULT_MEMORY", "16000")),
             time=self.env.get("DEFAULT_TIME", "08:00:00"),
@@ -732,8 +735,8 @@ class HTCondorAdapter(ClusterAdapter):
 
     def render_command_job(self, *, command, cell_dir, job_name, log_stem,
                            partition, use_gpu=False, request_disk_mb=4096,
-                           request_memory_mb=0):
-        gpus = "1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")
+                           request_memory_mb=0, gpus=None):
+        gpus = gpus or ("1" if use_gpu else self.env.get("DEFAULT_GPUS", "0"))
         log_dir = self._log_dir(cell_dir)
         # The env prefix carries the dev-checkout overrides HTCondor's
         # Singularity wrapper drops; see _env_prefix. It becomes an `export`

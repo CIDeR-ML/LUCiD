@@ -174,7 +174,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                f"--material {args.material} --particle {args.particle} --smax-data-dir {data}")
     body = adapter.render_command_job(command=command, cell_dir=out,
                                       job_name=f"t0_{args.material}_{args.particle}",
-                                      log_stem="job", partition=partition)
+                                      log_stem="job", partition=partition,
+                                      gpus="0")   # the fit is CPU-only
     sb = out / f"submit.{adapter.submit_extension}"
     sb.write_text(body)
     sb.chmod(0o755)

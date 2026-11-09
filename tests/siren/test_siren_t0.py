@@ -47,7 +47,8 @@ def site(tmp_path, monkeypatch):
     base = {'CLUSTER': 'slurm', 'LUCID_IMAGE_PATH': str(tmp_path / 'lucid.sif'),
             'PHOTONSIM_DEV_PATH': str(ps), 'SLURM_ACCOUNT': 'fac:repo',
             'SLURM_PARTITION': 'roma:130,milano:272', 'SIREN_INPUTS_BASE_PATH': str(tmp_path / 'in'),
-            'SIREN_OUTPUT_BASE_PATH': str(tmp_path / 'out'), 'APPTAINER_BINDS': '/sdf'}
+            'SIREN_OUTPUT_BASE_PATH': str(tmp_path / 'out'), 'APPTAINER_BINDS': '/sdf',
+            'DEFAULT_GPUS': '1'}   # the S3DF template's value: the CPU-only fit must not inherit it
 
     def write(**settings):
         env = {k: v for k, v in {**base, **settings}.items() if v is not None}
@@ -69,6 +70,7 @@ def test_the_job_fits_the_training_inputs_with_photonsim(site, tmp_path):
     assert (f"/opt/conda/bin/python3 {calc} {out / 'inputs'} --out-dir {out} --material water "
             f"--particle mu- --smax-data-dir {tmp_path / 'PhotonSim' / 'data'}") in body
     assert '#SBATCH --partition=roma\n' in body and '#SBATCH --account=fac:repo\n' in body
+    assert '#SBATCH --gpus' not in body   # a CPU partition: a GPU request would never start
     # rerun: the links are replaced, not duplicated; a finished fit is not redone
     assert gj.main(site()) == 0 and len(list((out / 'inputs').iterdir())) == 3
     (out / 'timing_parameters.json').write_text('{}')
