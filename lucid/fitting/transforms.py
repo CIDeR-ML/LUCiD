@@ -25,11 +25,9 @@ Precision
 ---------
 The solve is float32, and that is adequate: at ``cond(H) = 6800`` (the 19-parameter calibration
 matrix) float32 moves the step direction by ~3e-7 relative, while Marquardt ``lam=0.01``
-perturbs it by ~1e-2 by construction. Gated by ``tests/test_float32_is_adequate.py``.
+perturbs it by ~1e-2 by construction. Gated by ``tests/fitting/test_float32_is_adequate.py``.
 
-This module does not carry the iterate; step application belongs to the problem (see ``gn.py``).
-A float32 iterate in RAW coordinates freezes a parameter at ~1000 (float32 spacing 6.1e-5), so
-it is carried in scaled coordinates (:class:`lucid.fitting.scaled.ScaledProblem`).
+This module does not carry the iterate; the loop does (see ``minimize.py``).
 """
 import jax
 import jax.numpy as jnp
@@ -52,8 +50,8 @@ def damped_matrix(H, *, lam, mu, jitter=0.0, rel_cutoff=1e-12):
       also not scale-invariant, and these fits run in scaled coordinates where the diagonal carries
       different units per parameter.
 
-    Both are asserted in ``tests/test_fitting_transforms.py``. If every diagonal entry is below the
-    cutoff (all directions flat), ``A`` is NaN — see the comment on ``base``.
+    Both are asserted in ``tests/fitting/test_fitting_transforms.py``. If every diagonal entry is
+    below the cutoff (all directions flat), ``A`` is NaN — see the comment on ``base``.
     """
     n = H.shape[0]
     dg = jnp.clip(jnp.diag(H), 0, None)

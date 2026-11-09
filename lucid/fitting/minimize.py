@@ -9,7 +9,7 @@ rather than a property of it::
     minimize(problem, theta0, steps, tx=optax.adam(1e-3), needs_metric=False)
 
 With the Gauss-Newton transformation it reproduces ``fit_track``'s reference loop, trajectory and
-refused steps included, to the float32 solve (``tests/test_fit_track_matches_main_loop.py``).
+refused steps included, to the float32 solve (``tests/fitting/test_fit_track_reference_loop.py``).
 
 What stays in the driver, and why
 ---------------------------------
@@ -27,27 +27,22 @@ Everything that is a property of the TRAJECTORY rather than of the step rule:
 * ``polyak`` readout — a property of a trajectory that wanders on a Monte-Carlo noise floor, not
   of the rule that produced it.
 * the metric refresh cadence — the problem's policy, which the rule never sees.
+* step application — the iterate is float32, like the rest of the stack, for every problem.
 
 What the transformation owns is the step size and any schedule. There is no ``lr`` here on
 purpose: optax bakes the learning rate into the transformation, so a driver-side multiplier would
 double-apply, and ``optax.adam(1e-3)`` under a driver ``lr=4.0`` would run at 4e-3 while looking
 correct.
 
-Two hazards this loop is written around
----------------------------------------
-**Nothing jax-typed may reach** ``problem.accumulate``. ``theta_f64 + optax_update_f32`` returns a
-jax float32 array, and since the iterate is reassigned each step the corruption is absorbing: one
-step and a float64 numpy iterate is gone for the run. ``optax.apply_updates`` does not save you —
-with ``jax_enable_x64`` off it casts to float32 too. Every update crosses back through
-``np.asarray`` here, gated by
-``tests/test_fitting_minimize.py::test_nothing_jax_typed_reaches_accumulate``.
-
+A hazard this loop is written around
+------------------------------------
 **A rejected step must not poison the optimizer state.** With a stateful rule the transformation
 has already folded the bad gradient into its moments by the time ``reject_nonfinite`` decides. The
 state is therefore captured before the update and restored on rejection; optax states are
 immutable pytrees, so this is a reference copy. Without it, rejection keeps the good iterate while
 leaving the velocity that produces the next step contaminated — worse than not rejecting at all.
 """
+import jax.numpy as jnp
 import numpy as np
 
 __all__ = ['minimize']
@@ -79,8 +74,8 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
     if readout not in ('final', 'polyak', 'ming'):
         raise ValueError(f"readout must be 'final', 'polyak' or 'ming', got {readout!r}")
 
-    theta = theta0
-    P = int(np.asarray(theta0).shape[0])
+    theta = jnp.asarray(theta0, jnp.float32)
+    P = int(theta.shape[0])
     S = np.ones(P) if scale is None else np.asarray(scale, float)
     # `fix` is a boolean mask or a list of indices. A mask must not be cast straight to int:
     # [True, False, True] would become indices [1, 0, 1] and silently freeze the wrong
@@ -100,7 +95,7 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
         return float(np.linalg.norm(gv if scale is None else S * gv))
 
     # The step INDEX is part of the problem's random-number stream: CalibrationProblem draws its
-    # forward at `forward_key0 + stride*step`. The indices used here — 0 for the initial call and
+    # forward on `forward_key(step)`. The indices used here — 0 for the initial call and
     # `step+1` for the lookahead — must match gauss_newton exactly, or every calibration number
     # moves for a reason no gate on the reconstruction side can see.
     g, H, loss = problem.grad_metric_loss(theta, 0, refresh=_due(0))
@@ -132,8 +127,6 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
                  if (needs_metric and Hs is not None) else {})
         du, state = tx.update(gs, state, np.asarray(theta), **extra)
 
-        # The jax -> numpy crossing (see the module docstring). `np.asarray` IS the guard: it
-        # always returns a numpy array, including from a jax one.
         du = np.asarray(du)
 
         if max_step is not None:
@@ -142,7 +135,7 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
             du = np.array(du)
             du[fix] = 0.0
 
-        theta_new = problem.accumulate(theta, du if scale is None else S * du)
+        theta_new = theta + jnp.asarray(du if scale is None else S * du, jnp.float32)
 
         nxt = None
         if step + 1 < steps or reject_nonfinite:
