@@ -76,8 +76,8 @@ The dataset config's `"selection"` block decides which interactions are written:
 
 - `{"mode": "trigger"}`: those the trigger keeps (all `GeV` configs and `Test`).
 - `{"mode": "min_physics_hits", "n": N}`: those with at least `N` real (non-dark) hits, a
-  cheap truth-level cut that takes precedence over the trigger (`Solar`, `SN`, which set
-  `"trigger": null`). A supernova config must use it.
+  cheap truth-level cut in place of the trigger (`Solar`, `SN`). It needs `"trigger": null`:
+  a trigger block together with it is refused. A supernova config must use it.
 
 ## Choosing
 
