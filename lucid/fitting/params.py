@@ -14,7 +14,7 @@ matters:
   ninefold in the reported diffuse component. Owning ``to_real`` here stops each analysis script
   re-deriving that factor and getting a different answer.
 
-Three parameterisations ship, and they answer different questions.
+Two parameterisations ship, and they answer different questions.
 
 ``CalibrationParams`` is the published estimand: a fixed layout of per-wavelength optics plus
 shared reflection. Its expressions match the paper's reference calibration engine term for term;
@@ -25,12 +25,9 @@ is not shipped here.
 
 ``FieldParams`` is the general one: name any leaf fields of a ``DetectorParams`` and fit those.
 It is what lets somebody calibrate a quantity the paper never fitted without writing a new
-forward model, and it is the parameterisation ``build_calibration_problem`` builds.
+forward model.
 
-``LogParams`` is the degenerate case, for a caller who supplies the forward already parameterised
-and needs only the log-space convention named.
-
-All three answer the same four questions, which is all the forward model and the fitter ever ask
+Both answer the same four questions, which is all the forward model and the fitter ever ask
 of a parameterisation:
 
 ``W``          number of wavelength slices the forward evaluates (1 if the fit has no λ axis)
@@ -40,9 +37,7 @@ of a parameterisation:
 ``to_real(theta)``           fit vector -> the reported vector
 
 Anything answering all four can build its own forward and be fitted, which is the point of naming
-it. ``LogParams`` answers only three: its ``to_dp`` raises, because the map into detector
-parameters is inside the forward closure supplied alongside it. It is fittable, but only by a
-caller that brings that forward.
+it.
 """
 import numpy as np
 import jax
@@ -52,7 +47,7 @@ from lucid.detector_params import (
     DetectorParams, _flatten_detector_params, _nest_flat_kwargs,
 )
 
-__all__ = ['CalibrationParams', 'FieldParams', 'LogParams']
+__all__ = ['CalibrationParams', 'FieldParams']
 
 
 class CalibrationParams:
@@ -154,13 +149,12 @@ class FieldParams:
     Log space throughout, so the parameters stay positive without a constraint and steps are
     multiplicative. That suits every optical length, rate and efficiency — but it is a real
     restriction, not a free choice: a field that can legitimately be negative cannot be
-    represented. ``g``, the Henyey-Greenstein asymmetry, is such a field. It is listed among the
-    trainable fields in :func:`lucid.fitting.problem.build_calibration_problem` and fitted by
+    represented. ``g``, the Henyey-Greenstein asymmetry, is such a field. It is fitted by
     ``examples/hello_calibrate.py``, and in this parameterisation it is confined to ``g > 0``.
 
     There is no wavelength axis (``W = 1``). A λ-dependent quantity is expressed as an array-valued
-    leaf that the forward consumes whole, rather than by evaluating the forward once per λ. Both
-    are representable; this is the shape the field-based bridge has always used.
+    leaf that the forward consumes whole, rather than by evaluating the forward once per λ (which
+    is :class:`CalibrationParams`' layout).
 
     ``per_pmt_field`` is the per-sensor multiplicative factor. It is NOT part of ``theta``: there is
     one per sensor, and profiling it in closed form each step is what keeps the handful of
@@ -208,32 +202,3 @@ class FieldParams:
         parts = [np.asarray(flat[f], dtype=np.float64).ravel() for f in self.fields]
         vec = np.concatenate(parts) if parts else np.zeros(0)
         return np.log(np.clip(vec, 1e-12, None))
-
-
-class LogParams:
-    """``theta`` is the log of the reported quantity, and the forward is supplied by the caller.
-
-    The degenerate parameterisation. It exists for the case where the map from ``theta`` to
-    detector parameters is already inside the forward closure — which is what
-    :func:`lucid.fitting.problem.build_calibration_problem` produces, and what
-    :func:`lucid.fitting.calibrate.fit` consumes. There is then nothing left for a
-    parameterisation to do except state the coordinate convention, which is worth stating: the fit
-    runs in log space, so ``to_real`` is ``exp`` and every reported quantity is positive.
-
-    ``to_dp`` raises. A caller reaching it has passed this class somewhere that needs a real
-    parameterisation, and a silent wrong answer there would be worse than a stop.
-    """
-
-    W = 1
-
-    def __init__(self, n_params):
-        self.P = int(n_params)
-
-    def to_dp(self, theta, wl, gains):
-        raise TypeError(
-            'LogParams has no DetectorParams map: the theta -> detector-parameter map lives in '
-            'the forward closure supplied alongside it. Use FieldParams or CalibrationParams for '
-            'a fit that builds its own forward.')
-
-    def to_real(self, theta):
-        return np.exp(np.asarray(theta))
