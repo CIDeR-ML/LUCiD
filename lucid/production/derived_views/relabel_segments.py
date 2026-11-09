@@ -23,7 +23,7 @@ import sys, os, shutil, glob
 import numpy as np
 import h5py
 
-EMISSION_PROCESS_DARK = 2   # schema constant (lucid.sources.writer): dark-noise hit
+from lucid.dataset.schema import EMISSION_PROCESS_DARK
 
 src, dst, theta = sys.argv[1], sys.argv[2], float(sys.argv[3])
 cos_thr = np.cos(np.deg2rad(theta))

@@ -15,13 +15,14 @@ apptainer exec -B /sdf "$LUCID_IMAGE_PATH" python3 <script> SRC DST <param>
 |---|---|---|
 | `depile.py` | Splits each pile-up event's N interactions into N separate single-interaction events (~2× events for the 2-vertex configs). | `FILE_INDEX` (one file per call; resumable) |
 | `relabel_segments.py` | Particle re-categorization by deflection angle θ. | `θ` in degrees |
-| `relabel_particles.py` | Merge tracks into particles by ancestry. | — |
-| `relabel_cone.py` | Cherenkov-cone per-hit labels. | — |
+| `relabel_particles.py` | Keep the stored per-track grouping (`split`) or fold every track into its primary (`merge`). | `split` or `merge` |
+| `relabel_cone.py` | Cherenkov-cone per-hit labels (inside / outside a cone of half-angle θ around the primary direction), written into `emission_process` so the viewer's emission toggle shows them. | `θ` in degrees |
 
 `depile.py` is dataset-agnostic and processes one file index at a time (atomic `.part`→rename,
 resumable — re-running skips files whose dest event count already matches). Drive it across a whole
-dataset with the SLURM array in `submit_depile_array.sbatch` (a template — edit `SRC`/`DST`/`--array`;
-the example de-piles `config_000018` → `config_000018_separated`).
+dataset with the SLURM array in `submit_depile_array.sbatch` (a template: edit `IMG`, `SCRIPT`,
+`SRC`, `DST`, the log paths and `--array`; its example paths are one user's legacy
+`config_000018` pile-up set).
 
 ## The core idea
 The finest truth lives in `step/sensor_hits` = one row per **(segment, sensor, emission_process)**
@@ -54,8 +55,8 @@ and how to **reduce** (PE→sum, T→min). (The `step` modality was formerly cal
    (garbage "gamma/other" entries). Same for `hits`: update `n_particle_hits` (and `n_particles` if
    present). This was a real bug; symptom = "extra gamma particles that aren't in the file."
 2. **Geometry & medium come from `--detector`, not the dataprod `material` field.** (Generation, not
-   views, but bites the same way.) Default `SK_like` ⇒ water ⇒ Cherenkov-only. See
-   `lucid/production/README.md`.
+   views, but bites the same way.) The WAND detectors and `SK_like` are
+   water ⇒ Cherenkov-only. See [`../README.md`](../README.md).
 3. **What you can re-derive downstream is bounded by what's persisted:**
    - `step`/`per_track` cover only **meaningful tracks** (above-threshold light producers);
      sub-threshold and **neutral** tracks (e.g. π⁰) are **not** in the files.
@@ -82,18 +83,11 @@ Result: smaller θ → more particles (splits at every kink), larger θ → fewe
 `relabel_segments.py SRC DST θ`. Verified on the 50-π⁺ set: θ=5°→1/8/25, θ=15°→1/6/17,
 θ=45°→1/4/10 particles/event.
 
-## Serving the viewer (host-native, no container)
-```bash
-python3 LUCiD/viewer/serve_viewer.py <dataset_dir> --port 8765     # binds 127.0.0.1
-```
-Serves its UI from its own dir and the dataset from `<dataset_dir>` (auto-detects
-`{sensor,hits,step,labl}/`). It reads files fresh per request → after relabeling, just hard-reload the
-browser. On an S3DF tunnel from your laptop (replace node with the one from `hostname -f`):
-```bash
-ssh -J <user>@s3df.slac.stanford.edu -L 8765:127.0.0.1:8765 <user>@<node>.sdf.slac.stanford.edu
-# then open http://127.0.0.1:8765/ , LABEL → Particle
-```
-Two viewers of the same events = two ports + two relabeled copies.
+## Serving the viewer
+
+Serving a dataset and the SSH tunnel are in [`viewer/README.md`](../../../viewer/README.md). The
+server reads files fresh per request, so after relabeling a hard-reload of the browser shows the new
+labels; two viewers of the same events = two ports + two relabeled copies.
 
 ## Units
 meters / nanoseconds / MeV throughout.
