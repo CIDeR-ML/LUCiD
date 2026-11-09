@@ -41,3 +41,23 @@ def test_slurm_jobs_carry_the_site_qos_and_cpu_jobs_no_gpu():
     assert "#SBATCH --qos=preemptable\n" in body and "#SBATCH --gpus" not in body
     body = SlurmAdapter(env).render_command_job(**job)
     assert "--qos" not in body and "#SBATCH --gpus=1\n" in body   # unchanged when not asked
+
+
+def test_a_training_job_runs_the_image_or_dev_lucid_not_a_user_site_one():
+    """LUCID_ENV_BASE is a Python user site for the CUDA jax plugin. One that also carries an
+    editable LUCiD (S3DF's shared one points at a home checkout) would shadow the image's
+    /opt/LUCiD and LUCID_DEV_PATH, since a user site comes before site-packages; and an image's
+    console script may name an old module. The job runs the module with /opt/LUCiD first."""
+    from lucid.production.platform.adapters import HTCondorAdapter, SlurmAdapter
+    res = {"partition": "ampere", "account": "fac:repo"}
+    base = {"LUCID_IMAGE_PATH": "/img.sif", "LUCID_ENV_BASE": "/env", "APPTAINER_BINDS": "/sdf"}
+    body = SlurmAdapter({**base, "CLUSTER": "slurm"}).render_train_run(
+        run_dir=Path("/r"), run_name="s0", cli_args="--seed 0", resources=res)
+    assert 'export APPTAINERENV_PYTHONPATH="/opt/LUCiD"' in body
+    assert "python3 -m lucid.siren.training.train --seed 0" in body and "lucid-train-siren" not in body
+    for dev, want in ((None, "PYTHONPATH=/opt/LUCiD python3 -m"), ("/dev/LUCiD", "PYTHONPATH=/dev/LUCiD")):
+        env = {**base, "CLUSTER": "htcondor", **({"LUCID_DEV_PATH": dev} if dev else {})}
+        sub = HTCondorAdapter(env).render_train_run(run_dir=Path("/r"), run_name="s0",
+                                                    cli_args="--seed 0", resources={"flavour": "x"})
+        args = next(l for l in sub.splitlines() if l.startswith("arguments"))
+        assert want in args and "python3 -m lucid.siren.training.train --seed 0" in args

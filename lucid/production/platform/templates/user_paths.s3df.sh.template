@@ -114,7 +114,9 @@ export DEFAULT_TIME="23:00:00"
 # =============================================================================
 # The image's jaxlib is CPU-only. LUCID_ENV_BASE is a Python user site holding
 # the CUDA plugin for the image's jax (0.4.38); train_siren jobs export it as
-# PYTHONUSERBASE, and refuse to be written without it. Make one with
+# PYTHONUSERBASE, and refuse to be written without it. It should hold nothing else:
+# the jobs put /opt/LUCiD first on PYTHONPATH so a LUCiD installed there is ignored,
+# but other packages in it still shadow the image's. Make one with
 #   PYTHONUSERBASE=/path/to/env apptainer exec "$LUCID_IMAGE_PATH" \
 #       /opt/conda/bin/python3 -m pip install --user "jax-cuda12-plugin[with_cuda]==0.4.38"
 export LUCID_ENV_BASE="/path/to/your/python_env"
