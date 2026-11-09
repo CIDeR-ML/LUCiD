@@ -4,8 +4,11 @@ Cylinder-specific photon propagation functions.
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from functools import partial
 from jax import lax
+
+from lucid.propagation.sensor_map import grid_face_cells
 
 
 # Grazing-ray sqrt regularization for the wall-intersection discriminant. 0 -> legacy hard floor
@@ -265,34 +268,6 @@ def calculate_cylinder_normals(intersection_point, is_wall, is_top_cap):
                              bottom_cap_normal))
 
 
-def cylinder_bounds_check(points, r, h):
-    """
-    Check if points are within cylinder bounds.
-    
-    Parameters
-    ----------
-    points : ndarray
-        Points to check [x, y, z]
-    r : float
-        Cylinder radius
-    h : float
-        Cylinder height
-        
-    Returns
-    -------
-    ndarray
-        Boolean array indicating which points are inside cylinder
-    """
-    x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    
-    # For x,y: check if point is within circle with radius r
-    inside_xy_circle = (x**2 + y**2) <= r**2
-    # For z: check if |z| ≤ h/2
-    inside_z_bounds = (z >= -h/2) & (z <= h/2)
-    
-    return inside_xy_circle & inside_z_bounds
-
-
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
 def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_height):
     """Assign sensors to grid cells, handling overlap across cell boundaries.
@@ -317,7 +292,7 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
     Returns
     -------
     jnp.ndarray
-        Array of shape (n_sensors, 4, 3) containing up to 4 grid cell assignments
+        Array of shape (n_sensors, 9, 3) containing up to 9 grid cell assignments
         per sensor. -1 indicates no assignment.
     """
 
@@ -381,7 +356,7 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
 
             sorted_indices = indices[jnp.argsort(-selection)]
 
-            return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
+            return jnp.where(jnp.arange(9)[:, None] < jnp.sum(selection), sorted_indices, -1)
 
         def assign_cap(is_top):
             cap_x = x
@@ -433,7 +408,7 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
 
             sorted_indices = indices[jnp.argsort(-selection)]
 
-            return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
+            return jnp.where(jnp.arange(9)[:, None] < jnp.sum(selection), sorted_indices, -1)
 
         return jax.lax.cond(
             on_wall,
@@ -444,40 +419,12 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
                 lambda: jax.lax.cond(
                     on_bottom,
                     lambda: assign_cap(False),
-                    lambda: jnp.full((4, 3), -1, dtype=jnp.int32)
+                    lambda: jnp.full((9, 3), -1, dtype=jnp.int32)
                 )
             )
         )
 
     return jax.vmap(assign_single_sensor)(sensors)
-
-
-@partial(jax.jit, static_argnums=(1, 2, 3))
-def create_sensor_grid_map(assignments, n_cap, n_angular, n_height):
-    """
-    Creates a grid map counting the number of sensors in each cell of the sensor grid.
-    """
-    # Calculate grid size: wall cells + cells in both caps
-    total_cells = n_angular * n_height + 2 * n_cap * n_cap
-    grid = jnp.zeros(total_cells, dtype=jnp.int32)
-
-    def update_grid(sensor_assignments):
-        def update_cell(cell, g):
-            i, j, k = cell
-            is_valid = (i != -1) & (j != -1) & (k != -1)
-
-            # Calculate linear index for either wall (k=0) or cap cells (k=1,2)
-            idx = jnp.where(k == 0,
-                            i * n_height + j,  # Wall cell indexing
-                            n_angular * n_height + (k - 1) * n_cap * n_cap + i * n_cap + j)  # Cap cell indexing
-
-            return g.at[idx].add(is_valid)
-
-        return jax.lax.fori_loop(0, sensor_assignments.shape[0], lambda i, g: update_cell(sensor_assignments[i], g),
-                                 grid)
-
-    all_updates = jax.vmap(update_grid)(assignments)
-    return all_updates.sum(axis=0)
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3, 4))
@@ -525,108 +472,13 @@ def calculate_grid_centers(r, h, n_cap, n_angular, n_height):
     return jnp.concatenate([wall_centers, cap_centers], axis=0)
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6), device=jax.devices('cpu')[0])
-def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_cap, n_angular, n_height,
-                                 max_candidates_per_ray, num_sensors):
-    """Create inverted sensor map prioritizing geometric intersections then closest sensors"""
-    total_cells = n_angular * n_height + 2 * n_cap * n_cap
+def cylinder_grid_cells(n_cap, n_angular, n_height):
+    """Grid coordinates of every cylinder cell, by linear index: (total_cells, 3) int32.
 
-    # Initialize map
-    inverted_map = jnp.full((total_cells, max_candidates_per_ray), -1, dtype=jnp.int32)
-
-    def update_cell(carry, i):
-        inv_map = carry
-
-        def add_geometric(carry, j):
-            curr_map, curr_count = carry
-
-            # Convert linear index i back to 3D coordinates using jnp.where instead of if/else
-            is_wall_cell = i < n_angular * n_height
-            is_top_cap_cell = (i >= n_angular * n_height) & (i < n_angular * n_height + n_cap * n_cap)
-
-            # Wall cell calculations
-            wall_i = i // n_height
-            wall_j = i % n_height
-
-            # Cap cell calculations
-            cap_offset = i - n_angular * n_height
-            cap_idx = cap_offset % (n_cap * n_cap)
-            cap_i = cap_idx // n_cap
-            cap_j = cap_idx % n_cap
-
-            # Select correct indices based on cell type
-            cell_i = jnp.where(is_wall_cell, wall_i, cap_i)
-            cell_j = jnp.where(is_wall_cell, wall_j, cap_j)
-            cell_k = jnp.where(is_wall_cell,
-                               0,
-                               jnp.where(is_top_cap_cell, 1, 2))
-
-            # Check if sensor j intersects with this cell in 3D coordinates
-            sensor_assignments = assignments_geometric[j]
-            matches = (sensor_assignments[:, 0] == cell_i) & \
-                      (sensor_assignments[:, 1] == cell_j) & \
-                      (sensor_assignments[:, 2] == cell_k)
-
-            cell_matches = jnp.any(matches)
-            should_add = cell_matches & (curr_count < max_candidates_per_ray)
-
-            new_map = jnp.where(
-                should_add,
-                curr_map.at[i, curr_count].set(j),
-                curr_map
-            )
-
-            return (new_map, curr_count + should_add), None
-
-        # Add geometric intersections
-        (new_map, geom_count), _ = jax.lax.scan(
-            add_geometric,
-            (inv_map, 0),
-            jnp.arange(len(assignments_geometric))
-        )
-
-        # Get closest sensors for this cell
-        closest = assignments_distance[i]
-
-        # Add closest sensors if there's room
-        def add_closest(carry, j):
-            curr_map, curr_count = carry
-            sensor_idx = closest[j]
-
-            # Check for duplicates
-            def check_duplicate(k, is_dup):
-                return is_dup | (curr_map[i, k] == sensor_idx)
-
-            is_duplicate = jax.lax.fori_loop(
-                0, curr_count,
-                check_duplicate,
-                False
-            )
-
-            # Add if not duplicate and have space
-            should_add = (~is_duplicate) & (curr_count < max_candidates_per_ray)
-
-            new_map = jnp.where(
-                should_add,
-                curr_map.at[i, curr_count].set(sensor_idx),
-                curr_map
-            )
-
-            return (new_map, curr_count + should_add), None
-
-        # Fill remaining slots with closest sensors
-        (final_map, _), _ = jax.lax.scan(
-            add_closest,
-            (new_map, geom_count),
-            jnp.arange(len(closest))
-        )
-
-        return final_map, None
-
-    final_map, _ = jax.lax.scan(
-        update_cell,
-        inverted_map,
-        jnp.arange(total_cells)
-    )
-
-    return final_map
+    The wall's (angular, height, 0) first, then the top cap's (x, y, 1) and the bottom
+    cap's (x, y, 2): the convention of :func:`assign_sensors_to_grid`, read by
+    :func:`lucid.propagation.sensor_map.build_inverted_sensor_map`.
+    """
+    return np.concatenate([grid_face_cells(n_angular, n_height, 0),
+                           grid_face_cells(n_cap, n_cap, 1),
+                           grid_face_cells(n_cap, n_cap, 2)])

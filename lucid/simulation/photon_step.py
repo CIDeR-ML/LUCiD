@@ -96,7 +96,7 @@ def photon_iteration_sample(
 
     u2 = jax.random.uniform(k2)
     reflects = reaches_surface & (u2 < reflection_rate)
-    # Not reflected -> deposited; make_hits converts it at QE / (1 - R0), since QE counts
+    # Not reflected -> deposited; the hits convert it at QE / (1 - R0), since QE counts
     # photons arriving at the PMT (see simulator._common_propagation).
     detects = reaches_surface & (u2 >= reflection_rate)
     scatters = ~reaches_surface
@@ -282,11 +282,17 @@ def photon_iteration_update_factors(
 
     # Implicit-capture deposit factor (expected detected charge, Rao-Blackwellised over the
     # free-path decision). Dd LIVE → pathwise track gradient through `reach`/`atten_surf`.
-    # No qe (make_hits applies QE / (1 - R0), see simulator._common_propagation); no dice_dep
+    # No qe (the hits apply QE / (1 - R0), see simulator._common_propagation); no dice_dep
     # (the scan body multiplies it from PRE-step log_p).
     reach = jnp.exp(-mu_tot * Dd)
     atten_surf = jnp.exp(-Dd / absorption_length)
-    detect_prob = reach * (1.0 - refl_prob) * atten_surf
+    # The deposit is charge on a sensor, so it carries the SENSOR's reflectance whatever the hard
+    # hit flag says. Under a soft overlap a ray passing just outside a sensor deposits on it too;
+    # charged the wall's reflectance, that halo inflated the charge by its share times
+    # (R_sensor - R_wall): +2.1% at softness 0.1 in SK_like, so the charge depended on the softness.
+    refl_sensor = jnp.where(hit_sensor, refl_prob,
+                            reflection_fn(direction, normal, True, refl_params, lam, k[5])[0])
+    detect_prob = reach * (1.0 - refl_sensor) * atten_surf
     reflection_attenuation = jnp.ones_like(detect_prob)           # folded into detect_prob
     continuing_factor = jnp.where(is_scat, atten, refl_prob * atten)
 
@@ -338,7 +344,3 @@ def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
             reflection_fn=reflection_fn)
 
     return _step
-
-
-# Module-level default (scalar reflection) — the byte-identical drop-in.
-photon_iteration_update_factors_safe = make_photon_iteration_update_factors_safe()

@@ -1,310 +1,139 @@
-import h5py
-import numpy as np
-import jax.numpy as jnp
-import jax
-from glob import glob
+"""Numeric and array helpers shared across lucid, plus the event-parameter conveniences.
+
+One responsibility: small, stateless functions with no home of their own -- vector normalisation
+and frames (``normalize``, ``create_local_frame``, ``rotation_onto``), the direction
+<-> angles codec (``spherical_to_cartesian``, ``cartesian_to_spherical``), the charge and time
+smearing models (``smear_charges_SK_like``, ``smear_charges_spe``, ``smear_times``), and the
+sparse/full hit conversions, and the code version a run records (``code_version``). Loading a
+SIREN emitter and its t0 fit is ``lucid.siren.emitter``.
+
+It imports no IO library and re-exports nothing: the PhotonSim ROOT reader is
+``lucid.sources.root_reader`` and the dataset writer and reader are ``lucid.dataset.writer`` and
+``lucid.dataset.reader``.
+"""
+import functools
 import os
-import json
-import sys
-from tqdm import tqdm 
+import re
+import subprocess
+
+import jax
+import jax.numpy as jnp
+
 
 def base_dir_path():
     return os.path.dirname(os.path.abspath(__file__))+'/../'
 
-def setup_matplotlib_for_notebook(force_notebook_mode=None):
+
+# The container image (container/Dockerfile) installs LUCiD at IMAGE_LUCID_DIR without its .git/
+# and writes the commit it was built from into IMAGE_VERSIONS (``key=value`` lines).
+IMAGE_LUCID_DIR = '/opt/LUCiD'
+IMAGE_VERSIONS = '/opt/VERSIONS'
+_SHA = re.compile(r'[0-9a-f]{7,40}')
+
+
+@functools.lru_cache(maxsize=None)
+def code_version(checkout=None, image=(IMAGE_LUCID_DIR, IMAGE_VERSIONS)):
+    """``(commit, dirty)`` of the LUCiD code that is running, for provenance.
+
+    ``checkout`` is the source tree lucid was imported from (default: this package's parent).
+    When it is the top of a git checkout, ``commit`` is its HEAD and ``dirty`` whether a tracked
+    file differs from HEAD (``git status --porcelain --untracked-files=no``). When it is the
+    image's install directory ``image[0]``, which has no ``.git/``, both come from the image's
+    version record ``image[1]``: ``lucid_sha`` and ``lucid_dirty``. Otherwise ``commit`` is
+    ``'unknown'``. ``dirty`` is ``None`` whenever it is not known (an image built before it was
+    recorded, or a failed ``git status``); a missing or malformed SHA is ``'unknown'``, never a
+    guess.
     """
-    Configure matplotlib for notebook display when running scripts from Jupyter.
-    
-    This function detects if the script is running in a Jupyter notebook environment
-    and modifies matplotlib's behavior to display plots inline in the notebook
-    instead of trying to show them in separate windows.
-    
-    Args:
-        force_notebook_mode: If True, force notebook mode regardless of detection.
-                            If False, force regular mode. If None, auto-detect.
+    checkout = os.path.realpath(checkout or base_dir_path())
+
+    def git(*args):
+        return subprocess.check_output(['git', '-C', checkout, *args],
+                                       stderr=subprocess.DEVNULL).decode().strip()
+    try:
+        top = git('rev-parse', '--show-toplevel')
+    except (subprocess.CalledProcessError, OSError):
+        top = None
+    # a tree that is merely inside some other repository is not that repository's code
+    if top is not None and os.path.realpath(top) == checkout:
+        try:
+            commit = git('rev-parse', 'HEAD')
+        except (subprocess.CalledProcessError, OSError):
+            return 'unknown', None
+        try:
+            dirty = bool(git('status', '--porcelain', '--untracked-files=no'))
+        except (subprocess.CalledProcessError, OSError):
+            dirty = None
+        return commit, dirty
+
+    image_dir, versions = image
+    if checkout != os.path.realpath(image_dir):
+        return 'unknown', None
+    try:
+        with open(versions) as f:
+            record = dict(line.strip().split('=', 1) for line in f if '=' in line)
+    except OSError:
+        return 'unknown', None
+    sha = record.get('lucid_sha', '')
+    dirty = {'true': True, 'false': False}.get(record.get('lucid_dirty'))
+    return (sha if _SHA.fullmatch(sha) else 'unknown'), dirty
+
+
+def git_commit():
+    """The commit of :func:`code_version`: ``'unknown'`` when it is not known."""
+    return code_version()[0]
+
+def spherical_to_cartesian(theta, phi, xp=jnp):
+    """Unit direction ``[x, y, z]`` at polar angle ``theta`` (from +z) and azimuth ``phi`` (from +x
+    towards +y), in radians; array arguments give a ``(3, ...)`` result.
+
+    The inverse of :func:`cartesian_to_spherical`. ``xp`` is the array module: ``jax.numpy``, or
+    ``numpy`` for float64 host code.
     """
-    import matplotlib
-    import matplotlib.pyplot as plt
-    
-    if force_notebook_mode:
-        print("📊 Jupyter notebook environment - configuring matplotlib for inline display")
-        
-        # Use non-interactive backend
-        matplotlib.use('Agg')
-        
-        # Store original show function
-        original_show = plt.show
-        
-        def notebook_show(*args, **kwargs):
-            """Custom show function that displays plots inline in notebooks."""
-            if plt.get_fignums():  # If there are active figures
-                import tempfile
-                from IPython.display import Image, display
-                
-                # Create temporary file for the plot
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-                    temp_path = tmp_file.name
-                
-                try:
-                    # Save current figure with high quality
-                    plt.savefig(temp_path, dpi=150, bbox_inches='tight', facecolor='white')
-                    
-                    # Display in notebook
-                    display(Image(temp_path))
-                    
-                finally:
-                    # Close the figure to prevent memory leaks
-                    plt.close()
-                    
-                    # Clean up temporary file
-                    try:
-                        os.remove(temp_path)
-                    except OSError:
-                        pass  # Ignore cleanup errors
-        
-        # Replace plt.show with our custom function
-        plt.show = notebook_show
-        
-    else:
-        # Not in notebook, use default behavior
-        pass
+    sin_theta = xp.sin(theta)
+    cos_theta = xp.cos(theta)
+    sin_phi = xp.sin(phi)
+    cos_phi = xp.cos(phi)
 
-def normalize_particle_type_for_path(particle_type):
-    """
-    Normalize particle type string to match data directory structure.
-
-    Parameters
-    ----------
-    particle_type : str
-        Particle type string (e.g., 'mu-', 'mu+', 'e-', 'e+', 'pi-', 'pi+')
-
-    Returns
-    -------
-    str
-        Normalized particle type for directory name (e.g., 'muon', 'pion', 'electron')
-    """
-    path_map = {
-        'mu-': 'muon',
-        'mu+': 'muon',
-        'muon': 'muon',
-        'e-': 'electron',
-        'e+': 'electron',
-        'electron': 'electron',
-        'positron': 'electron',
-        'pi-': 'pion',
-        'pi+': 'pion',
-        'pi0': 'pion',
-        'pion': 'pion'
-    }
-
-    if particle_type in path_map:
-        return path_map[particle_type]
-    else:
-        # Default to the input if not in map (for backward compatibility)
-        return particle_type
-
-def get_refractive_index(material='water'):
-    """
-    Get the refractive index for a given material.
-
-    Parameters
-    ----------
-    material : str
-        Material type (e.g., 'water', 'ice')
-
-    Returns
-    -------
-    float
-        Refractive index of the material
-
-    Raises
-    ------
-    ValueError
-        If material is not supported
-    """
-    # Refractive indices for different materials
-    refractive_indices = {
-        'water': 1.33,
-        # Future materials can be added here:
-        # 'ice': 1.31,
-        # 'liquid_scintillator': 1.50,
-    }
-
-    if material not in refractive_indices:
-        supported_materials = ', '.join(refractive_indices.keys())
-        raise ValueError(
-            f"Material '{material}' is not currently supported.\n"
-            f"Supported materials: {supported_materials}\n"
-            f"Development for additional materials is ongoing."
-        )
-
-    # Print warning that only water is fully supported
-    if material != 'water':
-        print(f"⚠️  WARNING: Material '{material}' is experimental.")
-        print(f"   Only 'water' is fully validated and supported.")
-        print(f"   Development for other materials is ongoing.")
-
-    return refractive_indices[material]
-
-def get_speed_of_light_in_material(material='water'):
-    """
-    Calculate the speed of light in a given material.
-
-    Parameters
-    ----------
-    material : str
-        Material type (e.g., 'water', 'ice')
-
-    Returns
-    -------
-    float
-        Speed of light in the material (m/ns)
-
-    Notes
-    -----
-    The speed of light in a material is calculated as c/n where:
-    - c = 0.299792 m/ns (speed of light in vacuum)
-    - n = refractive index of the material
-
-    For water (n=1.33): c/n ≈ 0.2253 m/ns
-    """
-    # Speed of light in vacuum (m/ns)
-    SPEED_OF_LIGHT_VACUUM = 0.299792  # m/ns
-
-    # Get refractive index for the material
-    n = get_refractive_index(material)
-
-    # Calculate speed of light in material
-    return SPEED_OF_LIGHT_VACUUM / n
-
-def unpack_t0_params(particle_type: str = 'muon', material: str = 'water') -> tuple:
-    """
-    Load and unpack t0 timing parameters for a given particle type and material.
-
-    Schema: ``stretched_exp_delay`` —
-        ``t(d, E) = d/c + A(E)·(exp((d/λ(E))^β(E)) − 1)``
-    with ``log10 A``, ``log10 λ`` and ``β`` each a cubic in ``log10 E``
-    (coeffs ascending: ``c0 + c1·logE + c2·logE² + c3·logE³``). Distance in
-    mm, energy in MeV, time in ns.
-
-    Parameters
-    ----------
-    particle_type : str, optional
-        Particle type (e.g., 'mu-', 'muon'), by default 'muon'
-    material : str, optional
-        Material type, by default 'water'
-
-    Returns
-    -------
-    tuple of three coefficient tuples
-        ``(a_coeffs, lambda_coeffs, beta_coeffs)``, each length-4 ascending
-        in ``log10 E`` — matches the
-        :func:`lucid.sources.siren_rays.predict_t0` signature exactly.
-    """
-    normalized_type = normalize_particle_type_for_path(particle_type)
-    path = base_dir_path() + f'/data/{material}/{normalized_type}/t0.json'
-    with open(path, 'r') as f:
-        t0_params = json.load(f)
-
-    form = t0_params.get('form')
-    if form != 'stretched_exp_delay':
-        raise ValueError(
-            f"{path}: unsupported t0 schema {form!r}; expected "
-            f"'stretched_exp_delay'. Regenerate with "
-            f"PhotonSim/tools/t0_correction/calculate_t0.py."
-        )
-    return (
-        tuple(t0_params['A']['log10_poly_logE']),
-        tuple(t0_params['lambda']['log10_poly_logE']),
-        tuple(t0_params['beta']['poly_logE']),
-    )
-
-def unpack_siren_params(particle_type: str = 'muon', material: str = 'water') -> dict:
-    """
-    Load SIREN inference parameters for a given particle type and material from
-    `data/<material>/<particle>/siren_params.json`.
-
-    `N_photons(E)` and `s_max(E)` come from the trained model's metadata (the
-    `nphot` / `smax` blocks); this loader resolves the model paths and the
-    ray-sampling knobs for both the Cherenkov and dE/dx surrogates.
-
-    Returns
-    -------
-    dict
-        Dictionary containing:
-        - 'siren_model_path': str, absolute path to the Cherenkov SIREN model.
-        - 'ray_sampling': dict, ``{'grid_bins': int, 'threshold': float}`` —
-          first-pass grid resolution and seed threshold for the Cherenkov
-          importance-sampling ray generator (empty dict if not configured).
-        - 'dedx_model_path': str or None, absolute path to the dE/dx SIREN
-          model (None if no ``dedx_model`` block is present — only required
-          when the medium enables scintillation).
-        - 'dedx_sampling': dict, same shape as ``ray_sampling``, driving the
-          scintillation surrogate's first-pass grid.
-    """
-    normalized_type = normalize_particle_type_for_path(particle_type)
-    data_dir = base_dir_path() + f'/data/{material}/{normalized_type}/'
-    config_path = data_dir + 'siren_params.json'
-
-    with open(config_path, 'r') as f:
-        siren_params = json.load(f)
-
-    dedx_block = siren_params.get('dedx_model')
-    dedx_path = data_dir + dedx_block['path'] if dedx_block else None
-
-    return {
-        'siren_model_path': data_dir + siren_params['siren_model']['path'],
-        'ray_sampling': siren_params.get('ray_sampling', {}),
-        'dedx_model_path': dedx_path,
-        'dedx_sampling': siren_params.get('dedx_sampling', {}),
-    }
-
-def spherical_to_cartesian(theta, phi):
-    """
-    Convert spherical coordinates to Cartesian coordinates.
-    
-    Parameters:
-    theta (float): Inclination angle in radians (0 = z-axis, pi/2 = xy-plane)
-    phi (float): Azimuthal angle in radians (0 = x-axis, pi/2 = y-axis)
-    
-    Returns:
-    jnp.array: Unit vector [x, y, z] in Cartesian coordinates
-    """
-    sin_theta = jnp.sin(theta)
-    cos_theta = jnp.cos(theta)
-    sin_phi = jnp.sin(phi)
-    cos_phi = jnp.cos(phi)
-    
     x = sin_theta * cos_phi
     y = sin_theta * sin_phi
     z = cos_theta
-    
-    return jnp.array([x, y, z])
 
-def full_to_sparse(charges, times):
-    """Convert full arrays to sparse representation by removing zero elements.
+    return xp.array([x, y, z])
 
-    Parameters
-    ----------
-    charges : jnp.ndarray
-        Array of charge values for all sensors
-    times : jnp.ndarray
-        Array of time values for all sensors
 
-    Returns
-    -------
-    non_zero_indices : jnp.ndarray
-        Indices where charges are non-zero
-    non_zero_charges : jnp.ndarray
-        Charge values at non-zero locations
-    non_zero_times : jnp.ndarray
-        Time values at non-zero locations
+def cartesian_to_spherical(direction, xp=jnp):
+    """``(theta, phi)`` of a unit ``direction``: ``theta = arccos(z)`` in ``[0, pi]`` (``z``
+    clipped to ``[-1, 1]``), ``phi = arctan2(y, x)`` in ``[-pi, pi]``.
+
+    The inverse of :func:`spherical_to_cartesian`; ``xp`` as there. Normalise first: ``theta``
+    reads ``z`` as the cosine.
     """
-    non_zero_indices = jnp.nonzero(charges)[0]
-    non_zero_charges = charges[non_zero_indices]
-    non_zero_times = times[non_zero_indices]
-    return non_zero_indices, non_zero_charges, non_zero_times
+    return xp.arccos(xp.clip(direction[2], -1.0, 1.0)), xp.arctan2(direction[1], direction[0])
 
+
+def rotation_onto(a, b, xp=jnp):
+    """The ``(3, 3)`` rotation taking direction ``a`` onto direction ``b`` by the shortest arc,
+    about ``a x b``; ``a`` and ``b`` need not be unit, and ``rotation_onto(a, a)`` is the identity.
+
+    Built as two mirrors, through the plane normal to ``a`` and then the plane normal to the
+    bisector ``a + b``, so it is orthonormal to rounding and smooth in ``a`` and ``b`` everywhere
+    except at ``b = -a``, where the arc's axis is undefined. There the second mirror is normal to
+    ``+x`` projected off ``a`` (``+y`` when ``|a_x| >= 0.9``), which makes it the half turn about
+    ``a x`` that normal: ``+z`` onto ``-z`` is the half turn about ``+y``. ``xp`` as in
+    :func:`spherical_to_cartesian`; with ``jax.numpy`` the gradient is finite everywhere and
+    exact away from ``b = -a``.
+    """
+    a = a / xp.linalg.norm(a)
+    b = b / xp.linalg.norm(b)
+    bisector = a + b
+    bisector_norm2 = xp.dot(bisector, bisector)
+    antipodal = bisector_norm2 == 0
+    helper = xp.where(xp.abs(a[0]) < 0.9, xp.array([1.0, 0.0, 0.0]), xp.array([0.0, 1.0, 0.0]))
+    off_a = helper - xp.dot(helper, a) * a
+    normal = xp.where(antipodal, off_a / xp.linalg.norm(off_a),
+                      bisector / xp.sqrt(xp.where(antipodal, 1.0, bisector_norm2)))
+    eye = xp.eye(3)
+    return (eye - 2 * xp.outer(normal, normal)) @ (eye - 2 * xp.outer(a, a))
 
 def sparse_to_full(sparse_indices, sparse_values, full_size):
     """Convert sparse representation back to full array with zeros.
@@ -325,341 +154,6 @@ def sparse_to_full(sparse_indices, sparse_values, full_size):
     """
     full_data = jnp.zeros(full_size)
     return full_data.at[sparse_indices].set(sparse_values)
-
-
-def generate_random_params(key, h=2, r=1):
-    """
-    Generate random parameters for particle simulation using angles for direction.
-
-    Parameters:
-    key: JAX PRNG key
-
-    Returns:
-    ParticleParams: with energy, position, theta, phi, t0
-    """
-    from lucid.detector_params import ParticleParams
-
-    k1, k2, k3, k4 = jax.random.split(key, 4)
-
-    # Generate energy between 100 and 1000 MeV
-    energy = 300. + 600. * jax.random.uniform(k1)
-
-    # Generate random position inside detector volume (approximated as cylinder)
-    position = generate_random_point_inside_cylinder(k2, h, r)
-
-    # Generate random direction angles
-    # theta: inclination angle (0 to pi)
-    # phi: azimuthal angle (0 to 2*pi)
-    theta = jnp.pi * jax.random.uniform(k3)
-    phi = 2.0 * jnp.pi * jax.random.uniform(k4)
-
-    return ParticleParams(energy=energy, position=position,
-                          theta=theta, phi=phi, t0=jnp.array(0.0))
-
-@jax.jit
-def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
-    """
-    Generate random point inside a cylinder with specified height and radius.
-
-    Parameters
-    ----------
-    key : jax.random.PRNGKey
-        JAX random number generator key
-    h : float, optional
-        Height of the cylinder, default=2
-        Position will be generated in range [-h/2, h/2] for z-coordinate
-    r : float, optional
-        Radius of the cylinder, default=1
-        Position will be generated within circle of radius r in xy-plane
-    offset : float, optional
-        Offset to avoid generating points on the cylinder surface, default=0.1
-
-    Returns
-    -------
-    array(3,)
-        Random position coordinates inside cylinder of height h and radius r
-    """
-    # Split the key for independent random operations
-    key1, key2, key3 = jax.random.split(key, 3)
-
-    effective_radius = r - offset
-    effective_height = h - offset
-
-    # Generate cylindrical coordinates
-    # Random radius from 0 to r (using square root for uniform distribution in circle)
-    radius = effective_radius * jnp.sqrt(jax.random.uniform(key1, shape=()))
-    # Random angle from 0 to 2π
-    theta = jax.random.uniform(key2, shape=(), minval=0, maxval=2*jnp.pi)
-    # Random height from -h/2 to h/2
-    z = jax.random.uniform(key3, shape=(), minval=-effective_height/2, maxval=effective_height/2)
-
-    # Convert cylindrical to Cartesian coordinates
-    return jnp.array([
-        radius * jnp.cos(theta),  # x
-        radius * jnp.sin(theta),  # y
-        z                         # z
-    ])
-
-
-def print_particle_params(trk_params):
-    """
-    Print particle parameters in a readable format.
-
-    Parameters:
-    trk_params: ParticleParams with energy, position, theta, phi, t0
-    """
-    # Convert angles to Cartesian for display
-    direction = spherical_to_cartesian(trk_params.theta, trk_params.phi)
-
-    print("Particle Parameters:")
-    print(f"  Energy: {trk_params.energy:.2f} MeV")
-    print(f"  Position: [{trk_params.position[0]:.2f}, {trk_params.position[1]:.2f}, {trk_params.position[2]:.2f}] m")
-    print(f"  Direction angles: theta={trk_params.theta:.2f} rad, phi={trk_params.phi:.2f} rad")
-    print(f"  Direction vector: [{direction[0]:.2f}, {direction[1]:.2f}, {direction[2]:.2f}]")
-    print(f"  t0: {trk_params.t0:.4f}")
-
-def print_propagation_params(sensor_params):
-    """
-    Pretty print the detector parameters.
-
-    Parameters
-    ----------
-    sensor_params : DetectorParams
-        DetectorParams NamedTuple with named fields
-
-    Returns
-    -------
-    None
-        Prints formatted parameter information to stdout
-    """
-    print("Propagation Parameters:")
-    print("─" * 20)
-    print(f"Scatter Length: {sensor_params.scattering.scatter_length:.2f} m")
-    print(f"Wall Reflection Rate: {sensor_params.reflection.wall_reflection_rate:.2f}")
-    print(f"Sensor Reflection Rate: {sensor_params.reflection.sensor_reflection_rate:.2f}")
-    print(f"Absorption Length: {sensor_params.absorption.absorption_length:.2f} m")
-    print(f"QE: {sensor_params.response.qe:.4f}")
-    print("─" * 20)
-
-def superimpose_multiple_events(charges_list, times_list):
-    """
-    Superimpose multiple events by summing charges and calculating weighted average of times.
-    
-    Parameters
-    ----------
-    charges_list : list of jnp.ndarray
-        List of charge arrays from each event
-    times_list : list of jnp.ndarray
-        List of time arrays from each event
-        
-    Returns
-    -------
-    tuple
-        (combined_charges, combined_times)
-    """
-    if not charges_list or not times_list:
-        raise ValueError("Empty charges or times list")
-    
-    if len(charges_list) != len(times_list):
-        raise ValueError("charges_list and times_list must have the same length")
-    
-    # Initialize with the first event
-    combined_charges = charges_list[0]
-    combined_times = times_list[0]
-    
-    # Iteratively combine with subsequent events
-    for i in range(1, len(charges_list)):
-        # Sum the charges
-        combined_charges = combined_charges + charges_list[i]
-        
-        # Calculate weighted average of times
-        # Start with the product of the previous combined values
-        time_product = combined_times * (combined_charges - charges_list[i])
-        
-        # Add the product for the current event
-        time_product = time_product + times_list[i] * charges_list[i]
-        
-        # Divide by combined charges to get weighted average
-        # When charge is 0, use 0 for time to avoid division by zero
-        nonzero_mask = combined_charges > 0
-        
-        # Initialize combined times with zeros
-        new_combined_times = jnp.zeros_like(combined_times)
-        
-        # Only calculate weighted average where there are non-zero charges
-        weighted_times = jnp.where(
-            nonzero_mask,
-            time_product / combined_charges,
-            0.0
-        )
-        
-        # Apply the weighted times only where we have non-zero charges
-        combined_times = jnp.where(nonzero_mask, weighted_times, new_combined_times)
-    
-    return combined_charges, combined_times
-
-# ---------------------------------------------------------------------------
-# The following I/O functions were moved to lucid.sources.event_io in Phase 2.5:
-#   save_single_event, load_single_event, get_random_root_entry_index,
-#   read_photon_data_from_root, get_pdg_code, get_particle_mass,
-#   save_single_event_with_extended_info, save_single_event_with_particle_info,
-#   merge_event_files, read_multi_folder_events, read_event_file,
-#   extract_particle_properties, analyze_loaded_particle, analyze_event_directory,
-#   PARTICLE_MASSES, momentum_to_angles_and_energy, analyze_event_kinematics,
-#   print_event_kinematics, full_to_sparse (copy), sparse_to_full (copy)
-# ---------------------------------------------------------------------------
-
-# Backward-compat re-exports from lucid.sources.event_io live at the BOTTOM of
-# this module (see end of file). They must be imported AFTER normalize() /
-# generate_orthonormal_basis() are defined: event_io pulls in
-# lucid.sources.siren_rays, which does `from lucid.utils import normalize`, so a
-# top-of-module re-export here would be a circular import (normalize undefined
-# yet). Keeping it last lets `import lucid.utils` and the documented
-# `from lucid.detector_params import ...` path work without the eager-__init__
-# pre-warm that previously masked the cycle.
-
-
-def load_range_params(particle, medium):
-    """
-    Load range parametrization for a given particle and medium.
-
-    Args:
-        particle: Particle type (e.g., 'muon', 'electron')
-        medium: Medium type (e.g., 'water')
-
-    Returns:
-        dict: Range parameters containing 'a', 'b' coefficients and metadata
-
-    The range formula is: Range = a * E + b
-    where E is energy in MeV and Range is in mm.
-    """
-    base_dir = base_dir_path()
-    params_file = os.path.join(base_dir, 'data', medium, particle, 'range_params.json')
-
-    if not os.path.exists(params_file):
-        raise FileNotFoundError(f"Range parameters file not found: {params_file}")
-
-    with open(params_file, 'r') as f:
-        params = json.load(f)
-
-    return params
-
-
-def calculate_particle_range(energy_mev, range_params):
-    """
-    Calculate particle range in the medium given energy.
-
-    Args:
-        energy_mev: Particle energy in MeV
-        range_params: Range parameters dict from load_range_params()
-
-    Returns:
-        float: Range in meters
-
-    The input parametrization is in mm, this function returns range in meters.
-    """
-    a = range_params['parameters']['a']
-    b = range_params['parameters']['b']
-
-    # Calculate range in mm
-    range_mm = a * energy_mev + b
-
-    # Convert to meters
-    range_m = range_mm / 1000.0
-
-    return range_m
-
-
-def check_track_endpoint_in_detector(position, direction, energy_mev, range_params, detector_bounds, fraction=0.9):
-    """
-    Check if the track endpoint (position + range * direction) is within detector bounds.
-
-    Args:
-        position: Track starting position [x, y, z] in meters
-        direction: Track direction (unit vector)
-        energy_mev: Particle energy in MeV
-        range_params: Range parameters from load_range_params()
-        detector_bounds: Dict with 'r' (radius) and 'H' (height) in meters
-        fraction: Fraction of detector bounds to check (default 0.9)
-
-    Returns:
-        bool: True if endpoint is within bounds, False otherwise
-    """
-    # Calculate range in meters
-    track_range = calculate_particle_range(energy_mev, range_params)
-
-    # Calculate endpoint
-    endpoint = position + track_range * direction
-
-    # Extract detector bounds
-    detector_r = detector_bounds['r'] * fraction
-    detector_h = detector_bounds['H'] * fraction
-
-    # Check cylindrical bounds
-    # Radial check (x, y)
-    radial_distance = np.sqrt(endpoint[0]**2 + endpoint[1]**2)
-    if radial_distance > detector_r:
-        return False
-
-    # Height check (z)
-    if abs(endpoint[2]) > detector_h / 2.0:
-        return False
-
-    return True
-
-
-def generate_random_event_params(key, detector_bounds, fraction=0.7):
-    """
-    Generate random event parameters based on detector geometry.
-    
-    This is the same function from optimize.py, shared for consistency.
-    """
-    if detector_bounds['type'] == 'cylinder':
-        r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=detector_bounds['r'] * fraction)
-        key, _ = jax.random.split(key)
-        theta = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
-        key, _ = jax.random.split(key)
-        z_vert = jax.random.uniform(key, shape=(), minval=-detector_bounds['H']/2 * fraction, 
-                                   maxval=detector_bounds['H']/2 * fraction)
-        position = jnp.array([r_vert * jnp.cos(theta), r_vert * jnp.sin(theta), z_vert])
-        
-    elif detector_bounds['type'] == 'sphere':
-        u = jax.random.uniform(key, shape=())
-        key, _ = jax.random.split(key)
-        cos_theta = jax.random.uniform(key, shape=(), minval=-1, maxval=1)
-        key, _ = jax.random.split(key)
-        phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
-        
-        r = detector_bounds['r'] * fraction * jnp.cbrt(u)
-        sin_theta = jnp.sqrt(1 - cos_theta**2)
-        position = jnp.array([r * sin_theta * jnp.cos(phi), 
-                             r * sin_theta * jnp.sin(phi), 
-                             r * cos_theta])
-        
-    elif detector_bounds['type'] == 'box':
-        position = jax.random.uniform(key, shape=(3,), 
-                                    minval=jnp.array([-detector_bounds['x']/2, 
-                                                     -detector_bounds['y']/2, 
-                                                     -detector_bounds['z']/2]) * fraction,
-                                    maxval=jnp.array([detector_bounds['x']/2, 
-                                                     detector_bounds['y']/2, 
-                                                     detector_bounds['z']/2]) * fraction)
-    
-    # Random direction
-    from lucid.detector_params import ParticleParams
-    key, _ = jax.random.split(key)
-    phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
-    key, _ = jax.random.split(key)
-    cos_theta = jax.random.uniform(key, shape=(), minval=-1, maxval=1)
-    sin_theta = jnp.sqrt(1 - cos_theta**2)
-    direction = jnp.array([sin_theta * jnp.cos(phi), sin_theta * jnp.sin(phi), cos_theta])
-
-    # Random energy
-    key, _ = jax.random.split(key)
-    energy = jax.random.uniform(key, shape=(), minval=500.0, maxval=1500.0)
-
-    return ParticleParams.from_cartesian(energy=energy, position=position,
-                                         direction=direction, t0=jnp.array(0.0))
 
 
 def smear_times(times, time_resolution=0.4, key=None):
@@ -768,50 +262,9 @@ def smear_charges_spe(counts, key=None, spe=None):
     return jnp.clip(smeared_counts, 0.0, None)
 
 
-def time_digitizer(times, time_resolution=0.4):
-    """
-    Digitize input times to bin centers.
-
-    Args:
-        times: Input array of times to digitize
-        time_resolution: Time resolution for binning (default=0.4 ns, Super-Kamiokande PMT resolution)
-
-    Returns:
-        Array with same shape as input where each time is replaced
-        by its corresponding bin center
-    """
-    time_window = 500  # nanoseconds
-    nbins = int(time_window / time_resolution)
-    bins = jnp.linspace(0, time_window, int(nbins + 1))
-    bin_centers = bins[:-1] + (bins[1] - bins[0]) / 2
-
-    # Find which bin each time falls into
-    bin_indices = jnp.digitize(times, bins) - 1
-    digitized_times = jnp.where((jnp.isfinite(times)), bin_centers[bin_indices], 1e6)
-
-    return digitized_times
-
-
 # ---------------------------------------------------------------------------
 # Shared math helpers (moved from generate.py during Phase 2.2 refactor)
 # ---------------------------------------------------------------------------
-
-def jax_rotate_vector(vector, axis, angle):
-    """Rotate a vector around an axis by a given angle using Rodrigues' formula.
-
-    The axis is normalized internally for safety.
-    """
-    norm = jnp.linalg.norm(axis)
-    axis = jnp.where(norm > 1e-8, axis / norm, axis)
-    cos_angle = jnp.cos(angle)
-    sin_angle = jnp.sin(angle)
-    cross_product = jnp.cross(axis, vector)
-    dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
-    return cos_angle * vector + sin_angle * cross_product + dot_product * axis
-
-
-# Backward-compat alias
-jax_rotate_vector_local = jax_rotate_vector
 
 def normalize(v, epsilon=1e-8):
     """Normalize a vector (or batch of vectors) with numerical stability.
@@ -832,56 +285,19 @@ def normalize(v, epsilon=1e-8):
     return v / (norm + epsilon)
 
 
-def generate_orthonormal_basis(v):
-    """Generate an orthonormal basis with v as one of the vectors.
+def create_local_frame(z):
+    """Right-handed orthonormal frame with *z* as the z-axis.
 
-    Parameters
-    ----------
-    v : jnp.ndarray
-        Input vector that will be the third basis vector
-
-    Returns
-    -------
-    jnp.ndarray
-        3x3 matrix where columns are orthonormal basis vectors
+    Returns ``stack([x, y, z])`` with the basis vectors as **rows**, so the local→world map for a
+    locally-sampled direction is ``frame.T @ local_dir`` (``local_dirs @ frame`` for a batch of
+    row vectors); ``frame @ local_dir`` is the inverse rotation.
     """
-    v = normalize(v)
-
-    # Find a vector not parallel to v by trying [1,0,0] or [0,1,0]
-    not_v = jnp.array([1.0, 0.0, 0.0])
-    cond = jnp.abs(jnp.dot(v, not_v)) > 0.9
-    not_v = jnp.where(cond, jnp.array([0.0, 1.0, 0.0]), not_v)
-
-    # Use cross product to find two vectors orthogonal to v
-    u = normalize(jnp.cross(v, not_v))
-    w = jnp.cross(v, u)
-
-    return jnp.stack([u, w, v], axis=-1)
-
-
-# ---------------------------------------------------------------------------
-# Backward-compat re-exports so existing `from lucid.utils import ...` keep
-# working. Placed at the END of the module (after normalize /
-# generate_orthonormal_basis are defined) to avoid the circular import via
-# lucid.sources.siren_rays -> lucid.utils.normalize. See the note near the top.
-# ---------------------------------------------------------------------------
-from lucid.sources.event_io import (               # noqa: F401,E402
-    save_single_event,
-    load_single_event,
-    get_random_root_entry_index,
-    read_photon_data_from_root,
-    get_pdg_code,
-    get_particle_mass,
-    save_single_event_with_extended_info,
-    save_single_event_with_particle_info,
-    merge_event_files,
-    read_multi_folder_events,
-    read_event_file,
-    extract_particle_properties,
-    analyze_loaded_particle,
-    analyze_event_directory,
-    PARTICLE_MASSES,
-    momentum_to_angles_and_energy,
-    analyze_event_kinematics,
-    print_event_kinematics,
-)
+    z = normalize(z)
+    t = jnp.where(
+        jnp.abs(z[0]) < 0.9,
+        jnp.array([1.0, 0.0, 0.0]),
+        jnp.array([0.0, 1.0, 0.0]),
+    )
+    x = normalize(jnp.cross(t, z))
+    y = jnp.cross(z, x)
+    return jnp.stack([x, y, z])

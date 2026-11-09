@@ -1,20 +1,33 @@
-"""Simulation package — split from monolithic simulation.py."""
+"""The forward simulator: photon source -> transport -> per-sensor hits.
+
+``setup_event_simulator`` builds it (the hub every guide starts from). ``photon_step`` is one
+transport iteration (``photon_step_volume`` for string telescopes), ``hits`` what the sensors
+report (the registry ``HITS``: one function per hits and detection), ``reflection`` the
+reflection models, ``optics`` the scattering and direction helpers, and ``PhotonState`` the
+per-photon carry. The data-production stages
+after it, ``digitizer``, ``trigger`` and ``readout``, are imported from their modules.
+"""
 from lucid.simulation.simulator import setup_event_simulator
 from lucid.simulation.optics import (
-    normalize, jax_normalize, compute_reflection_direction,
+    normalize, compute_reflection_direction,
     create_local_frame, sample_scatter_distance, solve_rayleigh_inverse_cdf,
-    compute_scatter_direction, sample_cosine_hemisphere, jax_rotate_vector,
+    compute_scatter_direction, sample_cosine_hemisphere,
 )
-from lucid.simulation.photon_step import (
-    photon_iteration_sample, photon_iteration_update_factors,
-    photon_iteration_update_factors_safe,
+from lucid.simulation.photon_step import photon_iteration_sample, photon_iteration_update_factors
+from lucid.simulation.hits import (
+    HITS, FirstArrival, PhotonList, SegmentTruth, Waveform, PhotonHits,
+    first_arrival_expected, first_arrival_sampled, photon_list_expected, segment_truth_sampled,
+    waveform_expected, waveform_sampled, photon_hits_sampled,
 )
-from lucid.simulation.sensor_response import (
-    make_hits_simulation, make_hits_data, make_hits_likelihood,
-    make_hits_per_photon,
-    build_make_hits_waveform, build_make_hits_per_photon_shotgun,
-)
-from lucid.simulation.types import (
-    PhotonRays, PropagationResult, PhotonStepResult, PhotonState,
-)
-from lucid.simulation.config import SimConfig
+from lucid.simulation.types import PhotonState
+
+__all__ = [
+    'setup_event_simulator',
+    'normalize', 'compute_reflection_direction', 'create_local_frame', 'sample_scatter_distance',
+    'solve_rayleigh_inverse_cdf', 'compute_scatter_direction', 'sample_cosine_hemisphere',
+    'photon_iteration_sample', 'photon_iteration_update_factors',
+    'HITS', 'FirstArrival', 'PhotonList', 'SegmentTruth', 'Waveform', 'PhotonHits',
+    'first_arrival_expected', 'first_arrival_sampled', 'photon_list_expected',
+    'segment_truth_sampled', 'waveform_expected', 'waveform_sampled', 'photon_hits_sampled',
+    'PhotonState',
+]

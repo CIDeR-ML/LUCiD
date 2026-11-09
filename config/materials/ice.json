@@ -1,7 +1,9 @@
 {
   "material": "ice",
+  "_comment_siren": "ice has no emitters of its own: it runs water's (data/water/<particle>/), Cherenkov emission and t0 included.",
+  "siren": "water",
   "refractive_index": 1.309,
-  "speed_of_light_vacuum_m_per_ns": 0.299792,
+  "speed_of_light_vacuum_m_per_ns": 0.299792458,
 
   "scattering": {
     "source": "IceCube SPICE-Lea model (arXiv:1301.5361), effective scattering at ~400 nm depth-averaged",

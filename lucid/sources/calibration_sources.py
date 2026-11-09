@@ -1,14 +1,11 @@
-"""Calibration source ray generators (isotropic, laser, etc.).
-
-Moved from lucid/generate.py and lucid/detector_params.py during Phase 2.2 refactor.
-"""
+"""Calibration source ray generators: the isotropic (Fibonacci-lattice and random) and laser-fibre sources."""
 
 import jax
 import jax.numpy as jnp
 from jax import random
 from typing import NamedTuple
 from functools import partial
-from lucid.utils import normalize, generate_orthonormal_basis
+from lucid.utils import normalize, create_local_frame
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -71,7 +68,7 @@ def get_isotropic_rays_random(source_position, source_intensity, Nphot, key):
 
 
 @partial(jax.jit, static_argnums=(3,))
-def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_photons, key, n_water=1.33, fiber_NA=0.22):
+def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_photons, key, n_medium, fiber_NA=0.22):
     """
     Generate laser photons from a fiber tip with realistic angular distribution.
     Photons are distributed WITHIN the cone, not just on its surface.
@@ -88,8 +85,8 @@ def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_
         Number of photons to generate
     key : jax.random.PRNGKey
         Random key for JAX
-    n_water : float, optional
-        Refractive index of water, default 1.33
+    n_medium : float
+        Refractive index of the detector medium (the fibre's NA is quoted in air)
     fiber_NA : float
         Numerical aperture of the fiber, default 0.22
 
@@ -105,8 +102,8 @@ def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_
     # Normalize fiber direction
     fiber_direction = normalize(fiber_direction)
 
-    # Calculate maximum emission angle in water from numerical aperture
-    theta_max = jnp.arcsin(fiber_NA / n_water)
+    # Maximum emission angle in the medium from the numerical aperture
+    theta_max = jnp.arcsin(fiber_NA / n_medium)
 
     # Split keys for different random samples
     key1, key2 = jax.random.split(key)
@@ -127,14 +124,9 @@ def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_
     local_y = sin_theta * jnp.sin(phi)
     local_z = cos_theta  # Along fiber axis
 
-    # Build orthonormal basis with fiber_direction as the z-axis
-    basis = generate_orthonormal_basis(fiber_direction)
-
-    # Stack local directions
+    # Local (fiber-axis frame) directions to global coordinates
     local_directions = jnp.stack([local_x, local_y, local_z], axis=1)
-
-    # Transform to global coordinates
-    ray_vectors = jnp.einsum('ij,kj->ki', basis, local_directions)
+    ray_vectors = local_directions @ create_local_frame(fiber_direction)
 
     # All photons originate from the fiber tip position
     ray_origins = jnp.tile(fiber_position[None, :], (n_photons, 1))
@@ -145,94 +137,6 @@ def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_
     return ray_vectors, ray_origins, photon_weights
 
 
-def setup_calibration_generator(source_type='isotropic'):
-    """
-    Factory function that returns a configured calibration photon generator.
-
-    Parameters
-    ----------
-    source_type : str
-        Type of calibration source: 'isotropic', 'isotropic_random', or 'laser'
-
-    Returns
-    -------
-    callable
-        Generator function with signature:
-        (source_origin, source_intensity, Nphot, key) -> (directions, origins, weights)
-    """
-
-    if source_type == 'isotropic':
-        def generator(source_origin, source_intensity, Nphot, key):
-            return get_isotropic_rays(source_origin, source_intensity, Nphot, key)
-        return generator
-
-    elif source_type == 'isotropic_random':
-        def generator(source_origin, source_intensity, Nphot, key):
-            return get_isotropic_rays_random(source_origin, source_intensity, Nphot, key)
-        return generator
-
-    elif source_type == 'laser':
-        def generator(source_origin, source_intensity, Nphot, key):
-            direction = jnp.array([0., 0., -1.])
-            return generate_laser_photons(
-                source_origin, direction, source_intensity, Nphot, key, fiber_NA=0.22
-            )
-        return generator
-
-    else:
-        raise ValueError(f"Unknown source_type: {source_type}. Available: 'isotropic', 'isotropic_random', 'laser'")
-
-
-def generate_random_direction(key):
-    """
-    Generate a random direction uniformly distributed on a unit sphere.
-
-    Parameters
-    ----------
-    key : jax.random.PRNGKey
-        Random key for JAX
-
-    Returns
-    -------
-    jnp.ndarray
-        Normalized 3D vector representing a random direction
-    """
-    key, subkey = jax.random.split(key)
-    # Generate random points on a sphere using the Marsaglia method
-    while True:
-        # Generate two random numbers between -1 and 1
-        u1, u2 = jax.random.uniform(subkey, shape=(2,), minval=-1.0, maxval=1.0)
-        s = u1**2 + u2**2
-        # Reject if s is outside the unit circle
-        if s < 1.0:
-            break
-        key, subkey = jax.random.split(key)
-
-    # Convert to Cartesian coordinates
-    x = 2 * u1 * jnp.sqrt(1 - s)
-    y = 2 * u2 * jnp.sqrt(1 - s)
-    z = 1 - 2 * s
-
-    # Return normalized vector
-    return normalize(jnp.array([x, y, z]))
-
-def generate_random_vertex(key):
-    """
-    Generate a random vertex within the volume [-1,1]^3.
-
-    Parameters
-    ----------
-    key : jax.random.PRNGKey
-        Random key for JAX
-
-    Returns
-    -------
-    jnp.ndarray
-        3D point within the volume [-1,1]^3
-    """
-    return jax.random.uniform(key, shape=(3,), minval=-0.1, maxval=0.1)
-
-
 # ---------------------------------------------------------------------------
 # Calibration source types (callable NamedTuples)
 # Moved from lucid/detector_params.py during Phase 2.2 refactor.
@@ -241,7 +145,7 @@ def generate_random_vertex(key):
 class IsotropicSource(NamedTuple):
     """Isotropic point source -- callable JAX pytree.
 
-    Usage: ``source(n_photons, key)`` or ``source(n_photons, key, n_water)``.
+    Usage: ``source(n_photons, key, n_medium)``; the simulator passes the medium's index.
 
     The optional ``wavelength`` field (nm) is used by the simulator in
     wavelength mode to look up per-photon scatter/absorption from the medium.
@@ -250,7 +154,7 @@ class IsotropicSource(NamedTuple):
     intensity: jnp.ndarray    # scalar
     wavelength: object = None # scalar nm, or None for broadband
 
-    def __call__(self, n_photons, key, n_water=1.33):
+    def __call__(self, n_photons, key, n_medium):
         return get_isotropic_rays(self.position, self.intensity, n_photons, key)
 
 
@@ -270,14 +174,14 @@ class IsotropicSourceRandom(NamedTuple):
     intensity: jnp.ndarray    # scalar
     wavelength: object = None # scalar nm, or None for broadband
 
-    def __call__(self, n_photons, key, n_water=1.33):
+    def __call__(self, n_photons, key, n_medium):
         return get_isotropic_rays_random(self.position, self.intensity, n_photons, key)
 
 
 class LaserSource(NamedTuple):
     """Laser fibre source -- callable JAX pytree.
 
-    Usage: ``source(n_photons, key)`` or ``source(n_photons, key, n_water)``.
+    Usage: ``source(n_photons, key, n_medium)``; the simulator passes the medium's index.
 
     The optional ``wavelength`` field (nm) is used by the simulator in
     wavelength mode to look up per-photon scatter/absorption from the medium.
@@ -288,10 +192,10 @@ class LaserSource(NamedTuple):
     fiber_NA: jnp.ndarray     # scalar, default 0.22
     wavelength: object = None # scalar nm, or None for broadband
 
-    def __call__(self, n_photons, key, n_water=1.33):
+    def __call__(self, n_photons, key, n_medium):
         return generate_laser_photons(
             self.position, self.direction, self.intensity,
-            n_photons, key, n_water, self.fiber_NA,
+            n_photons, key, n_medium, self.fiber_NA,
         )
 
 

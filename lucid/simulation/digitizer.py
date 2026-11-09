@@ -68,7 +68,7 @@ per sensor and runs host-side after the simulation kernel.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Union
 
 import numpy as np
 
@@ -104,9 +104,8 @@ MODEL_PRESETS: dict[str, dict] = {
                  provisional=False),
 }
 
-# emission_process encoding for the hits.h5 decomposition. 0/1 mirror
-# the writer's EMISSION_PROCESS_{CHERENKOV,SCINTILLATION}; DARK tags noise digits.
-EMISSION_PROCESS_DARK = 2
+# emission_process encoding for the hits.h5 decomposition: the writer's schema (DARK tags noise).
+from lucid.dataset.schema import EMISSION_PROCESS_DARK  # noqa: E402
 
 # Readout time cap (ns): deposits later than this are dropped before windowing.
 # Late nuclear-channel light (n-capture, de-excitation) reaches ms–s; no real

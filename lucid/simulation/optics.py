@@ -1,7 +1,7 @@
-"""Pure optics functions: reflection, scattering, local frame."""
+"""Pure optics functions: reflection, scattering."""
 import jax
 import jax.numpy as jnp
-from lucid.utils import normalize
+from lucid.utils import create_local_frame, normalize
 
 
 def compute_reflection_direction(incident_dir, normal):
@@ -29,25 +29,6 @@ def sample_cosine_hemisphere(normal, rng_key):
 
     frame = create_local_frame(normal)
     return normalize(frame.T @ local_dir)
-
-
-def create_local_frame(z):
-    """Create an orthonormal frame with *z* as the z-axis.
-
-    Returns ``stack([x, y, z])`` with the basis vectors as **rows**, so the
-    local→world map for a locally-sampled direction is ``frame.T @ local_dir``
-    (NOT ``frame @ local_dir`` — that is the inverse rotation and scatters
-    about the wrong axis, breaking azimuthal symmetry).
-    """
-    z = normalize(z)
-    t = jnp.where(
-        jnp.abs(z[0]) < 0.9,
-        jnp.array([1.0, 0.0, 0.0]),
-        jnp.array([0.0, 1.0, 0.0]),
-    )
-    x = normalize(jnp.cross(t, z))
-    y = jnp.cross(z, x)
-    return jnp.stack([x, y, z])
 
 
 def sample_scatter_distance(D, S, rng_key, eps=0.0):
@@ -81,7 +62,6 @@ def solve_rayleigh_inverse_cdf(u):
     discriminant = -(4 * p ** 3 + 27 * q ** 2)
 
     # Three real roots case
-    sqrt_disc_pos = jnp.sqrt(jnp.abs(discriminant))
     rho = jnp.sqrt(-p ** 3 / 27)
     theta = jnp.arccos(jnp.clip(-q / (2 * rho), -1, 1))
     mu_three_roots = 2 * jnp.cbrt(rho) * jnp.cos(theta / 3)
@@ -115,12 +95,6 @@ def compute_scatter_direction(incident_dir, rng_key):
     return normalize(frame.T @ local_dir)
 
 
-# JAX-compatible rotation helpers (for data mode)
-def jax_normalize(v, epsilon=1e-8):
-    """Normalize a vector with numerical stability using JAX."""
-    norm = jnp.linalg.norm(v)
-    return jnp.where(norm > epsilon, v / norm, v)
 
 
-from lucid.utils import jax_rotate_vector  # noqa: F811 — canonical location
 
