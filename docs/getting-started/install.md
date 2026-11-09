@@ -43,10 +43,6 @@ python scripts/download_data.py --verify-only    # check data/ against data/MANI
 python scripts/download_data.py --paper          # the paper figures' inputs (lucid-paper-results-v1)
 ```
 
-!!! note "Before the release is published"
-    Until `lucid-data-v1` is on the GitHub release page, ask the maintainers for a copy of
-    `lucid-data-v1.tar.gz` and install it with `--from-dir`.
-
 Every file is checked against `data/MANIFEST.sha256` before any is moved into `data/`, so a
 broken download installs nothing. It installs:
 

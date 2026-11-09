@@ -51,13 +51,8 @@ jobs:
     # The fast lane again, with the example data installed from the lucid-data
     # release asset, so the data tests run instead of skipping:
     # LUCID_REQUIRE_DATA=1 makes a missing data file a failure.
-    #
-    # NOT yet blocking: the lucid-data-v1 release is not published yet, so the
-    # download fails until it is. Once `python scripts/download_data.py` works
-    # from a fresh clone, drop continue-on-error.
-    name: data (advisory until the lucid-data release is published)
+    name: data
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -83,15 +78,9 @@ jobs:
     # Every example at its small size, on CPU, with the example data installed:
     # an example that no longer runs is a stale doc (the docs include their code).
     # The editable install is the one install.md documents (config/ and data/
-    # resolve against the checkout). The overlap tables the examples build on a
-    # cold checkout (minutes each) are cached on the code that computes them.
-    #
-    # NOT yet blocking, like `data`: the lucid-data-v1 release is not published
-    # yet, so the download fails until it is. Drop continue-on-error with the
-    # data job's.
-    name: examples (advisory until the lucid-data release is published)
+    # resolve against the checkout); the overlap tables come with the data.
+    name: examples
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 90
     env:
       JAX_PLATFORMS: cpu
