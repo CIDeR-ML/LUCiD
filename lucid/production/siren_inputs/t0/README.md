@@ -1,7 +1,7 @@
 # t0 fit
 
 The simulator's photon emission time, `t(d, E) = d/c + A(E)(exp((d/λ(E))^β(E)) − 1)`, is fitted
-by PhotonSim's `tools/t0_correction/calculate_t0.py` from `PhotonHist_TimeDistanceNorm`, the
+by `PhotonSim/tools/t0_correction/calculate_t0.py` from `PhotonHist_TimeDistanceNorm`, the
 photon delay against `s/s_max`. PhotonSim fills that histogram whenever the macro sets
 `/output/smax`, which every training-input cell does ([`../README.md`](../README.md)). So the t0
 inputs are the training-input scan's `photonsim.root` files, one per energy, and this stage runs

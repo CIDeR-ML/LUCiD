@@ -28,7 +28,7 @@ an error that names it.
 - `PHOTONSIM_DEV_PATH`: a PhotonSim checkout (main, May 2026 or later), built in the image
   ([container](container.md)). Stages 0 and 1 run its `build/PhotonSim`, which must fill
   `PhotonHist_TimeDistanceNorm` for stage 3; stage 0 writes and stages 1 to 3 read its
-  `data/<m>/<p>/smax_fit.csv`; stage 3 runs its `tools/t0_correction/calculate_t0.py`.
+  `data/<m>/<p>/smax_fit.csv`; stage 3 runs its `PhotonSim/tools/t0_correction/calculate_t0.py`.
 - `SIREN_TRAIN_PARTITION`, a GPU partition (S3DF: `ampere`, `ada`, `hopper`, `turing`), and
   `LUCID_ENV_BASE`, the Python user site holding the GPU jaxlib the image lacks (the template
   says how to make one), for stage 4.
@@ -188,7 +188,7 @@ them, or pass the paths to stage 2 and 5. Each shipped `emitter.json` names its 
 | 0 | `smax_parametrization/water/{mu-,e-}/<E>MeV/` |
 | 1 | `training_inputs/water/{mu-,e-}/<E>MeV/photonsim.root` |
 | 2 | `training_inputs/water/lookup_tables/{muon,electron}/{photon,dedx}_lookup_table.h5` (rebuilt 2026-07-01, after the shipped emitters were trained; their `N_photons(E)` fit predates the `logpoly` form, so rebuild them before training) |
-| 3 | `t0_parametrization/water/mu-/timing_parameters.json`, `t0_parametrization/water/e-/inputs/timing_parameters.json` (inputs: links into stage 1) |
+| 3 | `t0_parametrization/water/<p>/timing_parameters.json` (for `e-` it sits in `inputs/`; the inputs are links into stage 1) |
 | 4 | `training_tests/<scan>/seed<N>/` |
 
 The `s_max` fits are PhotonSim's own `data/water/{mu-,e-}/smax_fit.csv`.

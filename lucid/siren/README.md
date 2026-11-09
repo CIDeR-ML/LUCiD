@@ -47,8 +47,8 @@ must not already hold an `emitter.json`. The outputs and how to judge convergenc
 [CLI reference](../../docs/reference/cli.md).
 
 A training run is not yet an emitter the simulator loads. `lucid-siren-promote` adds, for a
-Cherenkov emitter, the t0 fit (`--t0`, the `timing_parameters.json` of PhotonSim's
-`tools/t0_correction/calculate_t0.py`) and `emission_band_nm` (`--emission-band-nm`, the band in
+Cherenkov emitter, the t0 fit (`--t0`, the `timing_parameters.json` of
+`PhotonSim/tools/t0_correction/calculate_t0.py`) and `emission_band_nm` (`--emission-band-nm`, the band in
 nm its N_photons(E) counts; water: 274.91 673.83), checks the run against the `smax_fit.csv` its
 table was built with, and writes `data/<material>/<particle>/<cherenkov|dedx>/`. It refuses a
 Cherenkov emitter without the t0 fit or the band, and `load_emitter` refuses an emitter that was

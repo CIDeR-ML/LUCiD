@@ -96,7 +96,7 @@ lucid-siren-promote --run runs/water_muon --smax-fit PhotonSim/data/water/mu-/sm
 |---|---|
 | `--run` | required. The training run (`emitter.json`, `weights.npz`) |
 | `--smax-fit` | required. The `smax_fit.csv` its table was built with; the run's `s_max_mm` must equal it |
-| `--t0` | Cherenkov, required: the t0 fit, `timing_parameters.json` of PhotonSim's `tools/t0_correction/calculate_t0.py` |
+| `--t0` | Cherenkov, required: the t0 fit, `timing_parameters.json` of `PhotonSim/tools/t0_correction/calculate_t0.py` |
 | `--emission-band-nm LO HI` | Cherenkov, required: the band (nm) PhotonSim counted N_photons(E) over; water 274.91 673.83 |
 | `--selection` | how the run was chosen, recorded in the provenance |
 | `--dest` | output directory (default: `data/<material>/<particle>/<kind>/` of this checkout) |
