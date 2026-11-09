@@ -1,8 +1,8 @@
 # Development
 
-LUCiD does not accept outside contributions yet: the repository is public but all rights are
-reserved ([`LICENSE`](https://github.com/CIDeR-ML/LUCiD/blob/main/LICENSE)). Please open an
-issue rather than a pull request. Project members sign off their commits with a
+LUCiD is under the Apache License 2.0
+([`LICENSE`](https://github.com/CIDeR-ML/LUCiD/blob/main/LICENSE)), and contributions are taken
+under the same licence. Open an issue or a pull request; sign off commits with a
 [Developer Certificate of Origin](https://developercertificate.org/) (`git commit -s`).
 
 ## Setup

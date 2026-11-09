@@ -4,7 +4,7 @@ The third-party files this repository vendors, the third-party libraries it load
 and the third-party layers the published container redistributes: for each, its version, origin
 and licence, why it is here, and what is still outstanding.
 
-LUCiD's own terms are in [`LICENSE`](LICENSE) (currently: all rights reserved). Licence texts are
+LUCiD itself is under the Apache License 2.0 ([`LICENSE`](LICENSE)). Licence texts are
 in [`LICENSES/`](LICENSES/) (§7). The rule this file tracks: no vendored third-party asset without
 its licence text beside it, and an `integrity=` hash on every CDN `<script src>` or import-map
 entry. The rows below say where that does not hold yet.
@@ -40,7 +40,7 @@ comment records what that base carries. The image therefore redistributes, in on
 
 | layer | licence | note |
 |---|---|---|
-| the whole LUCiD source tree (`COPY LUCiD /opt/LUCiD` in `container/Dockerfile`) | **all rights reserved** ([`LICENSE`](LICENSE)) | an editable install of an unlicensed tree |
+| the whole LUCiD source tree (`COPY LUCiD /opt/LUCiD` in `container/Dockerfile`) | Apache-2.0 ([`LICENSE`](LICENSE)) | an editable install of the tree |
 | PhotonSim, pinned to `v1.0.3` (`container.yml` `PHOTONSIM_REF_DEFAULT`) | see the PhotonSim repository | separate repository, separate terms |
 | ROOT, GENIE 3.04 + xsec splines, Pythia6, NUISANCE, NEUT, NuWro, LHAPDF (base image) | mixed; **several are not freely redistributable**: GENIE's splines, NEUT and NuWro in particular are collaboration-restricted | the strictest terms in the project are in this layer, which has not been inventoried |
 | Geant4 11.3 data sets | Geant4 licence | pulled by the Dockerfile's `G4*DATA` setup |

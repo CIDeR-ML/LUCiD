@@ -8,6 +8,8 @@ dynamic = ["version"]
 description = "Differentiable photon simulation for optical particle detectors"
 readme = "README.md"
 requires-python = ">=3.10"   # jax 0.5.3, the pinned toolchain, requires 3.10
+license = "Apache-2.0"
+license-files = ["LICENSE", "LICENSES/*"]
 authors = [
     { name = "Omar Alterkait", email = "omar.alterkait@tufts.edu" },
     { name = "César Jesús-Valls" },

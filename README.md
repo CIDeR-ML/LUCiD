@@ -51,7 +51,6 @@ If you use LUCiD, please cite:
 
 ## Licence
 
-No open licence has been granted yet: the code is all rights reserved, and [`LICENSE`](LICENSE)
-states the current terms. An open licence is being pursued through SLAC's Office of Technology
-Licensing. The data release assets (`scripts/download_data.py`) are under CC BY 4.0.
+Copyright 2024-2026 the LUCiD authors. The code is under the [Apache License 2.0](LICENSE); the
+data release assets (`scripts/download_data.py`) are under CC BY 4.0.
 Third-party material keeps its own terms ([`THIRD_PARTY.md`](THIRD_PARTY.md)).
