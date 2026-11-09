@@ -12,7 +12,7 @@ singularity.
 - **GEANT4 11.3+** and **ROOT 6.0+** installed on your system. On
   Linux, `conda install -c conda-forge geant4 root` is the fastest
   path.
-- **Python 3.9+**.
+- **Python 3.10+** (`requires-python` in `pyproject.toml`).
 - **GENIE v3** (only if you write a neutrino-flux config; none ship in the
   repo today). Easiest: use the unified container — see the bottom of this doc.
 
@@ -29,12 +29,9 @@ make -j$(nproc)
 
 ## 2. Install LUCiD
 
-```bash
-git clone https://github.com/CIDeR-ML/LUCiD.git
-cd LUCiD
-pip install -e .
-# The console script `lucid-run-job` is now on your PATH.
-```
+Follow [Install](../../getting-started/install.md) (clone, then
+`pip install -e . -c tests/constraints.txt`). The console script
+`lucid-run-job` is then on your PATH.
 
 ## 3. Run one job
 
@@ -44,7 +41,7 @@ export PHOTONSIM_BIN=/absolute/path/to/PhotonSim/build/PhotonSim
 
 # Pick any of the bundled configs:
 CONFIG=$(python3 -c "from importlib.resources import files; \
-    print(files('lucid.production.configs').joinpath('GeV/02_mu.json'))")
+    print(files('lucid.production.dataprod.configs').joinpath('GeV/02_mu.json'))")
 
 # Run:
 mkdir -p /tmp/my_dataset
@@ -56,16 +53,8 @@ lucid-run-job \
     --test
 ```
 
-Output structure under `/tmp/my_dataset/`:
-
-```
-sensor/wc_sensor_0000.h5
-hits/wc_hits_0000.h5
-step/wc_step_0000.h5
-labl/wc_labl_0000.h5
-```
-
-See [../../reference/dataset-schema.md](../../reference/dataset-schema.md) for the schema.
+`/tmp/my_dataset/` then holds one batch, `{sensor,hits,step,labl}/wc_*_0000.h5`
+(layout and fields in the [dataset schema](../../reference/dataset-schema.md)).
 
 ## 4. Inspect in a browser (optional)
 
@@ -78,8 +67,9 @@ Opens the interactive PMT + segment display on
 
 ## Running a full dataset locally
 
-Drop `--test` and add `--n-events N` to run the config's full event
-count. Run one job per batch via shell loop:
+Drop `--test` and pass `--n-events N` to run `N` events per job. Without
+either flag a job runs the config's `n_events_per_job`, which no shipped
+config sets, so it runs 100. Run one job per batch via a shell loop:
 
 ```bash
 for i in {1..10}; do
@@ -87,11 +77,11 @@ for i in {1..10}; do
     lucid-run-job --config "$CONFIG" --detector SK_WAND --output-dir /tmp/my_dataset \
         --job-id $i --n-events 100
 done
-# → 10 parallel batches: wc_*_0000.h5 through wc_*_0009.h5 in each subdir.
+# → 10 batches: wc_*_0000.h5 through wc_*_0009.h5 in each subdir.
 ```
 
-For SLURM or HPC submission on S3DF, see
-[deploy-s3df.md](deploy-s3df.md).
+For SLURM or HTCondor submission, see
+[cluster deployment](clusters.md).
 
 ## Neutrino-flux configs (GENIE chain)
 
@@ -120,12 +110,10 @@ apptainer exec lucid.sif lucid-run-job \
     --output-dir /tmp/genie_test --job-id 1 --test
 ```
 
-The image ships PhotonSim pre-built, LUCiD pip-installed, and GENIE
-3.04 with xsec splines for the `AR23_20i_00_000`, `G18_10a_02_11b`,
-and `G21_11a_00_000` tunes pre-baked. All in-repo GENIE configs
-use
-`G18_10a_02_11b` so they work in-container out of the box. For other
-tunes, point `GENIE_XSEC_FILE` at your own spline.
+No GENIE config ships in the repo; the image has GENIE and its splines
+(contents in [`container/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/container/README.md)).
+For a tune other than the one `GENIE_XSEC_FILE` names, point it at your own
+spline.
 
 See [container.md](container.md) for more container
 details (bind-mount dev loop, Rosetta setup, etc.).
@@ -139,9 +127,8 @@ details (bind-mount dev loop, Rosetta setup, etc.).
 - **PhotonSim complains about missing `libG4…` shared libs** — your
   `LD_LIBRARY_PATH` is missing the GEANT4 install. Either `source
   $GEANT4_PREFIX/bin/geant4.sh` or rebuild PhotonSim with RPATHs.
-- **LUCiD complains about missing JAX** — `pip install -e .` should
-  have pulled JAX. If not, `pip install jax jaxlib`. For GPU,
-  `pip install -U "jax[cuda12]"`.
+- **LUCiD complains about missing JAX** — the install pulls it; see
+  [Install](../../getting-started/install.md) for the CPU and GPU lines.
 
 ## What the runner does
 
@@ -152,5 +139,5 @@ details (bind-mount dev loop, Rosetta setup, etc.).
 5. Verify the four files open cleanly and carry the right provenance.
 6. Delete the ROOT file if `cleanup_root_files: true` in the config.
 
-Under the hood it's `lucid/production/run_job.py`; inspect that file to
+Under the hood it's `lucid/production/dataprod/run_job.py`; inspect that file to
 add custom steps or swap components.

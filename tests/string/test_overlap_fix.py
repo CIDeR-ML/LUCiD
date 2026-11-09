@@ -1,44 +1,61 @@
+"""The soft overlap table across the width range it is built for, against its closed form.
+
+The overlap of a disk of radius r with a 2-D Gaussian of width sigma centred a distance d away is
+P(|X|^2 <= r^2) for X ~ N((d, 0), sigma^2 I). |X|^2 / sigma^2 is noncentral chi-square with 2
+degrees of freedom and noncentrality (d/sigma)^2, so
+
+    f(d) = ncx2.cdf((r/sigma)^2, 2, (d/sigma)^2),      f(0) = 1 - exp(-r^2 / (2 sigma^2)),
+    f'(d) = -(d / sigma^2) * (F_2 - F_4)  (the same CDF at 2 and 4 degrees of freedom),
+
+(1 - f is the Marcum Q-function Q_1(d/sigma, r/sigma); M. K. Simon, *Probability Distributions
+Involving Gaussian Random Variables*, Springer 2002, ch. 2). The derivative follows from
+dF_k(x; lam)/dlam = -(F_k - F_{k+2})/2, term by term in the Poisson mixture. The library never
+evaluates this: it integrates the kernel numerically into a lookup table. And independently of
+both, the integral of f(d) * 2 pi d over the plane is the disk area pi r^2.
+
+``lucid/overlap.py`` has **one** soft code path: above ``_ST_MIN_SIGMA * r`` every width goes
+through ``precompute_lookup`` and the same interpolant, and below it the call falls through to
+the hard step. What is special about sigma = 3r is only that the default ``d_max_factor=10``
+stops reaching far enough past the disk for a kernel that wide, which is why the wide-kernel
+tests pass an explicit ``d_max_factor``.
+
+QUADRATURE. Except for the production-layout test, the tables here are built with 400 x 400
+quadrature nodes instead of the default 2000 x 2000: 2 s per table instead of ~55 s, and the
+same error against the closed form (measured, sigma/r in 0.2..3: max abs error 1.9e-5 vs 1.6e-5;
+the error is the interpolant's, not the quadrature's).
+
+The branch map itself --- which width takes which branch, and the hard and straight-through
+arms this file never touches --- is ``tests/propagation/test_overlap_branches.py``.
 """
-Verify overlap fixes across the full temperature range.
-
-Checks:
-  1. LUT d_values are monotonically increasing for all temperatures
-  2. Cross-section integral πr² is preserved
-  3. Smooth transition between LUT and analytical regimes
-  4. No regression for existing small-σ behavior
-
-Run: python string/test_overlap_fix.py
-"""
-
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from scipy.stats import ncx2
 
-jax.config.update("jax_platform_name", "cpu")
-
-from lucid.overlap import create_overlap_prob, integral_f_of_d
+from lucid.overlap import create_overlap_prob
 
 r = 0.165  # IceCube DOM radius
+N_QUAD = 400
 
-passed = 0
-failed = 0
-errors = []
 
-def run_test(fn, name):
-    global passed, failed
-    try:
-        fn()
-        passed += 1
-        print(f"  PASS  {name}")
-    except Exception as e:
-        failed += 1
-        errors.append((name, e))
-        print(f"  FAIL  {name}: {e}")
+def exact(d, sigma):
+    return ncx2.cdf((r / sigma) ** 2, 2, (np.asarray(d, np.float64) / sigma) ** 2)
+
+
+def exact_slope(d, sigma):
+    x, lam = (r / sigma) ** 2, (np.asarray(d, np.float64) / sigma) ** 2
+    return -(np.asarray(d) / sigma ** 2) * (ncx2.cdf(x, 2, lam) - ncx2.cdf(x, 4, lam))
+
+
+def table(ratio, d_max_factor=10.0):
+    return create_overlap_prob(ratio * r, r, n_theta=N_QUAD, n_rho=N_QUAD, use_cache=False,
+                               d_max_factor=d_max_factor)
+
+
+def values(fn, d):
+    return np.asarray(jax.vmap(fn)(jnp.asarray(d, jnp.float32)), np.float64)
 
 
 def cross_section(overlap_fn, d_max, n=5000):
@@ -48,152 +65,85 @@ def cross_section(overlap_fn, d_max, n=5000):
     return float(jnp.trapezoid(integrand, d_vals))
 
 
-# ── Test: existing small-σ behavior unchanged ──
+# ── The production table: default layout and the shipped temperature ──
 
-def test_temperature_02():
-    """temperature=0.2 (current default) — should work as before."""
+def test_default_table_matches_closed_form():
+    """temperature 0.2 with the default layout, through the cache like every production caller.
+
+    Max abs error over [0, 3r] measured 3.1e-5 (float32 interpolation between float64 nodes);
+    1e-4 fails a sigma off by 1% (which moves f by up to 2e-2 at the edge)."""
     sigma = 0.2 * r
-    fn = create_overlap_prob(sigma, r, use_cache=False)
-    assert float(fn(0.0)) > 0.99, f"overlap(0) too low: {fn(0.0)}"
-    assert float(fn(2 * r)) < 0.01, f"overlap(2r) too high: {fn(2*r)}"
-    cs = cross_section(fn, 10 * r)
-    target = np.pi * r**2
-    assert abs(cs - target) / target < 0.01, f"cross-section {cs} vs πr²={target}"
+    fn = create_overlap_prob(sigma, r, use_cache=True)
+    d = np.linspace(0, 3 * r, 301)
+    assert np.max(np.abs(values(fn, d) - exact(d, sigma))) < 1e-4
+    rel = abs(cross_section(fn, 10 * r) - np.pi * r ** 2) / (np.pi * r ** 2)
+    assert rel < 1e-4, rel                                   # measured 6.4e-06
 
 
-# ── Test: temperature 1-3 range (LUT extension fix) ──
+# ── Every width the table is built for ──
 
-def test_temperature_1():
-    sigma = 1.0 * r
-    fn = create_overlap_prob(sigma, r, use_cache=False)
-    val0 = float(fn(0.0))
-    assert 0.3 < val0 < 0.5, f"overlap(0) = {val0}, expected ~0.39"
-    cs = cross_section(fn, 5 * r + 5 * sigma)
-    target = np.pi * r**2
-    rel = abs(cs - target) / target
-    assert rel < 0.02, f"cross-section error {rel:.2%}"
-    print(f"    σ/r=1.0: overlap(0)={val0:.4f}, πr² error={rel:.4%}")
+# (sigma / r, d_max_factor): the default reach up to 2.9 r, an explicit one beyond.
+WIDTHS = [(1.0, 10.0), (2.0, 10.0), (2.9, 10.0), (3.0, 15.0), (6.0, 30.0), (30.0, 150.0)]
 
 
-def test_temperature_2():
-    sigma = 2.0 * r
-    fn = create_overlap_prob(sigma, r, use_cache=False)
-    val0 = float(fn(0.0))
-    assert 0.1 < val0 < 0.2, f"overlap(0) = {val0}, expected ~0.12"
-    cs = cross_section(fn, r + 5 * sigma)
-    target = np.pi * r**2
-    rel = abs(cs - target) / target
-    assert rel < 0.02, f"cross-section error {rel:.2%}"
-    print(f"    σ/r=2.0: overlap(0)={val0:.4f}, πr² error={rel:.4%}")
+@pytest.mark.parametrize("ratio,d_max_factor", WIDTHS)
+def test_table_matches_closed_form(ratio, d_max_factor):
+    """f(d) over the table's reach, and f(0) = 1 - exp(-r^2 / 2 sigma^2).
 
-
-def test_temperature_29():
-    """σ/r = 2.9 — just below the analytical cutoff."""
-    sigma = 2.9 * r
-    fn = create_overlap_prob(sigma, r, use_cache=False)
-    val0 = float(fn(0.0))
-    cs = cross_section(fn, r + 5 * sigma)
-    target = np.pi * r**2
-    rel = abs(cs - target) / target
-    assert rel < 0.03, f"cross-section error {rel:.2%}"
-    print(f"    σ/r=2.9: overlap(0)={val0:.4f}, πr² error={rel:.4%}")
-
-
-# ── Test: σ > 3r analytical regime ──
-
-def exact_overlap_at(d, sigma):
-    """High-precision reference via 2D numerical integration."""
-    theta_vals = jnp.linspace(0, 2 * jnp.pi, 2000)
-    rho_vals = jnp.linspace(0, r, 2000)
-    return float(integral_f_of_d(d, r, sigma, theta_vals, rho_vals))
-
-
-@pytest.mark.parametrize("ratio", [3.0, 6.0, 30.0])
-def test_wide_kernel_matches_exact_integral(ratio):
-    """LUT overlap matches high-precision numerical integral for wide kernels."""
+    Measured max abs error <= 1e-5 at these widths (f(0) is 0.39 at sigma = r, 5.6e-4 at 30 r).
+    The bound 1e-4 abs plus 1e-3 relative fails the kernel exponent missing its factor 2
+    (f(0) becomes (1 - exp(-r^2/sigma^2)) / 2) by orders of magnitude."""
     sigma = ratio * r
-    d_max = max(10 * r, 5 * sigma)
-    fn = create_overlap_prob(sigma, r, use_cache=False, d_max_factor=d_max / r)
-    for d_test in [0.0, 0.5 * r, r, 2 * r, 3 * sigma]:
-        lut_val = float(fn(d_test))
-        exact_val = exact_overlap_at(d_test, sigma)
-        if exact_val > 1e-10:
-            rel = abs(lut_val - exact_val) / exact_val
-            assert rel < 0.02, (
-                f"σ/r={ratio}, d={d_test:.4f}: LUT={lut_val:.6f} vs exact={exact_val:.6f}, "
-                f"rel error={rel:.2%}"
-            )
+    fn = table(ratio, d_max_factor)
+    d = np.linspace(0, min(d_max_factor * r, r + 5 * sigma), 201)
+    got, want = values(fn, d), exact(d, sigma)
+    assert np.max(np.abs(got - want)) < 1e-4
+    np.testing.assert_allclose(got[0], 1 - np.exp(-r ** 2 / (2 * sigma ** 2)), rtol=1e-3)
+    big = want > 1e-2 * want[0]            # relative error where f is not in its far tail
+    assert np.max(np.abs(got - want)[big] / want[big]) < 1e-3
 
 
-@pytest.mark.parametrize("ratio", [3.0, 6.0, 30.0])
-def test_wide_kernel_cross_section(ratio):
-    """Cross-section integral ∫ overlap(d)·2πd dd ≈ πr² for wide kernels."""
+@pytest.mark.parametrize("ratio,d_max_factor", [w for w in WIDTHS if w[0] != 2.9])
+def test_cross_section_is_the_disk_area(ratio, d_max_factor):
+    """Wherever the table reaches past r + 5 sigma the integral is pi r^2 (measured rel error
+    <= 3.3e-5). At sigma = 2.9r the default reach of 10 r = 3.4 sigma cuts the tail short (2.2%
+    missing), so that width is checked against the closed form above instead."""
     sigma = ratio * r
-    d_max = max(10 * r, 5 * sigma)
-    fn = create_overlap_prob(sigma, r, use_cache=False, d_max_factor=d_max / r)
-    cs = cross_section(fn, d_max)
-    target = np.pi * r**2
-    rel = abs(cs - target) / target
-    assert rel < 0.05, f"σ/r={ratio}: cross-section error {rel:.2%}"
+    fn = table(ratio, d_max_factor)
+    cs = cross_section(fn, min(d_max_factor * r, r + 5 * sigma))
+    rel = abs(cs - np.pi * r ** 2) / (np.pi * r ** 2)
+    assert rel < 1e-3, f"σ/r={ratio}: cross-section error {rel:.2e}"
 
 
-# ── Test: smooth transition at the σ=3r boundary ──
+# ── Test: the table is continuous in σ across 3r ──
 
-def test_boundary_continuity():
-    """The overlap(d) values should be continuous across the LUT→analytical boundary."""
-    sigma_lut = 2.99 * r
-    sigma_ana = 3.01 * r
-    fn_lut = create_overlap_prob(sigma_lut, r, use_cache=False)
-    fn_ana = create_overlap_prob(sigma_ana, r)
+def test_table_is_continuous_in_sigma_across_3r():
+    """Two widths 0.67% apart change the overlap by what the closed form says, 1.3% at most.
 
-    d_test = jnp.array([0.0, 0.5 * r, r, 2 * r, 3 * r])
-    vals_lut = jax.vmap(fn_lut)(d_test)
-    vals_ana = jax.vmap(fn_ana)(d_test)
-
-    max_diff = float(jnp.max(jnp.abs(vals_lut - vals_ana)))
-    max_rel = float(jnp.max(jnp.abs(vals_lut - vals_ana) / (vals_lut + 1e-30)))
-    print(f"    boundary: max abs diff={max_diff:.6f}, max rel diff={max_rel:.2%}")
-    assert max_rel < 0.10, f"discontinuity at boundary: {max_rel:.2%}"
+    3r is where the tests start passing an explicit ``d_max_factor``, so a
+    reader could take it for a code boundary. It is not one: both calls take
+    the same ``precompute_lookup`` path, and this asserts they agree.
+    """
+    d = np.array([0.0, 0.5 * r, r, 2 * r, 3 * r])
+    below, above = values(table(2.99), d), values(table(3.01), d)
+    want = exact(d, 2.99 * r) - exact(d, 3.01 * r)
+    assert np.max(np.abs(below - above) / below) < 0.03
+    np.testing.assert_allclose(below - above, want, atol=2e-5)
 
 
 # ── Test: gradient works in all regimes ──
 
-def test_gradient_all_regimes():
-    """d(overlap)/d(d) should be finite and negative for all temperature regimes."""
-    for temp, label in [(0.2, "small"), (1.5, "mid"), (6.0, "analytical")]:
-        sigma = temp * r
-        fn = create_overlap_prob(sigma, r, use_cache=False) if temp < 3 else create_overlap_prob(sigma, r)
-        grad_fn = jax.grad(lambda d: fn(d))
-        d_test = r * 0.5
-        g = float(grad_fn(d_test))
-        assert jnp.isfinite(g), f"temp={temp}: non-finite gradient"
-        assert g < 0, f"temp={temp}: gradient should be negative at d=0.5r, got {g}"
-    print(f"    gradients OK for all regimes")
+@pytest.mark.parametrize("ratio", [0.2, 1.5, 6.0])
+def test_gradient_matches_closed_form_at_every_width(ratio):
+    """d(overlap)/d(d) at the disk edge d = r, narrow to wide, against f'(d).
 
-
-if __name__ == "__main__":
-    print("=== Existing behavior (temperature < 1) ===")
-    run_test(test_temperature_02, "temperature=0.2")
-
-    print("\n=== LUT extension fix (temperature 1-3) ===")
-    run_test(test_temperature_1, "temperature=1.0")
-    run_test(test_temperature_2, "temperature=2.0")
-    run_test(test_temperature_29, "temperature=2.9")
-
-    print("\n=== Analytical regime (temperature > 3) ===")
-    run_test(test_temperature_3, "temperature=3.0")
-    run_test(test_temperature_6, "temperature=6.0 (σ=1m)")
-    run_test(test_temperature_30, "temperature=30 (σ=5m)")
-
-    print("\n=== Boundary & gradients ===")
-    run_test(test_boundary_continuity, "boundary_continuity")
-    run_test(test_gradient_all_regimes, "gradients_all_regimes")
-
-    print(f"\n{'='*60}")
-    print(f"Results: {passed} passed, {failed} failed")
-    if errors:
-        print("\nFailures:")
-        for name, e in errors:
-            print(f"  {name}: {e}")
-    print(f"{'='*60}")
-    sys.exit(1 if failed else 0)
+    Autodiff reads the slope of one interpolation segment; against the true slope that is
+    within 1e-2 at the edge (lucid/overlap.py, _NUM_DENSE comment; measured 2e-4 at sigma = 0.2 r,
+    9e-3 at 2.9 r). rtol 3e-2 fails a factor 2 or a sign."""
+    sigma = ratio * r
+    fn = table(ratio, max(10.0, 5.0 * ratio))
+    for d0 in (r, 0.5 * r) if ratio >= 1 else (r,):
+        g = float(jax.grad(fn)(jnp.float32(d0)))
+        want = float(exact_slope(d0, sigma))
+        assert want < 0
+        np.testing.assert_allclose(g, want, rtol=3e-2, err_msg=f"σ/r={ratio}, d={d0 / r}r")

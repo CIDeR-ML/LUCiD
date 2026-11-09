@@ -1,0 +1,48 @@
+LUCiD — Copyright (c) 2024-2026 The LUCiD authors
+(Omar Alterkait, César Jesús-Valls, Ryo Matsumoto, Patrick de Perio,
+Kazuhiro Terao, and the contributors listed in the git history)
+
+ALL RIGHTS RESERVED.
+
+This is a deliberate, explicit statement of the project's current terms, not a
+placeholder. No licence to use, copy, modify or distribute this software is
+granted. Until an open licence is issued, the only rights anyone has in this
+repository are the ones GitHub's Terms of Service give every user of a public
+repository (to view it and to fork it within GitHub), plus whatever applies by
+law independently of a licence.
+
+Why this file says that
+-----------------------
+The repository has been public with no LICENSE, no `license` field in
+pyproject.toml and no licence classifier, while README.md said a licence was
+coming "shortly" and CONTRIBUTING.md asked contributors to pre-agree to it. A
+promise is not a grant, and the absence of a licence file is not neutral — it
+reads as an oversight when it is in fact the strictest possible term. Saying
+"all rights reserved" out loud is the honest version of the state the project
+is already in.
+
+What is being pursued
+---------------------
+An open licence, through SLAC's Office of Technology Licensing. Apache-2.0 is
+the recommendation on the table: it is the usual outcome for SLAC-affiliated
+scientific Python, its patent and NOTICE clauses are what a national-lab
+technology-transfer office asks for, and it is compatible with every inbound
+licence this repository depends on (see THIRD_PARTY.md — MIT for three.js,
+gif.js, h5wasm and plotly; BSD-3-Clause for numpy, scipy and jax; CC0 for the
+matplotlib colormap stops).
+
+Replacing this file with that licence is a decision for the project owner and
+SLAC OTL, not for whoever is editing the tree. Until then:
+
+  * Do not publish a wheel or an sdist to PyPI. An unlicensed artefact on PyPI
+    is worse than no artefact.
+  * Do not add a `license` field or a `License ::` classifier claiming terms
+    that have not been granted.
+  * Third-party material vendored here keeps its own terms, which are not
+    affected by this file. THIRD_PARTY.md is the inventory.
+
+Third-party notices
+-------------------
+See THIRD_PARTY.md and LICENSES/. Several third-party files in this repository
+arrived with no licence text at all; THIRD_PARTY.md names each one and says
+what has to happen about it.

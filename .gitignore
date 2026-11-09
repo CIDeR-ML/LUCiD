@@ -4,8 +4,7 @@
 *.h5
 *.html
 *.png
-!figures/det_repo_img.png
-!figures/combined_3x2_charge_displays.png
+!docs/assets/*.png
 *.npy
 *.root
 sftp-config.json
@@ -47,7 +46,7 @@ build/
 campaign/grid_out/
 
 # Per-user cluster config (copied from a user_paths.*.sh.template); never commit
-lucid/production/jobs/user_paths.sh
+lucid/production/platform/user_paths.sh
 
 # Personal dev/research scratch (kept on disk, not tracked)
 hessian_probe/
@@ -63,11 +62,10 @@ mie_hunter/
 # MkDocs build output
 site/
 
-# Trained SIREN surrogates under data/ — these are SYMLINKS into the data area, so no
-# trailing slash (a dir-only pattern cannot match a symlink), and they must come
-# after the `!data/**/` negation above, which would otherwise re-include them.
-data/*/*/siren_training
-data/*/*/dedx_siren_training
+# The SIREN emitters' weights (scripts/download_data.py); their emitter.json beside them is
+# tracked. After the `!data/**/` negation above, which would
+# otherwise re-include them.
+data/*/*/*/weights.npz
 
 # Kerberos credential caches. On LXPLUS a stray KRB5CCNAME lands a ccache named
 # after the user in whatever directory the job ran from; these hold live tickets

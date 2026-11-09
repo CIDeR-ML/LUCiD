@@ -3,9 +3,9 @@
 A cylindrical detector whose PMT positions come from an external file
 (measured layout, WCSim geofile export, ROOT TTree, …) is stored on
 disk as a NumPy `.npz` whose contents follow the schema described
-here. :py:meth:`lucid.geometry.Cylinder.from_pmt_file` reads any
+here. `lucid.geometry.Cylinder.from_pmt_file` reads any
 file that conforms to this schema; conversion scripts that produce
-new files (the portable converter is `scripts/geofile_to_npz.py`; `config/scripts/` is a local scratch area) must respect it.
+new files (the portable converter is `scripts/geofile_to_npz.py`) must respect it.
 
 ## Coordinate convention
 
@@ -66,18 +66,16 @@ per-active-PMT metadata: it is reordered to match `all_points`
 (barrel → top cap → bottom cap) and exposed as an instance attribute
 named after the key.
 
-Examples currently in use:
+The tracked files carry:
 
-| Detector       | Key                  | Meaning                                         |
-|----------------|----------------------|-------------------------------------------------|
-| WCTE           | `mpmt_id`            | mPMT module index (0..105)                      |
-| WCTE           | `pmt_id_in_mpmt`     | PMT slot within the dome (0..18; 0 = central)   |
-| WCTE           | `mpmt_kind`          | `'ME'` / `'FD'`                                 |
-| SK_official    | `pmtflag`            | PMT status flag (e.g. dead/alive)               |
-| SK_official    | `hutnum`             | Electronics hut number                          |
-| SK_official    | `group`              | Electronics group                               |
-| SK_official    | `oldhv`              | High-voltage value                              |
-| SK / HK        | `pmt_type`           | WCSim type code (0 for standard ID PMT)         |
+| File                         | Key                  | Meaning                                         |
+|------------------------------|----------------------|-------------------------------------------------|
+| `config/wcte_geometry.npz`   | `mpmt_id`            | mPMT module index (0..105)                      |
+| `config/wcte_geometry.npz`   | `pmt_id_in_mpmt`     | PMT slot within the dome (0..18; 0 = central)   |
+| `config/sk_geometry.npz`, `config/hk_geometry.npz` | `pmt_type` | WCSim type code (0 for standard ID PMT) |
+
+Files built outside the repo can carry others the same way (for example an
+official SK table's `pmtflag`, `hutnum`, `group`, `oldhv`).
 
 Scalars and arrays whose first dimension is anything other than `N`
 or `M` are stored on the instance as-is (no reordering).
@@ -91,14 +89,13 @@ so per-detector metadata keys **must not collide with**:
 all_points, barr_points, tcap_points, bcap_points,
 ID_to_position, ID_to_case, pmt_id_to_idx,
 pmt_directions, raw_positions,
-r, H, S_radius, n_sensors, C, npz_file_path, snap_to_wall,
-_n_cap, _n_angular, _n_height
+r, H, S_radius, n_sensors, C, npz_file_path, snap_to_wall
 ```
 
 ## String / DOM detectors — a separate `.npz` layout
 
 String telescopes (`detector_type: "string"`, IceCube-like) use a **different**
-`.npz` schema, read by :py:meth:`lucid.geometry.StringTelescope.from_npz`
+`.npz` schema, read by `lucid.geometry.StringTelescope.from_npz`
 (`lucid/geometry/string.py`). It stores per-DOM positions grouped by string
 rather than a flat PMT list, and — unlike the cylinder schema above — its
 positions are in **metres**, not millimetres. There is no `positions_mm`-style
@@ -130,8 +127,3 @@ The cylinder path has a portable converter (`scripts/geofile_to_npz.py`); there
 is **no equivalent string-npz generator** in the repo yet. String `.npz` files
 (e.g. `config/icecube86_simple.npz`) are produced ad hoc — write the six keys
 above directly with `numpy.savez`.
-
-## Versioning
-
-If/when this schema needs a breaking change, add a `schema_version`
-scalar and bump it. Loaders should treat absence as version 1.

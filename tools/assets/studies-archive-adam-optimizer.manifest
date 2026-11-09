@@ -1,0 +1,83 @@
+# studies-archive-adam-optimizer (A3) -- the retired 5-stage Adam recon
+# pipeline's displays, its cone<->surface helpers and its composite losses.
+# The losses live inside a module that is still live (lucid/losses.py), so the
+# module travels whole and the INDEX names which four names are the study half.
+# Nothing here is deleted by the unit that built this asset.
+tag: studies-archive-adam-optimizer
+commit: eaf2e89f
+summary: the retired 5-stage Adam recon pipeline, its 3-D displays and its composite losses
+size: 36 KB + notebooks
+part: eaf2e89f:lucid/optimization/utils/visualization.py
+part: eaf2e89f:lucid/optimization/utils/geometry.py
+part: eaf2e89f:lucid/losses.py
+--- INDEX ---
+# studies-archive-adam-optimizer
+
+> **The retired 5-stage Adam reconstruction pipeline**: its 3-D event and optimisation-path Plotly
+> displays, the cone↔surface intersection helpers they need, and the composite losses it minimised
+> (`WC_loss` — whose first parameter `sensor_points` is never read in its body — and
+> `compute_simplified_loss`'s centroid/intensity/spread terms). Superseded by the damped Gauss-Newton
+> stack in `lucid.fitting` and by the Poisson + first-arrival losses.
+>
+> The displays read `optimization_results['history']['combined_losses'|'parameters'|'vertex_losses']`,
+> a schema the library no longer produces, so they will not run against post-`eaf2e89f` output.
+>
+> Also here: the `tau_vtx = a·N_rays + b·E + c` hyperparameter fit used by the Adam-era vertex loss.
+> Its scan driver (`s3df_jobs/submit_tau_hyperparameter_tuning_job.py`) was deleted from the tree;
+> recover it with `git log --diff-filter=D -- s3df_jobs/`. Regenerate all three constants together or
+> not at all.
+
+## What is in this tarball
+
+| path | size at `eaf2e89f` | what travels, and why whole |
+|---|---|---|
+| `lucid/optimization/utils/visualization.py` | 24 KB, 589 lines | the whole module is the study: `create_event_3D_visualization` (`:47`) and `create_optimization_path_3d_visualization` (`:420`) |
+| `lucid/optimization/utils/geometry.py` | 12 KB, 331 lines | the cone↔cylinder/sphere/box intersections and surface builders the displays need; its only importer in the tree is `visualization.py:12,23` |
+| `lucid/losses.py` | 22 KB, 578 lines | travels **whole, as a record**, because four names in it are the study half and the rest of the module is live. See the table below |
+
+The notebooks that consume this schema are **not** in this tarball; they travel
+in `studies-archive-notebooks-2026` (A4) and
+`studies-archive-notebooks-legacy-2026` (A5) and are cross-referenced here:
+`good_notebooks/reconstruction/track_optimization_visualization.ipynb`,
+`notebooks/single_ring_track_optimization_adam.ipynb` and
+`notebooks/gradient_and_relaxation_analysis*.ipynb`.
+
+## The study half of `lucid/losses.py`, and the live rest
+
+Four names are the Adam era; the module they sit in is on the live recon path.
+At `eaf2e89f`:
+
+| name | line | state |
+|---|---|---|
+| `WC_loss` | `:8` | **study.** No caller in `lucid/`, `tests/`, `examples/`, `scripts/` or `analysis/`; every caller is a notebook (`good_notebooks/archive/{cylinder_2D_displays,event_hit_animation}.ipynb`, `good_notebooks/calibration/detector_grad_qe_convergence_multi_source.ipynb`, `notebooks/grad_param_calibration_BO_Leap.ipynb`, and the two `gradient_and_relaxation_analysis*` notebooks under the old `tools.losses` name) |
+| `compute_simplified_loss` | `:82` | **study.** Same picture: only `good_notebooks/infrastructure/computational_performance_evaluation.ipynb` and four `notebooks/` cells |
+| `TAU_VTX_PARAM_A/B/C` | `:546-548` | **study.** `1.092557e-06` (per N_ray), `2.578522e-04` (per MeV), `-0.0442` (intercept). Callers are notebooks only |
+| `get_optimal_tau_vtx` | `:551` | **study.** Returns the triple's linear combination; clipped to [0.05, 0.95] by its notebook callers, not by itself |
+| `WC_smooth_loss` | `:176` | **live** — `scripts/benchmark_forward.py:16`, `scripts/check_gradients.py:16`, four tests, `tutorials/calibration_gradients.ipynb` |
+| `counts_loss`, `first_arrival_window_nll`, `_log1mexp` | `:293`, `:484`, `:478` | **live, and load-bearing** — `lucid/fitting/recon.py:42` is the production recon loss |
+| `origin_time_loss`, `grid_origin_time_loss` | `:385`, `:321` | **live** — `lucid/optimization/grid_search.py:7` |
+| `energy_loss` | `:270` | **live** — `lucid/optimization/utils/functions.py:7` |
+
+So: do not read this tarball's copy of `lucid/losses.py` as a deleted module.
+It is here because a `part:` line names a path, and the four study names have
+no smaller home than the file they live in.
+
+## Known defects, all confirmed at `eaf2e89f`
+
+| defect | where |
+|---|---|
+| **The result schema is gone.** The displays index `optimization_results['history']['parameters']` (`:107`, `:441`) and `['combined_losses']`/`['vertex_losses']`/`['counts_losses']` (`:445-447`), plus `final_position_error`/`final_direction_error`/`final_t0_error`/`final_energy_error` (`:370-373`, `:536-542`). Nothing in `lucid.fitting` produces any of these | `visualization.py` |
+| **Duplicate import block.** `:5-17` and `:19-29` import `os`, `numpy`, `plotly.graph_objects` and the same seven `geometry` names twice, once relatively and once absolutely. The second block shadows the first; `create_detector_display` and `matplotlib`/`jnp`, imported only in the first, survive by accident | `visualization.py:5-29` |
+| **`_params_to_array` documents a layout that is not `ParticleParams`.** `:35-36` says "Handles both ParticleParams namedtuples and flat arrays. ParticleParams layout: `[pos_x, pos_y, pos_z, t0, theta, phi, energy]`" — a flat 7-vector in that order. The actual `ParticleParams` fields are `energy, position, theta, phi, t0`: five fields, different order, `position` a 3-vector | `visualization.py:32-39` |
+| **A silent Cherenkov-angle fallback.** `:115-117`: `try: get_cherenkov_angle(1.33) except: np.radians(41.2)`. A bare `except` swallowing the one physics call, with a hard-coded degree value as the alternative, so a broken import looks like a working figure | `visualization.py:115-117` |
+| **`WC_loss`'s first parameter is never read.** `sensor_points` is in the signature and absent from the body | `losses.py:8` |
+| **The `tau_vtx` triple is unreproducible.** Its own comment says the three constants are a fitted triple that must be regenerated together; the scan driver that fitted them, `s3df_jobs/submit_tau_hyperparameter_tuning_job.py`, is not in the tree. `git log --diff-filter=D -- s3df_jobs/` is the only route back | `losses.py:546-551` |
+| **Measured dead.** In the M1 coverage pass every function in both `optimization/utils` modules ran 0 times from 0 tests at coverage fraction 0.0 | — |
+
+## If you want a 3-D display
+
+Do not revive this. `lucid/visualization.py` is where a detector/event display
+belongs (`create_detector_display` is already there, and this module imports
+it); a new display takes a current fit result as its argument rather than the
+Adam history dict. The cone↔surface helpers in `geometry.py` are the only part
+worth lifting verbatim, and they are pure geometry with no schema dependency.

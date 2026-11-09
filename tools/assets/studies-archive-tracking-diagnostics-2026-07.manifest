@@ -1,0 +1,93 @@
+# studies-archive-tracking-diagnostics-2026-07 -- the July 2026 track-fit
+# diagnostics: the scripts and configs of the 07-04 and 07-08 campaigns, and
+# the TrackingPipeline branches they drove, as they last stood before removal.
+#
+# The scripts and configs left the tree on 2026-07-14 (analysis/tracking
+# dissolved into analysis/paper); the pipeline branches stayed until the F-024
+# cleanup.  Two parts share the path analysis/tracking/pipeline.py, so only the
+# later one (252f89b8, a superset of 58af5a4c's) is taken.
+tag: studies-archive-tracking-diagnostics-2026-07
+commit: 252f89b8
+summary: the 2026-07 track-fit diagnostics and the TrackingPipeline branches they drove
+size: 225 KB
+part: 58af5a4c:analysis/tracking/configs/nominal
+part: 58af5a4c:analysis/tracking/charge_ratio.py
+part: 58af5a4c:analysis/tracking/eterm_scan.py
+part: 58af5a4c:analysis/tracking/grad_vs_fd.py
+part: 58af5a4c:analysis/tracking/grad_vs_fd_qnll.py
+part: 58af5a4c:analysis/tracking/grad_vs_fd_qtot.py
+part: 58af5a4c:analysis/tracking/siren_emission_check.py
+part: 252f89b8:analysis/tracking/loss_split.py
+part: 252f89b8:analysis/tracking/score_decomp.py
+part: 252f89b8:analysis/tracking/term_split_scan.py
+part: 252f89b8:analysis/tracking/profile_sweep.py
+part: 252f89b8:analysis/tracking/residual_maps.py
+part: 252f89b8:analysis/tracking/measure_raygaps.py
+part: 252f89b8:analysis/tracking/pipeline.py
+part: 462a09fd:analysis/paper/utils/pipeline.py
+part: 462a09fd:lucid/fitting/recon.py
+part: 462a09fd:tests/test_recon_projected_problem.py
+--- INDEX ---
+# studies-archive-tracking-diagnostics-2026-07
+
+> The July 2026 diagnosis of the reconstruction's energy and longitudinal-vertex bias, and the
+> charge-versus-time tension behind it. Every switch below was a diagnostic of one question; none is
+> set by any config in the tree, on any branch, or by any of the 324 published configs and HDF5
+> provenance records under `LUCiD_tracking/paper`. What the paper kept from this work is in the
+> shipped defaults, not here: the energy taken from the total-charge scale (`energy_from_scale`,
+> `energy_scale_mode='nphot'`), the SIREN emitter's importance seed sampling, the single fit from a
+> pre-fit margin pick, and `time_weight=0.75` above 1600 MeV.
+
+## The switches, what each was for, and what replaced it
+
+| switch (pipeline config) | added | what it did | today |
+|---|---|---|---|
+| `fix_energy` | 07-04 | E pinned to truth: no energy scan, E row/column of the step zeroed (`_FixedParamsModel`) | the energy bias it localised is removed by `energy_from_scale` |
+| `fix_geometry` | 07-04 | everything but E pinned to truth, one fit from the truth vector (`reconstruct_free_E`) | as above; `_prepare_event(seeds=False)` keeps the data-only preparation the loss-landscape figure needs |
+| `e_refit_iters` | 07-04 | a second 1-D Gauss-Newton on `0.5 (ΣQpred(E) − ΣQobs)²` after the fit | the main fit takes energy from the total charge |
+| `force_seed` | 07-04 | bypass the pre-fit pick | — |
+| `siren_threshold` | 07-04 | monkeypatched `lucid.simulation.simulator.unpack_siren_params` to change `ray_sampling.threshold` | inert under importance sampling; the threshold and the uniform seeding mode are removed from `lucid.siren` |
+| `multistart` | 07-02 | three full fits, post-fit pick (`fit_track_multistart`, which stays in the library) | off since 07-04: one fit from the pre-fit pick, ~2.2x faster |
+| `tts_walk_corr` (`_cond` `n`/`mu`, `_scale`) | 07-08 | shift observed first arrivals by the TTS order-statistic walk `tts·E[min of n]`, by monkeypatching `lucid.fitting.recon.first_arrival_window_nll` | never in a committed config; no result recorded |
+| `pseudodata` | 07-08 | replace the PhotonSim photons with photons sampled from the SIREN emitter (closure data) | see below |
+| `gn.time_soft_mode='project'` | 07-08 | project the time term off the vertex–t0 soft mode `(0.285 m along track, +1 ns)`; became `lucid.fitting.ProjectedReconProblem` | the paper balances charge and time with `time_weight` instead |
+| `seed_event` | 07-02 | seed-only scoring (no fit) for the seed study | the fused-seed validation it produced is quoted in `reconstruct`'s docstring |
+
+## What is in this tarball
+
+| path | from | what it is |
+|---|---|---|
+| `analysis/tracking/configs/nominal/` | `58af5a4c` | the 11 campaign configs: nominal, `_ad`, `_fixE`, `_freeE`, `thr0005`/`thr001` scans at 100k–1M rays |
+| `analysis/tracking/{charge_ratio,eterm_scan,grad_vs_fd,grad_vs_fd_qnll,grad_vs_fd_qtot,siren_emission_check}.py` | `58af5a4c` | truth-charge ratio; charge/time loss terms vs E; AD-vs-FD gradient zeros in E (localised the +90 MeV bias to the detached time NLL and the per-PMT assignment gradients); emitter vs data emission profiles |
+| `analysis/tracking/{loss_split,score_decomp,term_split_scan,profile_sweep,residual_maps,measure_raygaps}.py` | `252f89b8` | charge and time NLL at the fit; per-term score and curvature at truth, the soft-mode projection and the zero-bias `time_weight`; longitudinal term tension; emission calibration vs E; residual maps at truth; the photon-level quantities the ray model does not simulate |
+| `analysis/tracking/pipeline.py` | `252f89b8` | the pipeline the scripts import, with every switch |
+| `analysis/paper/utils/pipeline.py` | `462a09fd` | the same pipeline as it last stood in `analysis/paper`, on the shared fitting loop |
+| `lucid/fitting/recon.py`, `tests/test_recon_projected_problem.py` | `462a09fd` | `ProjectedReconProblem` and its gate against the hand-written projected loop |
+
+## Known defects, read before running anything
+
+1. **Two switches patch library modules for the whole process.** `tts_walk_corr` replaces
+   `lucid.fitting.recon.first_arrival_window_nll` and marks it `_fawn_wrapped`, so it stays wrapped
+   for every later `TrackingPipeline` in the process, including ones that did not ask for it;
+   `siren_threshold` replaces `lucid.simulation.simulator.unpack_siren_params` the same way. In a
+   loop over configs (`run_local`), one config contaminates the rest.
+2. **`siren_threshold` measured nothing after 2026-07-03.** The threshold is read only by
+   `seed_mode='uniform'`; the default became `'importance'` that day, and the `thr*` configs do not
+   set the mode back.
+3. **The configs run on 2026-07 defaults**, not the published recipe: they override `gn` with
+   `fisher_mode='ad', lr=1.0` and inherit everything else from the pipeline of that date (tts and
+   sigma 2.5, 4 keys, 250 iterations, no charge-resolution model). Their numbers are not paper numbers.
+4. **The scripts import `analysis.tracking`**, which no longer exists; run them against `252f89b8`.
+
+## `pseudodata` and the open energy-bias question
+
+The closure switch was used again in 2026-09, on branch `worktree-restructure-paper-analysis`
+(`docs/internal/restructure/OPEN_ITEMS.md` §10 and its uncommitted `evidence/cause/`), to split the
+fitted-energy bias into a Monte-Carlo (Jensen) term, an emitter term and a remainder. At 1500 MeV,
+100 events: total −7.46 ± 2.90 MeV; 250k → 1M rays +1.40 ± 0.23; closure − real +4.83 ± 3.28
+(z 1.5, unresolved); remainder with the emitter matched and 4x the rays −5.73 ± 2.80, attributed to
+the detection path. The 1000 MeV arms are incomplete. That material is not in this asset.
+
+If the question is reopened, closure data belongs in the library as a capability (simulate an
+event from the model's own emitter, the reconstruction analogue of `lucid.fitting.closure_data`),
+used by any application, not as a branch inside one application's pipeline.

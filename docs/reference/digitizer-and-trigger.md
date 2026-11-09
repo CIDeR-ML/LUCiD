@@ -1,8 +1,8 @@
 # Digitizer & trigger
 
 The [photon pipeline](../concepts/photon-pipeline.md) is differentiable end to end, but that
-pipeline stops at `sensor_response`: a per-PMT charge and a soft-min first-arrival time. Real
-front-end electronics don't record that directly — they integrate charge in time windows, apply
+pipeline stops at the hits (`lucid/simulation/hits.py`): a per-PMT charge and first-arrival
+time. Real front-end electronics don't record that directly — they integrate charge in time windows, apply
 a threshold, and a separate DAQ decides whether to read the event out at all. `lucid/simulation/digitizer.py`
 and `lucid/simulation/trigger.py` model that stage. They are plain NumPy (no JAX, no gradients)
 and only run in the production path ([`lucid-run-job`](cli.md#lucid-run-job-produce-a-dataset),
@@ -16,7 +16,7 @@ hits, one row per integration window that clears threshold. A sensor can produce
 digit per event if light arrives in separated time clusters (delayed coincidence, pile-up, dark
 noise). Every model shares the same windowing code path; `basic` is not special-cased, it is
 simply the preset with an infinite integration window, so every sensor collapses to exactly one
-digit — the historical one-hit-per-sensor behavior, reproduced for backward compatibility.
+digit (one hit per sensor).
 
 The three presets, from `MODEL_PRESETS` in `lucid/simulation/digitizer.py`:
 
@@ -41,21 +41,24 @@ what makes `basic` collapse to one digit per sensor.
 
 ## Config keys
 
-A dataset config (the JSON passed to `lucid-run-job --config ...`) enables the digitizer and
-trigger with two optional top-level blocks, `"digitizer"` and `"trigger"`. Both are read by
-`_read_digitizer_cfg` / `_read_trigger_cfg` in `lucid/production/run_job.py`: the dataset config
-owns the block if present; otherwise the loader falls back to the detector's
-`*_physics_config.json` (see the [config reference](config.md) for that file's other keys —
-backward compatibility with older configs that put digitizer/trigger settings there); if neither
-has it, digitizer defaults to `basic` and the trigger is off.
+The digitizer and trigger are set by two top-level blocks, `"digitizer"` and `"trigger"`,
+resolved by `resolve_readout_blocks` in `lucid/production/dataprod/run_job.py` (the fan-out uses
+the same function). A key in the dataset config (the JSON passed to `lucid-run-job --config ...`)
+is used if present, `null` included; otherwise the block comes from the detector's
+`*_physics_config.json` (see the [config reference](config.md) for that file's other keys). A
+block in neither is an error, raised before PhotonSim runs. Only the frozen `SK_WAND` and
+`HK_WAND` physics configs carry the blocks, so a GeV config on any other detector is refused
+unless the dataset config states its readout; `"digitizer": "basic"` and `"trigger": null` are
+the explicit opt-outs (`"digitizer": null` is refused). A `"selection"` of `min_physics_hits`
+replaces the trigger, so it must come with `"trigger": null`.
 
 `"digitizer"` may be a bare model name or a dict with a `"model"` key plus overrides — any extra
 key (e.g. `dark_rate_khz`, `threshold_pe`) is merged on top of the preset
 (`resolve_model_config` in `digitizer.py` does `dict(MODEL_PRESETS[name]).update(overrides)`).
 
-The digitizer and trigger are detector properties, so the GeV dataset configs no
-longer carry them: they declare only the physics, and `-D` picks the detector,
-whose physics config supplies the readout. `config/HK_WAND_physics_config.json`:
+The digitizer and trigger are detector properties, so the GeV dataset configs do not carry
+them: they declare only the physics, and `-D` picks the detector, whose physics config supplies
+the readout. `config/HK_WAND_physics_config.json`:
 
 ```json
 {
@@ -72,7 +75,7 @@ whose physics config supplies the readout. `config/HK_WAND_physics_config.json`:
 ```
 
 The dataset config keeps only the selection mode, e.g.
-`lucid/production/configs/GeV/02_mu.json` has `"selection": {"mode": "trigger"}`.
+`lucid/production/dataprod/configs/GeV/02_mu.json` has `"selection": {"mode": "trigger"}`.
 A dataset config may still override the block if it needs to.
 
 Note that this block's `n_thr: 45` and `pad_*: 300.0` **override** the `TriggerConfig` library
@@ -81,10 +84,8 @@ below). That is deliberate: the bundled HK configs ship a *tuned* trigger for th
 class defaults are a neutral fallback, not the operating point any shipped config runs at — read the
 config block, not the dataclass, to know what a given dataset used.
 
-`lucid/production/configs/GeV/11_mu_pi_plus_pi_minus.json` (three-particle event on the same
-detector) uses the identical digitizer/trigger block — the block is copied per dataset config, not
-inherited automatically, so multi-particle and single-particle configs for the same detector must
-each declare it if they want the same electronics model.
+The `Solar`, `SN` and `Test` configs declare their own `detector` and carry their own
+`digitizer` / `trigger` blocks.
 
 The `"selection"` block is a separate, truth-level knob (`_read_min_physics_hits` in
 `run_job.py`) that decides which interactions are written at all: `{"mode": "min_physics_hits",
@@ -148,8 +149,9 @@ the surviving hits' time range, the dark counts are bounded by construction too.
 
 ## Try it without PhotonSim
 
-The digitizer and trigger are pure NumPy functions over `(sensor_idx, time, charge)` arrays, so
-you can exercise them on a synthetic event without running PhotonSim or importing JAX:
+The digitizer and trigger are NumPy functions over `(sensor_idx, time, charge)` arrays, so you
+can exercise them on a synthetic event without running PhotonSim. (Importing
+`lucid.simulation.digitizer` still imports JAX, through the `lucid.simulation` package.)
 
 ```python
 import numpy as np
@@ -199,16 +201,16 @@ else:
 Output (seeded, deterministic):
 
 ```
-digits: 44 (physics hits: 40, dark-tagged hit rows: 4)
-mean digit charge: 0.987 pe (sample sigma: 0.436)
-trigger fired: 1 window(s), kept 42/44 digits
-window: [983.2, 1237.6] ns
+digits: 42 (physics hits: 40, dark-tagged hit rows: 4)
+mean digit charge: 1.027 pe (sample sigma: 0.406)
+trigger fired: 1 window(s), kept 40/42 digits
+window: [983.6, 1237.2] ns
 ```
 
-44 digits from 40 physics hits because 4.2 kHz of dark noise over the ~215 ns readout span across
-5000 sensors adds a handful of extra single-pe digits (here, 4); the trigger's default `n_thr=30`
-clears easily on the 40-hit burst and produces one gate, dropping the 2 digits that fell outside
-`window_ns + pad` of the burst.
+The 4.2 kHz dark rate over the ~215 ns readout span across 5000 sensors adds 4 single-pe dark
+digits, and 2 of the 40 physics hits sample an SPE charge below the 0.25 pe threshold and record
+no digit: 38 + 4 = 42. The trigger's default `n_thr=30` clears easily on the burst and produces
+one gate; the 2 dark digits that fell before it (at ~920 and ~975 ns) are dropped.
 
 ## Known behaviors
 

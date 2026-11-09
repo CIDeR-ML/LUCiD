@@ -1,0 +1,133 @@
+# lucid-data-v1 -- the first-run bundle: the files a fresh clone needs beside the tracked config/
+# and data/<material>/<particle>/<kind>/emitter.json. Published as a GitHub release asset (release
+# tag = this tag); scripts/download_data.py installs it into data/ and checks every file against
+# the tracked data/MANIFEST.sha256.
+#
+# The weights, the event slices and the overlap tables are on no ref, so they are staged under
+# $LUCID_ASSET_SRC (a directory laid out like data/, plus spatial_overlap_integrals/): the four
+# weights.npz copied in, the tables built cold with
+#
+#   python tools/build_overlap_tables.py <repo> "$LUCID_ASSET_SRC"
+#
+# and each slice cut with
+#
+#   python tools/slice_root.py <source ROOT> "$LUCID_ASSET_SRC"/water/<dir>/<name>.root --events <N>
+#
+# from the source each `origin:` line names. Then
+#
+#   LUCID_ASSET_OUT=<dir> tools/make_asset.sh tools/assets/lucid-data-v1.manifest
+#
+# Publishing (by hand, owner): copy the data rows of <dir>/lucid-data-v1.MANIFEST.sha256 (every row
+# but INDEX.md and PROVENANCE.txt, without the leading ./) into data/MANIFEST.sha256 and commit it,
+# then `gh release create lucid-data-v1 <dir>/lucid-data-v1.tar.gz`. A re-cut slice has new bytes
+# (ROOT stamps a UUID and dates), so a rebuild re-copies the rows. A new version is a new tag: one
+# commit changes RELEASE in scripts/download_data.py and data/MANIFEST.sha256 together.
+tag: lucid-data-v1
+commit: 7e3452a5
+summary: the first-run bundle: the four SIREN emitters' weights + 5-event 1 GeV and 6-event 1.5 GeV GEANT4 muon slices and the 12 overlap tables the shipped code loads
+size: 142.2 MB (141.7 MB tarball)
+extern-root: LUCID_ASSET_SRC
+extern: water/muon/cherenkov/weights.npz -> water/muon/cherenkov/weights.npz
+extern: water/muon/dedx/weights.npz -> water/muon/dedx/weights.npz
+extern: water/electron/cherenkov/weights.npz -> water/electron/cherenkov/weights.npz
+extern: water/electron/dedx/weights.npz -> water/electron/dedx/weights.npz
+extern: water/muon/1000MeV_5events.root -> water/muon/1000MeV_5events.root
+extern: water/muon/1500MeV_6events.root -> water/muon/1500MeV_6events.root
+extern: spatial_overlap_integrals/gaussian_overlap_r0.040000_sigma0.008000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.040000_sigma0.008000_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.050000_sigma0.010000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.050000_sigma0.010000_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.075000_sigma0.015000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.075000_sigma0.015000_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.080000_sigma0.016000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.080000_sigma0.016000_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.100000_sigma0.020000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.100000_sigma0.020000_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.110000_sigma0.005500_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.110000_sigma0.005500_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.165000_sigma0.033000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.165000_sigma0.033000_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.250000_sigma0.012500_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.250000_sigma0.012500_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.250000_sigma0.025000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.250000_sigma0.025000_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.250000_sigma0.050000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.250000_sigma0.050000_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.254000_sigma0.050800_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.254000_sigma0.050800_ksig8_nd400_f64.json
+extern: spatial_overlap_integrals/gaussian_overlap_r0.500000_sigma0.100000_ksig8_nd400_f64.json -> spatial_overlap_integrals/gaussian_overlap_r0.500000_sigma0.100000_ksig8_nd400_f64.json
+origin: water/muon/cherenkov/weights.npz <- seed 1 of the water_mu_seed_scan_p100_ti02_n150k training scan
+origin: water/muon/dedx/weights.npz <- seed 9 of water_mu_dedx_seed_scan_nominal
+origin: water/electron/cherenkov/weights.npz <- seed 5 of water_el_seed_scan_p100_ti02_n150k
+origin: water/electron/dedx/weights.npz <- seed 7 of water_el_dedx_seed_scan_p100_ti02_n150k
+origin: water/muon/1000MeV_5events.root <- events 0-4 of the 1 GeV muon file mu-/1000MeV_100events.root (965067614 B, sha256 04a2d46be2ab6cda39d2e9a8c8b762c22c3a4d29c023ed644d9017537f5c7cc5), tools/slice_root.py --events 5
+origin: water/muon/1500MeV_6events.root <- events 0-5 of /sdf/data/neutrino/cjesus/CIDER/ROOT_files/LARGE_files/water/mu-/1500MeV_500events.root (7476254798 B, sha256 8739ada1a74e276ffa5f81b77034d31ed161a71ef7ecad3e11f14c53bef930ea), tools/slice_root.py --events 6
+origin: spatial_overlap_integrals/ <- built cold at 7e3452a5 on milano (Slurm 43860563) by tools/build_overlap_tables.py: DetectorGeometry.from_config(<config>, temperature=T) for every config/*_geom_config.json and tests/helpers/tiny_geom_config.json at 0.2, SK_like at 0.1 and 0.05, JUNO and the paper box at 0.05; same-named tables from different configs byte-identical
+--- INDEX ---
+# lucid-data-v1
+
+**The files a fresh LUCiD clone needs beside the tracked configuration**: the weights of the four
+SIREN emitters LUCiD ships, five real GEANT4 (PhotonSim) events of a 1 GeV muon, six of a 1.5 GeV
+muon, and the overlap tables the shipped code loads. Install it from the repository root with
+
+    python scripts/download_data.py
+
+which fetches this tarball from the `lucid-data-v1` GitHub release (or, with `--from-dir DIR`,
+from a local copy), checks every file against the repository's `data/MANIFEST.sha256` and only
+then moves the files into `data/` (the overlap tables into `spatial_overlap_integrals/` at the
+repository root).
+
+## What is in this tarball
+
+| path | what it is |
+|---|---|
+| `water/muon/cherenkov/weights.npz` | Cherenkov µ emitter (seed 1 of the `water_mu_seed_scan_p100_ti02_n150k` scan) |
+| `water/muon/dedx/weights.npz` | dE/dx µ emitter (seed 9 of `water_mu_dedx_seed_scan_nominal`) |
+| `water/electron/cherenkov/weights.npz` | Cherenkov e emitter (seed 5 of `water_el_seed_scan_p100_ti02_n150k`) |
+| `water/electron/dedx/weights.npz` | dE/dx e emitter (seed 7 of `water_el_dedx_seed_scan_p100_ti02_n150k`) |
+| `water/muon/1000MeV_5events.root` | events 0-4 of a 1 GeV muon PhotonSim file, every branch verbatim |
+| `water/muon/1500MeV_6events.root` | events 0-5 of a 1.5 GeV muon PhotonSim file (the paper's cylinder display, event 5) |
+| `spatial_overlap_integrals/*.json` | the 12 sensor-overlap tables (below) |
+| `MANIFEST.sha256`, `PROVENANCE.txt` | sha256 of every file; the build's commit and sources |
+
+Each weights file is a 3×256 SIREN in float32 (797 626 bytes, flat keys
+`params_<layer>_Dense_0_<kernel|bias>`, read by `lucid.siren.emitter.read_weights`; no pickle).
+Everything else an emitter needs (network shape, input domain, decoder, the s_max / N_photons /
+t0 fits, provenance and training recipe) is the `emitter.json` tracked beside it. wbls and ice run
+these water emitters (`config/materials/<material>.json`, key `"siren"`).
+
+## The event slices
+
+`tools/slice_root.py` cut each from the file its `origin:` line in `PROVENANCE.txt` names, with
+ROOT's `TTree::CopyTree`, which copies every branch verbatim: the leading `OpticalPhotons` entries
+(one entry per event), the leading `OpticalPhotonsRaw` photon chunks, those of the same events (3 per
+event), and every histogram whole. Every `lucid.sources.root_reader` entry point returns
+byte-identical arrays for each slice's events from the slice and from its source. They cover the
+paper's display figures (`fig_charge_displays` entry 3 and `fig_juno_wbls` entry 0 of the 1 GeV
+slice, `fig_cylinder_2d_displays` entry 5 of the 1.5 GeV slice, `fig_photon_event_display` event 0),
+`examples/seed_reconstruct.py --geant4`, `examples/hello_multiparticle.py` (events 0 and 1 of the
+1 GeV slice, one rotated) and the data tests.
+
+uproot cannot cut these slices: it cannot write a `std::vector<std::string>` branch, and
+`TrackInfo_CreatorProcess`, which `lucid/sources/root_reader.py` reads, is one.
+
+## The overlap tables
+
+`lucid.overlap.create_overlap_prob(sigma, r)` integrates a Gaussian photon spot of width
+`sigma = temperature × sensor radius` over a disc sensor of radius `r` and caches the result as
+`gaussian_overlap_r{r:.6f}_sigma{sigma:.6f}_ksig8_nd400_f64.json`. Every table the shipped code
+asks for is here, so no first run waits for one (each takes one to two minutes on one core):
+
+| r (m) | σ (m) | temperature | loaded by |
+|---|---|---|---|
+| 0.040 | 0.0080 | 0.2 | WCTE_like, WCTE, the tests' tiny geometry |
+| 0.050 | 0.0100 | 0.2 | TAO |
+| 0.075 | 0.0150 | 0.2 | IWCD, MidBox |
+| 0.080 | 0.0160 | 0.2 | nuSCOPE |
+| 0.100 | 0.0200 | 0.2 | EOS |
+| 0.165 | 0.0330 | 0.2 | IceCube86 (`hello_telescope.py`) |
+| 0.250 | 0.0500 | 0.2 | SK_like, SK_like_wbls, JUNO, JUNO_wbls (`hello_simulate.py`, `hello_gradient.py`) |
+| 0.254 | 0.0508 | 0.2 | SK, HK, SK_WAND, HK_WAND |
+| 0.500 | 0.1000 | 0.2 | BigHK |
+| 0.250 | 0.0250 | 0.1 | `lucid.fitting.recon.MODEL_RECIPE` on SK_like: the paper's reconstruction, `seed_reconstruct.py` |
+| 0.250 | 0.0125 | 0.05 | `fig_charge_displays.py` (SK_like, JUNO), `fig_cylinder_2d_displays.py` |
+| 0.110 | 0.0055 | 0.05 | `fig_charge_displays.py`'s box |
+
+Production (`lucid-run-job`, temperature 0) and `temperature=None` use no table. A table is
+reproducible bit for bit on one CPU type; built on another, up to a few hundred float32 ulps
+(≤ 1e-6) of its values can differ (XLA's CPU code). Each was built through
+`DetectorGeometry.from_config`, the simulator's own path, so its name and bytes are what a cold
+first use on that node writes.
+
+Not in this bundle: the 500-event files the paper's tracking scans read (not distributed;
+`analysis/paper/utils/generate_data.py` regenerates them on S3DF). The scans' results, which the
+figures draw, are the `lucid-paper-results-v1` asset (`python scripts/download_data.py --paper`).

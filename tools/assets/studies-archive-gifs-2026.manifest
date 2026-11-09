@@ -1,0 +1,24 @@
+# studies-archive-gifs-2026 (A6) -- the three committed animations, 13.2 MB,
+# a fifth of the pre-cleanup tip.  A separate asset from A4 because the
+# notebooks that produced them are 1.5 MB of text and these are binary output
+# nobody needs in order to read them.
+tag: studies-archive-gifs-2026
+commit: eaf2e89f
+summary: the three event/optimisation animations
+size: 13.2 MB
+part: eaf2e89f:good_notebooks/figures
+--- INDEX ---
+# studies-archive-gifs-2026
+
+Animations produced by the archived `good_notebooks/archive/*` notebooks (two event-hit animations
+and one charge-optimisation animation). Superseded by `lucid.viz.animate_event`, which regenerates
+them from a dataset.
+
+| file | size | produced by |
+|---|---|---|
+| `good_notebooks/figures/event_hit_animation.gif` | 5.7 MB | `archive/event_hit_animation.ipynb` |
+| `good_notebooks/figures/event_hit_animation_4.gif` | 4.6 MB | `archive/event_hit_animation.ipynb` |
+| `good_notebooks/figures/optimization_event_0_charge.gif` | 2.9 MB | `archive/tracking_opt_with_gif.ipynb` |
+
+The notebooks are in `studies-archive-notebooks-2026`. Nothing in `lucid/`, `analysis/` or `tests/`
+reads a GIF; these were committed for a README that no longer shows them.

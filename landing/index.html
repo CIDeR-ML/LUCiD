@@ -59,14 +59,14 @@
       <div class="grid grid-4">
         <article class="card">
           <h3>One differentiable hub</h3>
-          <p><code>setup_event_simulator</code> returns a JIT-compiled callable mapping
-          (source, detector params) → per-PMT charge &amp; time. Everything downstream is
-          <code>vmap</code>/<code>scan</code>/<code>jit</code>.</p>
+          <p><code>setup_event_simulator</code> returns a callable <code>Simulator</code> around
+          the JIT-compiled forward: (source, detector params, key) → per-PMT hits. It composes
+          with <code>grad</code>/<code>vmap</code>/<code>jit</code>.</p>
         </article>
         <article class="card">
           <h3>Diverse geometries</h3>
           <p>Cylinder (SK / HK / WCTE), sphere (JUNO), box, and neutrino-telescope strings
-          (IceCube). Water, water-based liquid scintillator, and ice — sixteen configs ship
+          (IceCube). Water, water-based liquid scintillator, and ice — eighteen configs ship
           in-tree.</p>
         </article>
         <article class="card">
@@ -104,24 +104,15 @@
       </div>
     </section>
 
-    <!-- QUICKSTART CODE -->
-    <section class="band split">
-      <div class="split-copy">
-        <h2>Up and running in one <code>pip install</code></h2>
-        <p>The core install needs only JAX — <strong>no GEANT4 or PhotonSim</strong> — to
-        simulate, calibrate, and reconstruct. The example emitter and photon tables download
-        with one script.</p>
-        <a class="btn btn-ghost" href="docs/getting-started/quickstart/">Full quickstart →</a>
-      </div>
-      <div class="split-code">
-<pre><code><span class="c"># core install — just JAX</span>
-pip install -e .
-<span class="c"># example SIREN emitter + PhotonSim tables</span>
-./scripts/download_data.sh
-
-<span class="c"># simulate your first event</span>
-python examples/hello_simulate.py</code></pre>
-      </div>
+    <!-- QUICKSTART -->
+    <section class="band">
+      <h2>Up and running in one <code>pip install</code></h2>
+      <p>Simulating, calibrating and reconstructing need <strong>no GEANT4 or PhotonSim</strong>:
+      the core install is JAX and a few Python packages. The trained SIREN weights and example
+      events install with one script, and the first example draws an event. The commands are on
+      the install page.</p>
+      <a class="btn btn-ghost" href="docs/getting-started/install/">Install &amp; first event →</a>
+      <a class="btn btn-ghost" href="docs/getting-started/quickstart/">Full quickstart →</a>
     </section>
 
     <!-- CITE -->

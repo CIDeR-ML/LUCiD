@@ -1,0 +1,10 @@
+{
+  "material": "water",
+  "detector_type": "cylinder",
+  "geometry_definitions": {
+    "radius": 1.0,
+    "height": 2.0,
+    "n_sensors": 600,
+    "sensor_radius": 0.04
+  }
+}

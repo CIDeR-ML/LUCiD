@@ -8,18 +8,46 @@ Cherenkov tanks and ice/water string telescopes (see the
 
 Units are **meters, nanoseconds, MeV** throughout.
 
+## Package layout
+
+- **`lucid/simulation/`** — `setup_event_simulator` (the JIT-compiled forward hub),
+  `photon_step`, `hits` (what the sensors report, the registry `HITS`).
+- **`lucid/geometry/`** — registry-dispatched detectors (`cylinder`, `sphere`, `box`, `string`);
+  `Cylinder.from_pmt_file(npz)` for measured SK/HK/WCTE arrays.
+- **`lucid/propagation/`** — differentiable ray–geometry intersection and multi-bounce transport.
+- **`lucid/wavelength/`** — wavelength-dependent optics (`medium`, `spectrum`, `optical_model`).
+- **`lucid/siren/`** — SIREN surrogate for Cherenkov/dE-dx emission (trained on PhotonSim tables).
+- **`lucid/sources/`** — track/cascade/calibration emitters, the PhotonSim ROOT reader and event
+  placement.
+- **`lucid/fitting/`** — one damped Gauss-Newton loop serving both problems: calibration
+  ([guide](../guides/calibration.md)) and reconstruction
+  ([guide](../guides/reconstruction.md)); `crb(model, theta)` gives the Cramer-Rao bound.
+- **`lucid/gradient_analysis/`** — 1D/2D loss-landscape sweeps.
+- **`lucid/dataset/`** — the HDF5 dataset format: schema, writer, reader, batch layout, labels
+  ([dataset schema](../reference/dataset-schema.md)).
+- **`lucid/production/`** — PhotonSim/GENIE → HDF5 dataset chain and cluster deployment.
+- Top-level modules: `detector_params.py` (`DetectorParams`, `ParticleParams`), `losses.py`,
+  `overlap.py` (the soft sensor-overlap tables), `visualization.py` (event displays), `pdg.py`
+  (particle masses), `utils.py`.
+
+The console entry points are in the [CLI reference](../reference/cli.md).
+
 ## The one engine: `setup_event_simulator`
 
 `lucid/simulation/simulator.py::setup_event_simulator(json_filename, ...)` is the central
 assembly point. It reads a geometry JSON + a physics config, builds the detector geometry,
-medium, propagator, photon source, and per-PMT response, and returns a **JIT-compiled
-callable** `(ParticleParams|source|photon_data, DetectorParams, key) → hits`. Everything is
+medium, propagator, photon source, and per-PMT response, and returns a **`Simulator`**: a frozen
+record of the JIT-compiled function (its call signature and return per `source` and `hits` are in
+the [photon pipeline](photon-pipeline.md#the-one-entry-point-setup_event_simulator)) and what it
+was built from (`.det_geom`, whose `.medium` is the material physics, `.reflection_model`,
+`.default_detector_params`, and for a particle `.emitter`, the Cherenkov emitter). Calling the
+record calls the function. Everything is
 differentiable end-to-end (`lax.scan`/`vmap`/`jit`, DiCE soft weights).
 
 Passing `default_detector_params=True` (as the [quickstart](../getting-started/quickstart.md)
-does) bakes the detector params into the closure and drops them from the
+does) bakes the detector params into the returned function and drops them from the
 signature, so the callable is invoked with two args — `(particle_params, key)` —
-and exposes the baked tuple as `.default_detector_params`. Leave it `False` (the
+and records the baked tuple as `.default_detector_params` (None otherwise). Leave it `False` (the
 default) when you need to differentiate w.r.t. `DetectorParams` (calibration).
 
 Behaviour is selected by **regime flags / config**, not separate engines:
@@ -30,32 +58,32 @@ Behaviour is selected by **regime flags / config**, not separate engines:
 | **Propagation** | surface (reflection) · **volume (per-DOM, no wall)** | `is_volume = isinstance(detector, StringTelescope)` |
 | **Emission** | Cherenkov · **+ scintillation** | `medium.emission_processes` (+ `cherenkov_fraction` split) |
 | **Optics** | scalar · wavelength-dependent (Rayleigh + Mie + g) | `wavelength_mode`, physics config |
-| **Source** | SIREN track · calibration source · ROOT/PhotonSim data | `is_calibration` / `is_data` |
-| **Readout** | aggregated · per_photon · realistic · moments · **per_segment** · waveform(_expected) · shotgun_per_photon | `hit_mode` |
+| **Source** | SIREN track · light source · given (ROOT/PhotonSim) photons | `source` |
+| **Transport** | expected (mean-field) · sampled (Monte Carlo) | `transport` |
+| **Hits** | first_arrival · photon_list · **segment_truth** · waveform · photon_hits, each expected or sampled where supported | `hits`, `detection` (registry `HITS`) |
 
-The surface (cylinder/sphere/box, Cherenkov-only, water) path is locked **byte-identical**
-by a tripwire test — every regime addition is gated so it is never even traced for that
-path (`tests/reconciliation/test_tripwire.py`).
+Every regime addition is gated so it is never even traced for the surface (cylinder/sphere/box,
+Cherenkov-only, water) path. The suite pins that path's numbers in one place,
+`tests/physics/test_forward_golden.py`: the tiny detector's calibration forward and its gradient, at
+a relative 1e-3 (not byte-identical: float32 reductions move across CPUs and jax versions). The
+exact before/after comparison of a change is the per-change oracle's job, not a committed reference.
 
-## Differentiable parameters: nested `DetectorParams`
+## Differentiable parameters
 
-`lucid/detector_params.py` — a JAX-pytree of physics-grouped sub-tuples (the `_SUBTUPLES`
-registry drives generic tree-walks):
-
-`scattering` (scatter_length, mie_scatter_length, g) · `absorption` · `reflection`
-(wall/sensor; scalar or angular Schlick/Fresnel) · `response` (qe, spe_width, tts) ·
-`per_pmt` (qe_corrections, gain, t0, walk) · `scintillation` (S, kB, C, tau_rise, tau_fall,
-moyal_*) — plus fittable per-wavelength `*_dev` deviation curves on the optical properties
-(see [wavelength physics](wavelength.md)). Each sub-tuple has
-normalize/denormalize + bounds, so any subset can be optimized
-directly. Non-scintillating media leave the scintillation block at neutral 0 (no light) —
-so adding it kept the water forward byte-identical.
+`lucid/detector_params.py` holds `DetectorParams`, the fittable detector state, and
+`ParticleParams`, the track; their layout and what is a parameter rather than an argument are on
+[Parameters (DetectorParams)](detector-params-vs-args.md).
 
 ## Geometry (registry-dispatched)
 
-`lucid/geometry/registry.py` holds `@register_detector(name)`; `generate_detector(config)`
-looks up the class. `DetectorGeometry.from_config` builds geometry + medium
-(`make_medium(material)`) + propagator:
+`lucid/geometry/registry.py` holds `@register_detector(name)`; `generate_detector(path)` reads
+a geometry JSON, looks up the class from its `detector_type` and calls its
+`from_config(geometry_definitions, config_dir)`. A new geometry is a `Detector` subclass that is
+registered and implements `from_config`; `generate_detector` needs no edit. Each geometry has a
+matching propagator in `lucid/propagation/`. The four types and the detectors they fit are listed
+in [model your own detector](../guides/model-your-own-detector.md#1-choose-your-geometry-family).
+`DetectorGeometry.from_config` builds geometry + medium
+(`load_medium(material)`, or the physics config's `medium_model`) + propagator:
 
 - **cylinder / sphere / box** → `lucid/propagation/*` surface propagators (grid-celled
   sensor lookup, soft overlap, reflection).
@@ -67,10 +95,10 @@ looks up the class. `DetectorGeometry.from_config` builds geometry + medium
 
 ## Emission sources
 
-- **SIREN Cherenkov** (`lucid/sources/siren_rays.py` + `lucid/siren/core.py`): a
+- **SIREN Cherenkov** (`lucid/sources/siren_rays.py` + `lucid/siren/net.py`): a
   sinusoidal net trained on PhotonSim photon tables over `(E, angle, s/s_max)`. The
-  trained-model metadata carries the count+range model — `smax(E)` (track range) and
-  `nphot(E)` (photon budget) — so each ray's intensity is `pmf × n_photons_fn(E)` directly,
+  emitter's `emitter.json` carries the count+range model — `s_max(E)` (track range) and
+  `N_photons(E)` (photon budget) — so each ray's intensity is `pmf × n_photons(E)` directly,
   with no manual reweighting. Emission time `t0(d,E)` is a stretched-exponential cubic.
 - **Scintillation** (`make_scintillation_surrogate_fn`): a dE/dx SIREN drives isotropic
   rays with Chou-quenched weights (`S/(1+kB·d+C·d²)`), a biexponential emission delay
@@ -78,8 +106,12 @@ looks up the class. `DetectorGeometry.from_config` builds geometry + medium
   scintillates; concatenated with Cherenkov rays.
 - **Calibration sources** (`calibration_sources.py`): laser / isotropic, source passed at
   call time.
-- **Data** (`event_io.py` recon path + `event_generation.py` production path): photons read
-  from PhotonSim ROOT files.
+- **Data** (`root_reader.py` + `data_event.py` recon path, `interaction.py` production path): photons read
+  from PhotonSim ROOT files, in metres. An event is placed by one rigid motion about its recorded
+  vertex (`lucid.sources.placement.rigid_motion`, applied by `data_event.place_photons` and
+  `interaction.place_raw_entry`; production draws the vertex with `placement.sample_vertex`), and
+  its photons are zero-padded to a fixed buffer (`data_event.pad_photon_data`) whose padding the
+  simulator masks out.
 
 ## Config system
 
@@ -91,33 +123,31 @@ Moyal spectrum) that WbLS inherits.
 
 ## The two lines on one engine
 
-- **Inference / calibration** (`lucid/fitting/`, `lucid/optimization/`): build the
+- **Inference / calibration** (`lucid/fitting/`): build the
   simulator, take gradients of a loss (Poisson NLL, likelihood, factored) w.r.t.
   `DetectorParams` / `ParticleParams`, solve with a damped Gauss-Newton (per-PMT gains profiled
-  in closed form) or any optax optimizer such as Adam. Fisher/CRB from autodiff. The data path loads ROOT photons via `pad_photon_data` (origins in **cm**, the
-  simulator divides by 100).
+  in closed form) or any optax optimizer such as Adam. Fisher/CRB from autodiff. The data path turns ROOT photons into observed `(charge, time)` with `lucid.sources.data_event.simulate_data_event` (origins in **metres**, as
+  `lucid.sources.root_reader` reads them; one mm-to-m conversion, in the reader).
 - **Production** (`lucid/production/`): `lucid-run-job` drives GENIE → Geant4 macro →
-  PhotonSim subprocess (`$PHOTONSIM_BIN`) → the LUCiD writer. `event_generation.py` reads
-  ROOT photons (meters) and feeds the simulator with `hit_mode='per_segment'`
-  (per-(segment, sensor) PE). The **digitizer** (`lucid/simulation/digitizer.py` — SPE
-  charge sampling, per-sensor time-window integration into digits, dark noise) then turns
-  the photon deposits into readout, and, where the dataset config asks for it, a
-  **readout trigger** (`lucid/simulation/trigger.py`, sliding-window) gates the event.
-  The result is four parallel HDF5 files (`sensor/ hits/ step/ labl/`). The modular
-  data-gen layer (`root_reader, event_builder, writer, seed_utils, …`) is self-contained;
-  cluster scheduling lives in `cluster_common/`.
+  PhotonSim subprocess (`$PHOTONSIM_BIN`) → the LUCiD writer. Its loops
+  (`lucid/production/dataprod/drivers.py`) run the library half of event generation,
+  `lucid.sources.interaction`: place a PhotonSim entry, propagate it with
+  `hits='segment_truth'` (per-(segment, sensor) deposits), and digitize. The **digitizer**
+  (`lucid/simulation/digitizer.py` — SPE charge sampling, per-sensor time-window integration
+  into digits, dark noise) turns the photon deposits into readout, and, where the dataset
+  config asks for it, a **readout trigger** (`lucid/simulation/trigger.py`, sliding-window)
+  gates the event; `lucid/simulation/readout.py` holds the two with the selection. The result
+  is four parallel HDF5 files (`sensor/ hits/ step/ labl/`) in the format of `lucid.dataset`
+  (schema, writer, reader, layout, labels). Cluster scheduling lives in
+  `lucid/production/platform/`.
 
-**Unit convention (unify-on-cm):** the simulator data boundary is **cm** (matching
-`pad_photon_data`). `event_generation` works in meters and multiplies photon origins ×100 at
-the simulator call, so both lines share one data impl.
+## Numerical precision on GPU
 
-## Invariants (enforced by `tests/`)
-
-- **Water byte-identical** forward (scalar + wavelength) + AD-Fisher + leaf order —
-  `tests/reconciliation/test_tripwire.py` (re-capture with `CAPTURE=1`).
-- **Env-free forward**: zero `os.environ` reads in the forward/physics path
-  (`test_no_env_reads_in_lucid_package`); `lucid/production/` is exempt (env-driven
-  orchestration — `PHOTONSIM_BIN`, GENIE, cluster).
-- **Differentiability**: scintillation Chou gradients correctly signed; volume optical-param
-  gradients finite through multi-scatter (`test_scintillation.py`, `test_string_volume.py`);
-  the new emitter's energy gradient matches FD (`test_emitter_energy_gradient.py`).
+The stack is float32 throughout, the fitting iterate included, with `jax_enable_x64` off; no
+`lucid` module sets `jax_default_matmul_precision` or `jax_enable_x64`. On an NVIDIA GPU, JAX's
+default float32 `dot`/`einsum` is TF32: float32 inputs and outputs, truncated accumulation. On CPU
+the same setting is exact. Published numbers were captured at JAX's default. Measured on one L40S,
+TF32 against `'highest'` moved the per-PMT predictor sum by 1.3e-3, the loss gradient by 2.3x
+(with sign flips), the AD Fisher by 5.8x and the fitted vertex by 11.2 cm. A run that needs full
+float32 accumulation sets `JAX_DEFAULT_MATMUL_PRECISION=highest` before JAX initialises, and should
+say so with its results.

@@ -1,0 +1,219 @@
+# studies-archive-geometry-v2-2026-10 (A12) -- the V2/CSG research record.
+#
+# Everything here is on `geometry-v2` and on NO other ref: the v1 tree has no
+# `lucid/csg`, no `toys_recon`, no `pool_bench`.  The branch is not deleted by
+# this cleanup, so the tarball is a readable copy, not the only copy.
+#
+# Ref pinning: the parts name the commit `85e98bd1` rather than the branch
+# `geometry-v2`, so a later commit on that branch cannot silently change what
+# this manifest builds.  `85e98bd1` is also the tag
+# `studies/geometry-v2-2026-10`.
+tag: studies-archive-geometry-v2-2026-10
+commit: 85e98bd1
+summary: the V2/CSG research record -- the gradient ladder, the benchmarks, the NaN audit, the diaries
+size: 4.6 MB in 520 files (1.7 MB gzipped)
+# -- the gradient ladder and its closed-form oracle ---------------------------
+part: 85e98bd1:toys_recon
+part: 85e98bd1:toys
+# -- pool_bench: all 276 source files, none of the 198 run artefacts ----------
+# `:(glob)` is deliberate: under it `*` does NOT cross a `/`, so these four
+# lines take the top level of pool_bench only and leave `out/` behind.  The
+# plain-pathspec lines below then add back the two subtrees that are source.
+# Dropped with the artefacts: `out/transport_old.py` (a superseded copy of
+# `transport.py`; git has it) and 169 `.log` / 20 `.npz` / 7 `out/slurm` files.
+part: 85e98bd1::(glob)pool_bench/*.py
+part: 85e98bd1::(glob)pool_bench/*.md
+part: 85e98bd1::(glob)pool_bench/*.sh
+part: 85e98bd1::(glob)pool_bench/*.json
+part: 85e98bd1:pool_bench/.gitignore
+part: 85e98bd1:pool_bench/twolevel
+part: 85e98bd1:pool_bench/out/diag
+# -- the audits and the campaign ----------------------------------------------
+part: 85e98bd1:hessian_probe
+part: 85e98bd1:baseline_scripts
+part: 85e98bd1:archive
+part: 85e98bd1:s3df_jobs
+part: 85e98bd1:scripts/campaign_recon
+# -- the csg viewer and the two held-back estimators --------------------------
+part: 85e98bd1:lucid/csg/viz
+part: 85e98bd1:lucid/csg/manifold.py
+part: 85e98bd1:lucid/csg/occlusion_edges.py
+# -- the design record: 2 design documents + the 14 plan/migration notes ------
+part: 85e98bd1:lucid/csg/SCATTERING_REFLECTION_DESIGN.md
+part: 85e98bd1:docs/POOL_MARCHING.md
+part: 85e98bd1:docs/ARCHITECTURE.md
+part: 85e98bd1:docs/CLUSTER_ABSTRACTION.md
+part: 85e98bd1:docs/DETECTOR_PARAMS_VS_ARGS.md
+part: 85e98bd1:docs/LUCID_MIGRATION.md
+part: 85e98bd1:docs/LUCID_MIGRATION_FILES.md
+part: 85e98bd1:docs/MAIN_BRANCH_PLAN.md
+part: 85e98bd1:docs/MERGED_DETECTORPARAMS_PROPOSAL.md
+part: 85e98bd1:docs/MERGE_TTS_CHANGES.md
+part: 85e98bd1:docs/PHASE3_PLAN.md
+part: 85e98bd1:docs/PLAN_UNIFY.md
+part: 85e98bd1:docs/PRACTICE_ARCHITECTURE.md
+part: 85e98bd1:docs/RECONCILIATION_PLAN.md
+part: 85e98bd1:docs/RECON_CONSOLIDATION.md
+part: 85e98bd1:docs/UNIFY_CALIB_RECON.md
+--- INDEX ---
+# studies-archive-geometry-v2-2026-10
+
+**The V2/CSG research record**, extracted from `geometry-v2` at `85e98bd1` (also tagged
+`studies/geometry-v2-2026-10`). ~20 kLOC of study code that produced V2's numbers and that
+`lucid/csg` cites 33 times. The branch still exists; this tarball is the readable copy, so that the
+numbers quoted in csg's comments have a source you can open without checking out a 375-commit line.
+
+**None of it runs against LUCiD v1.** There is no `lucid/csg` in the v1 tree, and the V2 re-entry is
+deferred. Everything in here imports `lucid.csg` from the V2 branch, and a large fraction of it also
+hard-codes a path into another checkout (see "What will not run", below).
+
+## Layout
+
+The tarball reproduces the V2 repository layout verbatim; nothing was renamed on the way out, so a
+path quoted in a `lucid/csg` comment or in `RESULTS.md` resolves here unchanged.
+
+| in this tarball | what it is | files |
+|---|---|---|
+| `toys_recon/` | the numbered gradient ladder t1–t117 + `harness.py` / `enginepmt.py` / `twopmt.py` | 125 |
+| `toys/` | six closed-form reproductions of a claimed `sil_edge` reflection bias | 6 |
+| `pool_bench/*.py`, `*.md`, `*.sh`, `*.json` | the benchmarks, boundary-estimator and closure studies, csg-vs-base parity, the waveform work, `RESULTS.md` (885 lines) | 212 |
+| `pool_bench/twolevel/` | the rejected nested two-level grid, with its head-to-head harness | 10 |
+| `pool_bench/out/diag/` | the 53 real diagnostic scripts that lived among the run outputs | 53 |
+| `hessian_probe/` | the AD-vs-FD and NaN/Hessian audit of the **base** engine | 33 |
+| `baseline_scripts/` | the April `tools.*` → `lucid.*` equivalence captures | 10 |
+| `archive/` | `recon_drivers_snapshot.tar.gz` + `MD5SUMS.txt` + `PROVENANCE.md` | 3 |
+| `s3df_jobs/` | the nray/energy/geometry scan submitters (cross-listed into A4) | 10 |
+| `scripts/campaign_recon/` | the seeded Geant4 recon campaign | 33 |
+| `lucid/csg/viz/` | the browser scene viewer, including 620 KB of vendored three.js | 6 |
+| `lucid/csg/manifold.py`, `lucid/csg/occlusion_edges.py` | the two held-back estimators | 2 |
+| `lucid/csg/SCATTERING_REFLECTION_DESIGN.md`, `docs/POOL_MARCHING.md`, 14 `docs/*.md` | the design record and the plan/migration notes | 16 |
+
+**Not in here, deliberately:** the 198 run artefacts under `pool_bench/out/` (169 `.log`, 20 `.npz`,
+10 `.json`, 7 under `out/slurm/`), 97 of which were swept in by a `git add -A`; and
+`pool_bench/out/transport_old.py`, a superseded copy of `transport.py` that git still has.
+
+## What was promoted out of here, and what was not
+
+One thing was promoted into the LUCiD v1 tree:
+
+* `hessian_probe/recon_nan_thorough.py` → **`tests/test_photon_step_nan.py`**, because
+  `lucid/simulation/photon_step.py` rested its "verified NaN-free across ~3·10⁴ grad/Hessian evals"
+  claim on scripts that all `chdir` to another checkout. The test is a real sweep over the same
+  stress geometries, run against the v1 tree.
+
+The rest of A12's promotions are **not done and are not in v1**: `harness.py` → `tests/csg/oracles.py`,
+six numbered toys → `tests/csg/`, and `{csg_bench, full_gsweep, pool_tune, stress_K}.py` →
+`benchmarks/csg/` all land inside `lucid/csg`'s own re-entry, which LUCiD v1 defers
+(`phases/DEFERRED_V2.md`): v1 has no `lucid/csg`, no `tests/csg/` and no `benchmarks/`. **The four
+benchmarks that would become `benchmarks/csg/` are here, at their V2 paths:**
+
+| would-be `benchmarks/csg/` name | path in this tarball |
+|---|---|
+| `csg_bench.py` | `pool_bench/csg_bench.py` |
+| `grid_sweep.py` | `pool_bench/twolevel/full_gsweep.py` |
+| `pool_tune.py` | `pool_bench/pool_tune.py` |
+| `stress_k.py` | `pool_bench/stress_K.py` |
+
+They are benchmarks, not pytest: Slurm-only, GPU, and the `G=16` default that `lucid/csg/simulator.py`
+quotes was measured by them on a 2080 Ti. Whoever re-enters them owes the docstring that GPU.
+
+The two-level grid's two transferable rules are quoted below, so they survive even if nobody reads
+`twolevel/README.md`:
+
+> 1. **Pad candidate tables consumed inside a `while_loop` to a power-of-two row width.** XLA's
+>    gather/tiling lowering swings identical arithmetic 2–8× at widths 12/13/14 (a "trim to realized
+>    width" made the walk *slower*).
+> 2. **`while_loop` for expensive bodies, fixed-length `scan` for trivial ones** — the fixed-length
+>    always-worst-case tradeoff wins only when the per-iteration body is a few int ops (the cull
+>    corridor), loses for interval tests.
+
+## What is actually in each part, and what it is worth
+
+`toys_recon/` is why csg's position gradient was ~280× noisier than FD, in 117 numbered steps across
+ten arcs — **final verdicts only**: 72 of the scripts retract an earlier step, so no single docstring
+in there is evidence. `harness.py` is the best-engineered thing in the sandbox: a numpy-only analytic
+one-PMT truth, a "did the knob move the forward at all" guard, and a printer that refuses to quote a
+ratio whose denominator is not resolved at 3σ. Its `subprocess git` provenance banner is the one part
+that must not travel into a test.
+
+`pool_bench/RESULTS.md` §1–29 is the measurement log behind every number quoted in `lucid/csg`'s
+comments, including the `G=16` grid default; 164 of its 206 scripts appear in no document, their
+result being the commit message. The nested two-level grid was measured **1.7–3.3× slower** than the
+single-level candidate grid and rejected. All `twolevel/` scripts import from another checkout
+(`LUCiD_pool`) and cannot run from a clone.
+
+`out/diag/` holds the only NaN diagnostics (`t107_nan{,2,3}.py`), behind two default-path fixes.
+
+`toys/` closes a **non**-bug: the estimator was never biased by reflection; the FD reference was too
+imprecise. Its `README.md` still states the refuted explanation — read `FINDING.md`.
+
+`hessian_probe/` is where "no `custom_vjp`, forward-mode Jacobians, AD Fisher" came from. **Caveat:
+all 31 scripts `sys.path`-insert and `chdir` to `/sdf/group/neutrino/omara/LUCiD_hessian`, so they
+measured another checkout, not the tree they sat in.** That is the whole reason
+`tests/test_photon_step_nan.py` exists.
+
+`baseline_scripts/` is dead on arrival (the `tools` package no longer exists); kept only so the
+refactor's acceptance method is readable.
+
+`scripts/campaign_recon/` is superseded by `analysis/paper/utils/pipeline.py`, which says so; 14 of
+its 26 scripts hard-code ROOT files in other checkouts. Its `RESULTS.md` and `REVAL_RESULTS.md` are
+cited by main's paper path, which does not track them — rescuing those two into
+`analysis/paper/provenance/` is a separate, still-open item (`analysis/paper/` is held).
+
+`archive/recon_drivers_snapshot.tar.gz` is a tarball of another worktree's dirty tree
+(`LUCiD_recon` @ `19a282a4`, 349 modified/untracked entries). Its own `PROVENANCE.md` says the commit
+hash does not reconstruct it: the tarball is the authoritative copy.
+
+`lucid/csg/viz/` had no importer anywhere in the V2 snapshot (`rg` for `csg.viz` / `scene_to_viz` /
+`build_html` outside `viz/` → 0). It drops every non-sensor sphere, ignores its documented `surface`
+argument, and its assets are not package data, so a non-editable install breaks it. **Its 620 KB of
+vendored three.js and `OrbitControls.js` carry no licence text** — if it ever returns it is
+`tools/csg_viewer` outside `lucid/`, with a CDN import map and `integrity=` hashes.
+
+`lucid/csg/manifold.py` and `occlusion_edges.py` are the chain-hold and occlusion-edge estimators that
+V2.0 does not ship. `manifold.py` has **zero tests**, two estimators that coexist while `pinned_chain`
+silently disables the hold, ~80 drifted duplicate lines, 27-argument functions, and a damped route
+that is incomplete ("no rim flux yet"). `occlusion_edges.py`'s `edge_cn` has no caller anywhere and
+cites a "t120" that never existed. Each re-enters as one PR with a measured verdict and a test.
+
+The 16 design documents are session diaries that contradict the code in at least five places and
+themselves in two. Read them as a record of what was being attempted, not as a specification.
+
+## Uncommitted V2 work is NOT in this tarball
+
+`git archive` captures refs, not working trees. At build time four worktrees sat on V2 commits with
+dirty trees, and three of them touch material that is in here:
+
+| worktree | HEAD | uncommitted work that bears on this asset |
+|---|---|---|
+| `geometry-v2` | `85e98bd1` | **722 untracked files, 146 MB.** 5 modified + 8 new `lucid/csg/*.py` and 4 `tests/csg/*.py` (a newer csg representation), and 710 files of a whole untracked design programme, `studies/geometry_v2/` — see below |
+| `LUCiD_calib` | `85e98bd1` | `lucid/csg/manifold.py` +62/−10 and `occlusion_edges.py` +82 — **both held-back estimators are newer in that worktree than in here** |
+| `LUCiD_pinfix` | `85e98bd1` | `lucid/csg/manifold.py` +7/−3 and `occlusion_edges.py` +82, differing from `LUCiD_calib`'s |
+| `LUCiD_pool` | `cf5d9e9a` (`lucid-fast`, **not** `85e98bd1`) | 756 uncommitted entries, 516 under `toys_recon/` and 238 under `pool_bench/` — including two untracked toys, `e16_csg_tf32.py` and `e22_csg_factor.py` |
+
+`geometry-v2:studies/geometry_v2/` is the largest of these and the one no inventory names, because
+every inventory was taken from the ref and it is on no ref: **24 design documents** (`DESIGN_v0`…`v5`,
+`CSG_REPRESENTATION.md`, `GDML_TREATMENT_v0..v2`, `CORE_MAPPING.md`, `FUNDAMENTALS{,_v2}.md`,
+`PLAN{,_v2}.md`, …), 124 Python files across 21 topic directories (`bodies`, `cells`, `contracts`,
+`edges`, `g4oracle`, `irproto`, `leaf_tests`, `mapping`, `materials_draft`, `position`, `repr`,
+`scatter`, `structure_meas`, …), 24 GDML files and 138 MB of `corpus/` and `position/` fixtures. It is
+a later and larger design effort than the 16 design documents this tarball ships, and it supersedes
+several of them.
+
+So: **before anyone reuses the two held-back estimators, diff them against `LUCiD_calib` and
+`LUCiD_pinfix`**; before anyone treats the gradient ladder as complete, look at `LUCiD_pool`; and
+before anyone reads the 16 design documents here as current, read `studies/geometry_v2/` first.
+
+Nothing is lost — the worktrees are still on disk, and a read-only copy of all of it sits under
+`/sdf/data/neutrino/omara/lucid_cleanup_exec/WU-10/d-v2-13/` — but it is not in this tarball, and
+`git worktree remove` deletes untracked and ignored files.
+
+## What will not run
+
+* Everything needs `lucid.csg`, which exists only on `geometry-v2`.
+* All 31 `hessian_probe/` scripts and all 9 `pool_bench/twolevel/` scripts `sys.path`-insert or
+  `chdir` into another checkout (`LUCiD_hessian`, `LUCiD_pool`).
+* 23 `pool_bench` scripts write their outputs **inside the repository**.
+* 14 of 26 `scripts/campaign_recon/` scripts hard-code ROOT files in other checkouts.
+* `baseline_scripts/` imports a `tools` package that no longer exists on any ref.
+* The benchmarks are GPU-only and were measured on an RTX 2080 Ti.

@@ -1,16 +1,10 @@
 name: Build and push lucid container
 
+# Images are built for release tags only (v*), plus by hand. Publishing a GitHub release
+# pushes its tag, so a release builds once, from the tag.
 on:
   push:
-    branches: [main, refactor-v2]
-    paths:
-      - 'container/**'
-      - 'lucid/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - '.github/workflows/container.yml'
-  release:
-    types: [published]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       photonsim_ref:
@@ -45,13 +39,24 @@ jobs:
           echo "PHOTONSIM_REF=$REF" >> "$GITHUB_ENV"
           echo "PHOTONSIM_SHA=$(git -C PhotonSim rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          # tracked changes in the LUCiD build context (a fresh checkout has none)
+          if [ -n "$(git -C LUCiD status --porcelain --untracked-files=no)" ]; then
+            echo "LUCID_DIRTY=true" >> "$GITHUB_ENV"
+          else
+            echo "LUCID_DIRTY=false" >> "$GITHUB_ENV"
+          fi
           git -C PhotonSim log --oneline -1
 
-      - name: Resolve the version tag (releases only)
+      - name: Resolve the version tag (tag pushes only)
         id: ver
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "extra=ghcr.io/cider-ml/lucid:${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            {
+              echo "extra<<EOF"
+              echo "ghcr.io/cider-ml/lucid:${{ github.ref_name }}"
+              echo "ghcr.io/cider-ml/lucid:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           else
             echo "extra=" >> "$GITHUB_OUTPUT"
           fi
@@ -76,14 +81,22 @@ jobs:
           file: LUCiD/container/Dockerfile
           platforms: linux/amd64
           push: true
+          # An SBOM is the only inventory anyone will ever have of this image's
+          # base layers. THIRD_PARTY.md §3 lists what they are -- ROOT, GENIE
+          # 3.04 + splines, Pythia6, NUISANCE, NEUT, NuWro, LHAPDF -- and the
+          # strictest of those terms are not freely redistributable, so an
+          # image that ships them with no manifest is an exposure nobody can
+          # even measure. provenance stays off: it is a build-attestation
+          # format, not a licence inventory, and it breaks some pullers.
           provenance: false
-          sbom: false
+          sbom: true
+          # latest moves only with a release tag; a manual build is tagged by its commit alone.
           tags: |
-            ghcr.io/cider-ml/lucid:latest
             ghcr.io/cider-ml/lucid:${{ github.sha }}
             ${{ steps.ver.outputs.extra }}
           build-args: |
             LUCID_SHA=${{ github.sha }}
+            LUCID_DIRTY=${{ env.LUCID_DIRTY }}
             PHOTONSIM_SHA=${{ env.PHOTONSIM_SHA }}
             PHOTONSIM_REF=${{ env.PHOTONSIM_REF }}
             BUILD_DATE=${{ env.BUILD_DATE }}
@@ -91,8 +104,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   speed:
-    # Diagnostic pipeline speed test: one mu, one low-E electron, one
-    # GENIE numu config at N=20. Always succeeds unless the harness
+    # Diagnostic pipeline speed test: speed_test.py's default configs (one mu,
+    # one low-E electron) at N=20. Always succeeds unless the harness
     # blows up; compare JSON / MD across commits to spot regressions.
     needs: build
     runs-on: ubuntu-latest
@@ -140,14 +153,11 @@ jobs:
           if-no-files-found: error
 
   test:
-    # The whole suite, --slow included. conftest.py's pytest_ignore_collect skips the slow files
-    # unless --slow is passed, and those include tests/reconciliation/test_tripwire.py (the
-    # forward-model drift check; reference provenance in
-    # tests/reconciliation/tripwire_water_ref.PROVENANCE.md), the SK-scale integration tests and
-    # the propagation differentiability gates. A test CI never collects can stay red unnoticed.
+    # The image smoke test: the default lane inside the built container, so a dependency
+    # the image lacks shows up here. The slow lane runs once per push, in ci.yml
+    # `integration`; running it again here doubled the longest job for no new coverage.
     #
     # conftest.py forces JAX_PLATFORMS=cpu for the whole suite, so a GPU runner would not help.
-    # If this job becomes the bottleneck, split it rather than narrowing what it collects.
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -172,12 +182,11 @@ jobs:
         run: docker pull ${{ steps.img.outputs.image }}
 
       # -rs lists every skip with its reason, so a gate that silently stopped running shows up.
-      # Expected skips here: the byte-identity tests in tests/io/test_categorizer_byte_identity.py
-      # and tests/io/test_hits_byte_identity.py need a ROOT-file env var CI does not set, and the
-      # SIREN-gated tests need **/siren_training/, which container/Dockerfile.dockerignore
-      # excludes because those paths are symlinks into the data area.
-      - name: Run pytest (full suite, --slow)
+      # Expected skips here: every test marked requires_data or requires_emitter (tests/conftest.py
+      # names what each one needs), because container/Dockerfile.dockerignore excludes the
+      # downloaded data/ files, and the shellcheck tests when the image has no shellcheck.
+      - name: Run pytest (default lane)
         run: |
           docker run --rm \
             ${{ steps.img.outputs.image }} \
-            bash -c "cd /opt/LUCiD && python3 -m pytest tests/ --slow -v --tb=short -rs"
+            bash -c "cd /opt/LUCiD && python3 -m pytest tests/ -q --tb=short -rs"

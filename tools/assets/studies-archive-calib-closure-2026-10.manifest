@@ -1,0 +1,99 @@
+# studies-archive-calib-closure-2026-10 (A8) -- the calibration-closure figure
+# and its plot module.
+#
+# sandbox_assets.md recorded these two files as "untracked on all 28 refs,
+# present only in this worktree".  That is no longer true: they were committed
+# on the paper-rerun branch at 2b03c27b ("paper: fast-sim calibration closure
+# figures, including the per-PMT gains closure"), which added exactly these two
+# files and nothing else.  Taking the parts from that commit is why this
+# manifest needs no extern-root and carries nobody's working copy.  The
+# paper-rerun worktree has since modified both files further; that delta is
+# uncommitted by owner decision and is NOT in this asset.
+tag: studies-archive-calib-closure-2026-10
+commit: 2b03c27b
+summary: the calibration-closure figure and its plot module, as committed on paper-rerun-qe
+size: 21 KB
+part: 2b03c27b:analysis/paper/fig_calib_closure.py
+part: 2b03c27b:analysis/paper/utils/calib_closure_plots.py
+--- INDEX ---
+# studies-archive-calib-closure-2026-10
+
+> The calibration-closure figure from the closure study line. It defaults to a data directory inside a
+> sibling `LUCiD_pool` worktree and cites `toys_recon`/`pool_bench`, both of which are archived (A12).
+> It belongs to the closure session, not to `paper-rerun-qe` (`D-PAPER-16`). If the figure enters the
+> paper it needs a tracked generator, a tracked input path and a frozen-engine provenance record.
+
+**Two corrections to the paragraph above, checked against the code at
+`2b03c27b`.** The ownership point stands; the provenance facts have moved on.
+
+1. **It is not untracked, and it does not default into a sibling worktree.**
+   `fig_calib_closure.py:28` reads
+
+   ```python
+   DEFAULT = os.environ.get('LUCID_CALIB_CLOSURE',
+                            '/sdf/data/neutrino/omara/calib_closure_2026_10/pool_bench_out')
+   ```
+
+   — an environment variable over a durable `/sdf/data` path, which is the
+   house rule for a data root, not a path inside `LUCiD_pool`. Its own
+   docstring says the same: "the data come from the closure studies recorded on
+   branch `calib/engine-20261012` (`studies/calib_closure_2026_10`, engine tag
+   `calib-closure-2026-10`), not from a generator in this tree."
+
+2. **It cites neither `toys_recon` nor a `pool_bench` source directory.** The
+   only match for either string is the `pool_bench_out` leaf of the data path
+   above, and one line of prose at `calib_closure_plots.py:3` naming the
+   `LUCiD_pool` closure studies and the frozen engine
+   `lucid_refsample_20261012`. There is nothing here that resolves into A12.
+
+What **has not** changed is the reason this is an asset and not a paper figure:
+it is plot-only, its inputs are produced by a generator on another branch, and
+the frozen engine that produced them is named in prose rather than recorded.
+
+## What is in this tarball
+
+| path | size at `2b03c27b` | what it is |
+|---|---|---|
+| `analysis/paper/fig_calib_closure.py` | 2.8 KB, 51 lines | the CLI. `--plot-results [--data-dir DIR]`; plot-only, no generator |
+| `analysis/paper/utils/calib_closure_plots.py` | 18.8 KB, 310 lines | the six panels |
+
+The six figures it emits, from its own docstring:
+
+| figure | what it shows |
+|---|---|
+| `calib_gradient_at_truth` | mean cross gradient at truth / s.e.m., 60 seeds, two truth sets; and the Jacobian-variance inflation of the one-batch metric — the argument for the cross metric |
+| `calib_closure_convergence` | distance from truth in CRB units vs iteration, 48 truths, cathode surface frozen |
+| `calib_closure_summary` | bias, spread vs CRB, the photon-budget prediction, and a seed-by-seed check of the rule |
+| `calib_closure_paper` | paper-style: three far starts, one Poisson truth, physical units, truth + CRB band |
+| `calib_gains_summary` | with 11 096 per-PMT gains fitted: bias against a biased variant, spread vs CRB, gain pulls |
+| `calib_gains_paper` | paper-style far starts with the gains fitted jointly |
+
+The fit behind them: eleven optical parameters at 405 nm (`L_s`, `L_a`, QE,
+`L_m`, wall/housing reflectance, the specular fractions, cathode `k` and the
+two glossy roughnesses) against per-PMT charge from six sources on the full SK
+scene, under the cross loss `L = Σ (a − n)(b − n)/W` over two independent model
+halves `a`, `b`.
+
+## Its inputs are not in this tarball
+
+Blobs do not travel. The recorded study outputs live on S3DF at
+
+    /sdf/data/neutrino/omara/calib_closure_2026_10/pool_bench_out
+
+and are reached by `$LUCID_CALIB_CLOSURE`. They were produced on branch
+`calib/engine-20261012` under `studies/calib_closure_2026_10`, by the frozen
+engine tagged `calib-closure-2026-10` (`lucid_refsample_20261012`). Without
+that directory the CLI has nothing to plot.
+
+## If the figure is admitted to the paper
+
+Three things it does not have yet, and the asset is the record of their absence:
+
+* **a tracked generator** — the producer is on another branch, so the figure
+  cannot be regenerated from the paper's own tree;
+* **a tracked input path** — an `/sdf/data` default plus an environment
+  variable is right for a study and wrong for a published figure, which needs
+  the input named with its sha256;
+* **a frozen-engine provenance record** — the engine tag appears in a module
+  docstring, which is not a provenance record, and a docstring may not cite a
+  path outside the repo at all.

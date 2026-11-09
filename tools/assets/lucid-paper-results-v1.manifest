@@ -1,0 +1,89 @@
+# lucid-paper-results-v1 -- what the paper's figures draw: the reconstructed tracking scans and the
+# other figures' cached inputs, so `fig_*.py --plot-results` redraws every figure without a GPU or
+# the 500-event PhotonSim inputs. Published as a GitHub release asset (release tag = this tag);
+# `python scripts/download_data.py --paper` installs it into analysis/paper/output/data/ and checks
+# every file against the tracked analysis/paper/RESULTS.sha256.
+#
+# The files are on no ref: each figure's data directory, as the figure scripts wrote it at the
+# commit below (the scans merged with merge_chunks.py --partial), is staged under
+# $LUCID_ASSET_SRC/<figure>/ without its logs. Then
+#
+#   LUCID_ASSET_OUT=<dir> tools/make_asset.sh tools/assets/lucid-paper-results-v1.manifest
+#
+# and the data rows of <dir>/lucid-paper-results-v1.MANIFEST.sha256 (every row but INDEX.md and
+# PROVENANCE.txt, without the leading ./) are analysis/paper/RESULTS.sha256.
+tag: lucid-paper-results-v1
+commit: 7a913a09
+summary: the paper figures' inputs: the nrays, energy and geometry tracking scans and the cached data of the other figures
+size: 299 MB (84.2 MB tarball)
+extern-root: LUCID_ASSET_SRC
+extern: nrays -> nrays
+extern: energy -> energy
+extern: geometry -> geometry
+extern: loss_landscape -> loss_landscape
+extern: calib_convergence -> calib_convergence
+extern: calib_loss_geometry -> calib_loss_geometry
+extern: charge_displays -> charge_displays
+extern: cylinder_2d_displays -> cylinder_2d_displays
+extern: detector_gallery -> detector_gallery
+extern: juno_cher_scint -> juno_cher_scint
+extern: juno_S_loss_injected -> juno_S_loss_injected
+extern: compute_performance -> compute_performance
+origin: nrays/, energy/, geometry/ <- analysis/paper/utils/run_study.py at 7a913a09 (clean tree) on the S3DF GPU partitions, one job per chunk of events, merged per config by merge_chunks.py (the nrays and geometry points with --partial)
+origin: the other directories <- each figure's --generate-data at 7a913a09 (clean tree), 2026-11-05/06; each records its run in fig_<name>.json
+--- INDEX ---
+# lucid-paper-results-v1
+
+**What the LUCiD paper's figures draw.** Install it from the repository root with
+
+    python scripts/download_data.py --paper
+
+which fetches this tarball from the `lucid-paper-results-v1` GitHub release (or, with
+`--from-dir DIR`, from a local copy), checks every file against the repository's
+`analysis/paper/RESULTS.sha256` and moves the files into `analysis/paper/output/data/`. Then
+every figure redraws from them, on a CPU, in seconds to a minute each:
+
+    python analysis/paper/fig_nrays.py --plot-results        # and the other fig_*.py
+
+`fig_photon_event_display`, `fig_siren_profile` and `fig_t0_correction` draw the shipped
+`lucid-data-v1` inputs and need nothing from here.
+
+## What is in this tarball
+
+| directory | figure | what |
+|---|---|---|
+| `nrays/` | `fig_nrays` | 14 study files: muon and electron at 1 GeV, 5k to 250k rays |
+| `energy/` | `fig_energy_scan` | 18 study files: muon, 400 to 1800 MeV, time weight 1 and (1600 to 1800 MeV) 0.75 |
+| `geometry/` | `fig_geometry_scan` | 9 study files: SK_like at 2k to 18k PMTs, 1 GeV muon |
+| `loss_landscape/` | `fig_loss_landscape` | the 2D landscape of event 1 |
+| `calib_convergence/` | `fig_calib_convergence` | the three seeds of the 19-parameter calibration fit |
+| `calib_loss_geometry/` | `fig_calib_loss_geometry` | the 2D Neyman surface and the descent and Gauss-Newton paths |
+| `charge_displays/`, `cylinder_2d_displays/`, `detector_gallery/` | the display figures | cached charges and rendered panels |
+| `juno_cher_scint/`, `juno_S_loss_injected/` | `fig_juno_wbls` | the per-process charges and the S scan |
+| `compute_performance/` | `fig_compute_performance` | the timing measurements |
+
+A study file (`<config>/<config>.h5`) holds one group per event: the truth, the seeds, the fit
+trajectory and its errors, with the config it ran (`config_json`), the commit, the dirty flag and
+the package versions as attributes; `configs/` holds the configs as submitted. Each other
+directory's `fig_<name>.json` records the run that wrote it. `analysis/paper/README.md` describes
+the study file.
+
+## How these were made, and how they differ from today's code
+
+Every file was written at commit `7a913a09` from a clean tree.
+
+- **8 versus 16 candidates per ray.** The three scans ran with 16 candidates per ray in the
+  propagation grid (`max_candidates_per_ray`, recorded in each file's `config_json`). The shipped
+  recipe (`analysis/paper/utils/studies.py`, since `db37c3fd`) uses 8: a paired scan of the same
+  events found 8 fits as well as 16 and takes about 1/1.6 of the time. A scan run with today's
+  code is therefore the same study at 8 candidates, not a byte-for-byte rerun of these files.
+- **Event counts.** Points cut short keep the events they finished (`n_events_done`;
+  `n_events_config` is what the config asked for):
+  - nrays, of 500: el 100k 439, el 150k 400, el 250k 392, mu 100k 466, mu 250k 485; the other
+    nine points 500.
+  - energy: every point 100 of 100.
+  - geometry, of 100: 2k 54, 4k 50, 6k 56, 8k 52, 10k 68, 12k 71, 14k 65, 16k 60, 18k 51.
+- **Inputs.** The scans read the 500-event PhotonSim files `<mu-|e->/<E>MeV_500events.root`
+  (`root_file` in each study file), which are not distributed; `analysis/paper/utils/generate_data.py`
+  regenerates them on S3DF.
+- GPU fits are not bit-reproducible run to run; a rerun agrees within the statistics of the scan.

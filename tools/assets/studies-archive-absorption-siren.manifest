@@ -1,0 +1,70 @@
+# studies-archive-absorption-siren (A13) -- a SIREN as a fittable 3-D
+# absorption field, in two versions.
+#
+# RULE 3, and it is an owner decision, not a tidiness one: the student's
+# `student/AbsorptionSIREN` branch is RETAINED.  Owner sign-off is required
+# before any history rewrite touches it (D-HIST-6), because the student
+# rebases their two unique library commits onto the rewritten base.  This
+# asset is a copy, never a licence to delete the branch.
+tag: studies-archive-absorption-siren
+commit: 97c9076a
+summary: the student's SIREN-as-absorption-field project and its merged-quality twin
+size: 6.3 MB
+part: 97c9076a:lucid/AbsorptionSIREN
+part: 1b206d16:lucid/simulation/fields.py
+part: 1b206d16:tests/test_absorption_field.py
+part: 1b206d16:tests/test_absorption_field_e2e.py
+part: 1b206d16:good_notebooks/calibration/fit_absorption_field.ipynb
+--- INDEX ---
+# studies-archive-absorption-siren
+
+**A SIREN as a fittable 3-D absorption field.** Two versions of the same idea, from two branches:
+
+**The student project** (`student/AbsorptionSIREN` @ `97c9076a`, June 2026) fits a SIREN to a 3-D
+absorption field in a cylinder (R = 16.9, H = 38) and checks recovery against a known truth field. It
+is standalone — a replica of the `SIREN_Absorption.ipynb` notebook rather than library code — with its
+own loader, model and trainer, a 3-D visualiser, and eight 778 KB `.npz` parameter sets: the fitted
+fields, the injector fields, and `true_siren_params.npz`, the truth it is scored against.
+
+**The merged-quality twin** (`unification-siren` @ `1b206d16`) is the same capability written as
+library code: `lucid/simulation/fields.py`'s `make_field` returns `(apply_fn, init_params)` and is
+called once at setup outside JIT, the SIREN representation reuses the shared `lucid.siren.core.SIREN`
+(`fields.py:62`, `:176`), and `gauge=True` pins the field's spatial-deviation mean to 0 — which is
+what removes the field-against-`L_abs` degeneracy and is required for a joint global+field
+calibration. It is coherent and tested — `tests/test_absorption_field.py` and `test_absorption_field_e2e.py` — on its branch, and on
+no other ref.
+
+## Do not delete `square_output` from the SIREN model
+
+`unification-siren:lucid/simulation/fields.py:62` (inside `_make_siren`, `:173-244`) is the **only**
+consumer anywhere of `SIREN(square_output=False)`. The flag itself is
+`lucid/siren/core.py:68` on `main` (the plan's target tree calls that file `lucid/siren/model.py`).
+That one call site is why the flag survives the cleanup even though nothing on `main` sets it: a dead-flag sweep that removes it
+silently breaks this branch's only route back into the tree, and the breakage would not show up in any
+test on `main`. If `square_output` ever does go, it goes together with a decision about this
+capability — not before it.
+
+## The branch is retained
+
+`student/AbsorptionSIREN` is **not** deleted and **not** rewritten without the owner's sign-off
+(`D-HIST-6`). The student rebases their two unique library commits onto the rewritten base as
+`format-patch` output; until that has happened, the branch and this tarball are both load-bearing.
+This asset exists so the work is recoverable, not so the branch can go.
+
+## What is in this tarball
+
+| path | source | what it is |
+|---|---|---|
+| `lucid/AbsorptionSIREN/siren_model.py`, `siren_loader.py` | `97c9076a` | the standalone model and parameter loader |
+| `lucid/AbsorptionSIREN/siren_train.py` | `97c9076a` | the trainer (32 KB — the bulk of the project) |
+| `lucid/AbsorptionSIREN/visualize_3d.py` | `97c9076a` | the 3-D field display |
+| `lucid/AbsorptionSIREN/*.npz` (8 files, 6.1 MB) | `97c9076a` | fitted fields, injector fields, and the truth field |
+| `lucid/simulation/fields.py` | `1b206d16` | the merged-quality twin: `make_field` over five representations, `_make_siren`, the `gauge` and `normamp` reparameterisations |
+| `tests/test_absorption_field.py`, `test_absorption_field_e2e.py` | `1b206d16` | the twin's tests, which exist on no other ref |
+| `good_notebooks/calibration/fit_absorption_field.ipynb` | `1b206d16` | the calibration notebook that drives the fit |
+
+## Caveat
+
+Unmerged research in both versions. The student copy duplicates library code it could have imported,
+which is what makes it standalone and also what makes it stale; the twin is the version to read if
+you are deciding whether this capability belongs in the tree.

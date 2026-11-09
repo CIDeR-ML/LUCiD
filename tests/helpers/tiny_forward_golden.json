@@ -1,0 +1,19 @@
+{
+  "q_sum": 155.29040484316647,
+  "q_l2": 7.4435232132089295,
+  "t_mean_ns": 6.093805009822939,
+  "grad_q_sum": {
+    "g": -4.606129169464111,
+    "scatter_length": 0.42892956733703613,
+    "mie_scatter_length": 0.05684274062514305,
+    "absorption_length": 2.1966071128845215,
+    "wall_reflection_rate": 143.96597290039062,
+    "sensor_reflection_rate": 28.626266479492188,
+    "qe": 776.451416015625
+  },
+  "captured": {
+    "jax": "0.5.3",
+    "numpy": "2.1.3",
+    "cpu": "Intel(R) Xeon(R) Silver 4114T CPU @ 2.20GHz"
+  }
+}

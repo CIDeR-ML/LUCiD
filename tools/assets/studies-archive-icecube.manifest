@@ -1,0 +1,107 @@
+# studies-archive-icecube (A10) -- the IceCube/ppc measurement programme, the
+# legacy string engine and the sizing maths.
+#
+# RULE 1, and it is not negotiable: the raw run outputs do NOT travel in this
+# tarball and never go to the public origin.  Pushing `icecube-3d` would add
+# 1 539 files and ~1.73 M lines and undo the history purge.  The parts below
+# therefore select the SOURCE and the WRITE-UP of `studies/icecube_perf` by
+# extension -- not the directory -- so the 118 MB of `*_hits.txt` dumps and
+# the 25 MB of `*.npz` run outputs cannot be swept in by a later edit.  They
+# live at /sdf/data/neutrino/omara/lucid_studies/icecube/ instead, and INDEX.md
+# records the path.  `du` on the built tarball is the gate.
+#
+# The other three studies directories (ppc_jax, icecube_reform, icecube_mc)
+# are source and markdown only -- 1.2 MB -- so they travel whole.
+tag: studies-archive-icecube
+commit: 958807f6
+summary: the IceCube/`ppc` measurement programme + the legacy string engine + the sizing maths
+size: 3.7 MB (plus 144 MB of run outputs on /sdf/data, not in the tarball)
+part: icecube-3d:studies/icecube_perf/*.py
+part: icecube-3d:studies/icecube_perf/*.md
+part: icecube-3d:studies/icecube_perf/*.sh
+part: icecube-3d:studies/icecube_perf/*.log
+part: icecube-3d:studies/icecube_perf/*_stderr.txt
+part: icecube-3d:studies/icecube_perf/*.f2k
+part: icecube-3d:studies/icecube_perf/.gitignore
+part: icecube-3d:studies/ppc_jax
+part: icecube-3d:studies/icecube_reform
+part: icecube-3d:studies/icecube_mc
+part: geometry-v2:docs/ICECUBE_MC_BASELINE.md
+part: eaf2e89f:lucid/propagation/string/fast.py
+part: eaf2e89f:lucid/geometry/string_sizing.py
+--- INDEX ---
+# studies-archive-icecube
+
+**LUCiD against `ppc` and the IceCube MC baseline**: throughput, arrival-time and angular-response
+comparisons, the JAX re-implementation of `ppc`'s kernel, the reformulated estimators, the 3-D ice
+solver and the shell control variate. The RNG-mixer and address-divergence findings came from here.
+
+Two commits: the studies and `ICECUBE_MC_BASELINE.md` as they stood on the research branches
+(`958807f6`, `85e98bd1`), and the two dead main modules at `v1-full` (`eaf2e89f`). `PROVENANCE.txt`
+records which part came from which.
+
+## The 144 MB that is NOT in this tarball
+
+The raw run outputs are at **`/sdf/data/neutrino/omara/lucid_studies/icecube/`**, never in an asset
+and never on the public origin:
+
+| file | size |
+|---|---|
+| `studies/icecube_perf/homog_hits.txt` | 50.2 MB |
+| `studies/icecube_perf/layered_hits.txt` | 49.0 MB |
+| `studies/icecube_perf/nosca_hits.txt` | 12.0 MB |
+| `studies/icecube_perf/muon_hits.txt` | 7.2 MB |
+| `studies/icecube_perf/ppc_arrival_cos.npz` | 11.7 MB |
+| the other 14 `studies/icecube_perf/*.npz` | 13.7 MB |
+
+Those 19 files are 98.6% of `studies/icecube_perf` by bytes; what is here is the other 633 source,
+document and log files, which produced and interpret them. The four small `*_stderr.txt` run logs (339 KB) do
+travel, because they are the measurement record rather than its output.
+
+## What is in this tarball
+
+| path | what it is |
+|---|---|
+| `studies/icecube_perf/*.py` (401 files) | the campaign: the `ppc` comparison drivers, the 3-D solver, the shell control variate, the reciprocity and closure diagnostics |
+| `studies/icecube_perf/*.md` (21 files) | the write-up, including `RECIPROCITY.md` (59 KB), `METHOD.md` (50 KB), `CAMPAIGN.md`, `CLOSURE_DIAGNOSIS.md`, `ARBITRARY_ICE.md` |
+| `studies/icecube_perf/*.sh`, `*.log`, `*.f2k` | the submission wrappers, the run logs, and the two `ppc` input files |
+| `studies/ppc_jax/` (133 files) | the JAX re-implementation of `ppc`'s kernel, with the two `.cxx` and two `.cu` originals it was read against |
+| `studies/icecube_reform/` (88 files) | the reformulated estimators, 26 markdown notes |
+| `studies/icecube_mc/` | `ICECUBE_MC.md` |
+| `docs/ICECUBE_MC_BASELINE.md` | the 425-line baseline note from `geometry-v2` |
+| `lucid/propagation/string/fast.py` | the legacy string engine (`create_fast_string_simulator`, 329 LOC) |
+| `lucid/geometry/string_sizing.py` | the `K_min` / `L_max` / `p_scat` / DOM-snap sizing maths (237 LOC) |
+
+## Caveats
+
+`ICECUBE_MC_BASELINE.md` cites two companion documents that exist on **no** git ref. They were never
+committed anywhere; do not go looking.
+
+`legacy_string_engine` — `fast.py` and `string_sizing.py` — was **dead on main**: no caller, and
+`string_sizing`'s only consumer was `auto_n_dom_snap`, called from `fast.py` itself. Its docstring
+claim that the sizing output is "threaded through to `create_string_propagator`" is false. But
+`fast.py` is **actively developed on the `icecube` branch** (9 commits past the merge base, plus a new
+`spatial.py`), so this is an archive and not a deletion: the live successor for the surface path is
+`lucid/propagation/string/string_propagator.py`, and the icecube line owns `fast.py`'s future. Three
+divergent copies of this one engine exist across `main`, `geometry-v2` and `icecube`/`icecube-3d`;
+reconciling them is an icecube-line decision, not a v1 one.
+
+## The two capabilities that were promoted instead of archived
+
+They are **not** in this tarball, because they are in the tree:
+
+- **SPICE glacial-ice optics** — `icecube-3d:lucid/wavelength/ice_optics.py` @ `958807f6`, with
+  `config/materials/ice.json`, `config/IceCube86_ice_physics_config.json` and
+  `tests/test_ice_optics.py` (the best-tested module on any research branch).
+- **The scattering phase-function registry** — `icecube-3d:lucid/wavelength/phase_functions.py` @
+  `958807f6`, the `(sample, logpdf)` pairs for HG / SAM / Rayleigh / isotropic, plus
+  `make_photon_step_volume(phase_functions=...)`.
+
+Its `logpdf` must match its `sample` or the DiCE gradient is wrong while the forward output still
+looks right — that is the one thing to check if either is ever changed.
+
+Two more things on `icecube-3d` were **not** promoted and are worth knowing about before anyone
+reinvents them: `lucid/simulation/sensor_response.py:gaussian_bin_deposit` (a closed-form Gaussian
+spread over waveform time bins, which is how you get a non-zero `d(loss)/d(times)`) and
+`lucid/overlap.py:create_overlap_prob(mode='erfc')` (a closed-form overlap kernel, ~1.8x on the
+string/volume photon step, accurate to ~6e-4 while sigma <= 0.3 r).

@@ -1,0 +1,16 @@
+# Keep line endings stable across machines for everything git detects as text.
+* text=auto
+
+# Notebooks are text, and diffable as text: a notebook git treats as binary is
+# a notebook nobody reviews. nbstripout keeps the outputs out, so what is left
+# is source.
+*.ipynb text diff=jupyternotebook
+
+# Shipped geometry and resource arrays are binary and must never be munged.
+*.npz binary
+*.root binary
+*.h5 binary
+*.hdf5 binary
+*.png binary
+*.jpg binary
+*.gif binary
