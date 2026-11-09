@@ -1,6 +1,6 @@
 # Command-line tools
 
-`pip install -e .` installs four commands. The scripts in `scripts/` run from the repository
+`pip install -e .` installs five commands. The scripts in `scripts/` run from the repository
 root with `python scripts/<name>.py`. Every tool prints its full option list with `--help`.
 
 ## `lucid-run-job`
@@ -61,7 +61,7 @@ Trains a SIREN emitter on one table. The kind (Cherenkov or dE/dx), material and
 from the table.
 
 ```bash
-lucid-train-siren --h5-path photon_lookup_table.h5 --output-dir runs/water_muon --seed 1 --t0 t0.json
+lucid-train-siren --h5-path photon_lookup_table.h5 --output-dir runs/water_muon --seed 1
 ```
 
 | flag | meaning |
@@ -71,7 +71,6 @@ lucid-train-siren --h5-path photon_lookup_table.h5 --output-dir runs/water_muon 
 | `--recipe` | recipe JSON (default `lucid/siren/training/nominal.json`, the recipe of the shipped emitters) |
 | `--<field>` | override one recipe field, e.g. `--seed 1`, `--num-steps 20000`, `--learning-rate 1e-4` |
 | `--init` | `weights.npz` to start from (an emitter or a checkpoint) |
-| `--t0` | the t0 fit (`t0.json` from PhotonSim's `calculate_t0.py`) recorded into a Cherenkov emitter; the simulator needs it |
 | `--checkpoint-every N` | write `checkpoint_step_<N>.npz` every N steps |
 | `--no-prediction-plots` | skip the prediction-against-table PDFs (`--prediction-plot-every`, default 10000 steps) |
 
@@ -79,8 +78,32 @@ It writes `emitter.json` and `weights.npz` (the emitter), `recipe.json`,
 `training_history.json`, `final_training_progress.pdf` and `prediction_plots/`. Judge
 convergence by the validation loss (`val_loss` in `training_history.json`), not the training
 loss: the learning rate drops when it plateaus for `patience` validations (100 in the nominal
-recipe), and a flat `val_loss` with no further drops means it is done. Installing the result is
-described [here](../guides/production/siren-training-inputs.md#using-a-new-emitter).
+recipe), and a flat `val_loss` with no further drops means it is done. The run is installed
+with `lucid-siren-promote`.
+
+## `lucid-siren-promote`
+
+Installs a training run as an emitter in `data/<material>/<particle>/<kind>/`, adding what the
+simulator needs and the trainer cannot know
+([stage 5](../guides/production/siren-training-inputs.md#stage-5-promote)).
+
+```bash
+lucid-siren-promote --run runs/water_muon --smax-fit PhotonSim/data/water/mu-/smax_fit.csv \
+    --t0 timing_parameters.json --emission-band-nm 274.91 673.83
+```
+
+| flag | meaning |
+|---|---|
+| `--run` | required. The training run (`emitter.json`, `weights.npz`) |
+| `--smax-fit` | required. The `smax_fit.csv` its table was built with; the run's `s_max_mm` must equal it |
+| `--t0` | Cherenkov, required: the t0 fit, `timing_parameters.json` of PhotonSim's `tools/t0_correction/calculate_t0.py` |
+| `--emission-band-nm LO HI` | Cherenkov, required: the band (nm) PhotonSim counted N_photons(E) over; water 274.91 673.83 |
+| `--selection` | how the run was chosen, recorded in the provenance |
+| `--dest` | output directory (default: `data/<material>/<particle>/<kind>/` of this checkout) |
+| `--force` | replace an emitter already at `--dest` |
+
+It checks the result with `validate_record` and records the run, the selection, the `s_max` fit,
+the time and the commit in `provenance`.
 
 ## Scripts
 

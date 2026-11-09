@@ -763,7 +763,7 @@ def _load_emitters(particle, medium, has_scintillation):
     cherenkov = load_emitter(particle, siren_set, 'cherenkov')
     if cherenkov.t0 is None:
         raise ValueError(f"the {siren_set} {particle} Cherenkov emitter has no t0 fit (emission time); "
-                         f"add its calculate_t0.py fit (lucid-train-siren --t0) to its emitter.json")
+                         f"install it with lucid-siren-promote --t0")
     cherenkov_get_rays = make_cherenkov_surrogate_fn(cherenkov)
 
     scint_ray_fn = None
@@ -1015,7 +1015,8 @@ def setup_event_simulator(
             if cherenkov.emission_band is None and wavelength_mode and has_cherenkov:
                 raise ValueError(
                     f"the {particle} Cherenkov emitter records no emission_band_nm (the band its "
-                    "N_photons(E) counts); add it to its emitter.json or pass cherenkov_emission_band")
+                    "N_photons(E) counts); install it with lucid-siren-promote --emission-band-nm "
+                    "or pass cherenkov_emission_band")
             cherenkov_emission_band = cherenkov.emission_band
     optics = _build_optics(det_geom.medium, wavelength_mode, wavelength_sampling, qe_curve,
                            cherenkov_emission_band, given_photons)

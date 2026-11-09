@@ -1,3 +1,5 @@
-# Personal scan configs stay untracked; only example_*.json is committed.
+# Personal scan configs stay untracked; the tracked ones are example_*.json and the
+# production seed scans *_seeds.json.
 *.json
 !example_*.json
+!*_seeds.json

@@ -301,8 +301,8 @@ and does not understand arrays or packs. Both `recover.sh` and `merge.sh` take t
 ### Not yet wired: `train_siren` (GPU)
 
 SIREN training does not run on NERSC yet: `NerscAdapter.render_train_run` raises
-`NotImplementedError`, and the GPU defaults in `siren_inputs/train_siren/generate_jobs.py` are
-S3DF values. Dataset production, SIREN inputs and `s_max` work.
+`NotImplementedError` (its GPU job needs `--constraint=gpu` and the `_g` account). Dataset
+production, SIREN inputs and `s_max` work.
 
 ## LXPLUS (CERN, HTCondor)
 

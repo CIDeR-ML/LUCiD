@@ -70,6 +70,7 @@ all = ["lucid-sim[viz,docs,dev]"]
 
 [project.scripts]
 lucid-train-siren = "lucid.siren.training.train:main"
+lucid-siren-promote = "lucid.siren.training.promote:main"
 lucid-run-job = "lucid.production.dataprod.run_job:main"
 lucid-build-photon-table = "lucid.siren.training.photonsim_data.build_tables:main_photon"
 lucid-build-dedx-table = "lucid.siren.training.photonsim_data.build_tables:main_dedx"

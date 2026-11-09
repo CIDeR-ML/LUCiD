@@ -1,5 +1,6 @@
 """``lucid-train-siren``: a tiny run on a synthetic table writes an emitter the loader reads, whose
-density is the trainer's own prediction, and whose rays run."""
+density is the trainer's own prediction, which ``lucid-siren-promote`` installs, and whose rays
+run."""
 import json
 
 import h5py
@@ -9,13 +10,13 @@ import numpy as np
 import pytest
 
 pytest.importorskip('uproot')
-from lucid.siren.emitter import _decode, density, read_emitter, read_weights     # noqa: E402
+from lucid.siren.emitter import decode_target, density, read_emitter, read_weights  # noqa: E402
 from lucid.siren.training.photonsim_data.build_tables import _fit_n_photons      # noqa: E402
 from lucid.siren.training.train import main                                      # noqa: E402
 from lucid.siren.training.trainer import NOMINAL, Recipe                         # noqa: E402
 
 ENERGIES = np.geomspace(200, 3200, 10).astype(int)
-T0 = {'form': 'stretched_exp_delay', 'c_mm_per_ns': 299.792,
+T0 = {'form': 'stretched_exp_delay', 'material': 'water', 'particle': 'mu-', 'c_mm_per_ns': 299.792,
       'A': {'log10_poly_logE': [-1.14, 0.0, -0.07, 0.003]},
       'lambda': {'log10_poly_logE': [-0.51, 1.0, 0.16, -0.027]},
       'beta': {'poly_logE': [11.6, -11.5, 3.8, -0.39]},
@@ -50,9 +51,7 @@ def table(tmp_path):
 
 def test_a_tiny_run_writes_the_emitter_the_loader_reads(table, tmp_path):
     out = tmp_path / 'run'
-    (tmp_path / 't0.json').write_text(json.dumps(T0))
-    main(['--h5-path', str(table), '--output-dir', str(out), '--num-steps', '300',
-          '--t0', str(tmp_path / 't0.json'), *TINY])
+    main(['--h5-path', str(table), '--output-dir', str(out), '--num-steps', '300', *TINY])
     hist = json.loads((out / 'training_history.json').read_text())
     assert np.mean(hist['train_loss'][-5:]) < 0.5 * hist['train_loss'][0]       # it learns
     assert (out / 'final_training_progress.pdf').is_file()
@@ -62,7 +61,7 @@ def test_a_tiny_run_writes_the_emitter_the_loader_reads(table, tmp_path):
     assert recipe == {**json.loads(NOMINAL.read_text()), 'num_steps': 300, 'hidden_features': 16,
                       'hidden_layers': 1, 'batch_size': 256, 'val_every': 20,
                       'zero_keep_frac': 1.0, 'val_split': 0.1}
-    assert e.kind == 'cherenkov' and e.t0 is not None
+    assert e.kind == 'cherenkov' and e.t0 is None and e.emission_band is None
 
     # The density is the trainer's own prediction, bit for bit, on the table grid: the dataset
     # normalises with the emitter's normalisation (zero_keep_frac=1 keeps every bin, in order).
@@ -74,11 +73,23 @@ def test_a_tiny_run_writes_the_emitter_the_loader_reads(table, tmp_path):
     n = X.size
     for i, E in enumerate(ENERGIES):
         x = ds.data['inputs_normalized'][i * n:(i + 1) * n]
-        own = _decode(jnp.squeeze(e.net.apply(e.params, jnp.asarray(x))),
-                      e.log10_range[1], e.log10_range[0], e.target_offset)
+        own = decode_target(jnp.squeeze(e.net.apply(e.params, jnp.asarray(x))),
+                            e.log10_range[0], e.log10_range[1], e.target_offset)
         got = density(e, e.params, float(E), jnp.asarray(X.ravel(), jnp.float32),
                       jnp.asarray(S.ravel(), jnp.float32))
         np.testing.assert_array_equal(np.asarray(got), np.asarray(own))
+
+    # promoted against the table's s_max fit, with the t0 fit and band the simulator needs
+    from lucid.siren.training.promote import main as promote
+    (tmp_path / 'smax_fit.csv').write_text(
+        'material,particle,form,A,B,fit_min_mev,fit_max_mev,quantile,quantile_multiplier,'
+        'generated_at_utc\nwater,mu-,A*E^B,6.1,0.98,500,50000,0.9999,1.1,synthetic\n')
+    (tmp_path / 't0.json').write_text(json.dumps(T0))
+    assert promote(['--run', str(out), '--smax-fit', str(tmp_path / 'smax_fit.csv'),
+                    '--t0', str(tmp_path / 't0.json'), '--emission-band-nm', '274.91', '673.83',
+                    '--dest', str(tmp_path / 'installed')]) == 0
+    e = read_emitter(tmp_path / 'installed', promoted=True)
+    assert e.t0 is not None and e.emission_band == (274.91, 673.83)
 
     from lucid.sources.siren_rays import make_cherenkov_surrogate_fn
     _, origins, w = make_cherenkov_surrogate_fn(e)(

@@ -8,10 +8,15 @@ An emitter lives in ``data/<material>/<particle>/<kind>/`` (``kind`` is ``'chere
   t0 and the emission band, plus the provenance and training recipe;
 - ``weights.npz`` (installed by ``scripts/download_data.py``): the network parameters.
 
-:func:`load_emitter` reads them into one :class:`Emitter`; :func:`write_emitter` is the trainer's
-only output path, so a model the trainer writes is a model the loader reads. :func:`density` is the
-one evaluator (normalise the inputs, run the net, decode the target), shared by the ray samplers,
-the validators and the training plots.
+:func:`load_emitter` reads them into one :class:`Emitter`; :func:`write_emitter` is the only
+output path (the trainer's and the promotion's), and :func:`validate_record` checks every record
+it writes and :func:`read_emitter` reads, so a model written is a model the loader reads.
+:func:`density` is the one evaluator (normalise the inputs, run the net, decode the target),
+shared by the ray samplers, the validators and the training plots.
+
+A training run (``lucid-train-siren``) writes an emitter without the t0 fit and the emission band;
+``lucid-siren-promote`` adds them and installs it in ``data/``. :func:`load_emitter` reads only
+promoted emitters.
 
 A material that has no emitters of its own names the set it runs in its material JSON
 (``config/materials/<material>.json``, key ``"siren"``: wbls and ice run ``"water"``).
@@ -34,8 +39,16 @@ from lucid.utils import base_dir_path
 SCHEMA = 1
 KINDS = ('cherenkov', 'dedx')
 PARTICLES = ('muon', 'electron')
+PHOTONSIM_PARTICLE = {'muon': 'mu-', 'electron': 'e-'}     # the tables' and PhotonSim's names
 T0_FORM = 'stretched_exp_delay'
 _AXIS2 = {'cherenkov': 'angle_rad', 'dedx': 'dedx_kev_per_mm'}
+
+# The provenance block. The trainer writes TRAINED; lucid-siren-promote adds PROMOTED. A key whose
+# value was never recorded holds null.
+PROVENANCE_TRAINED = ('material', 'particle', 'table', 'steps', 'losses', 'init', 'commit',
+                      'trained_at_utc')
+PROVENANCE_PROMOTED = ('run', 'selection', 'smax_fit', 'promoted_at_utc', 'promoted_commit')
+LOSSES = ('final_train', 'final_val', 'best_val')
 
 
 @dataclass(frozen=True, eq=False)
@@ -144,8 +157,12 @@ def make_n_photons_fn(n_photons: dict) -> Callable:
 
 # ---- the evaluator ----------------------------------------------------------------------------
 
+# The training/inference contract: the trainer feeds the net normalize_inputs(x) and fits it to
+# encode_target(t); inference reads decode_target(net(normalize_inputs(x))). The emitter records
+# the encoding's constants (target.log10_min, log10_max, offset) and the domain.
+
 @jax.jit
-def _normalize(inputs, energy_min, energy_max, axis2_min, axis2_max, r_min, r_max):
+def normalize_inputs(inputs, energy_min, energy_max, axis2_min, axis2_max, r_min, r_max):
     """``(n, 3)`` inputs ``[E, axis2, s/s_max]`` mapped linearly to ``[-1, 1]`` per column."""
     energy = inputs[:, 0]
     axis2 = inputs[:, 1]
@@ -156,12 +173,24 @@ def _normalize(inputs, energy_min, energy_max, axis2_min, axis2_max, r_min, r_ma
     return jnp.stack([normalized_energy, normalized_axis2, normalized_r], axis=1)
 
 
+def target_range(targets, offset):
+    """``(log10_min, log10_max)``, the range of ``log10(t + offset)`` over a table's targets: the
+    constants of :func:`encode_target`, recorded as ``target.log10_min`` and ``log10_max``."""
+    log_targets = np.log10(np.asarray(targets) + offset)
+    return log_targets.min(), log_targets.max()
+
+
+def encode_target(targets, log10_min, log10_max, offset):
+    """The training target: ``(log10(t + offset) - log10_min) / (log10_max - log10_min)``, in
+    ``[0, 1]`` over the table. NumPy, in the dtype of ``targets``; :func:`decode_target` inverts it."""
+    return (np.log10(np.asarray(targets) + offset) - log10_min) / (log10_max - log10_min)
+
+
 @jax.jit
-def _decode(raw, log_max, log_min, offset):
-    """The net's ``[0, 1]`` output back to the target, the inverse of the training encoding
-    ``log10(t + offset)``. Clipped at 0: an empty bin decodes to about 0, a float32 rounding
-    below it to exactly 0."""
-    log_predictions = raw * (log_max - log_min) + log_min
+def decode_target(raw, log10_min, log10_max, offset):
+    """The net's ``[0, 1]`` output back to the target, the inverse of :func:`encode_target`.
+    Clipped at 0: an empty bin decodes to about 0, a float32 rounding below it to exactly 0."""
+    log_predictions = raw * (log10_max - log10_min) + log10_min
     return jnp.maximum(10 ** log_predictions - offset, 0.0)
 
 
@@ -176,9 +205,9 @@ def density(e: Emitter, params, energy, axis2, s_over_smax):
         axis2,                          # opening angle (Cherenkov) or dE/dx (dedx)
         s_over_smax,                    # s / s_max  in [0, 1]
     ], axis=1)
-    normalized = _normalize(grid, e.lo[0], e.hi[0], e.lo[1], e.hi[1], e.lo[2], e.hi[2])
+    normalized = normalize_inputs(grid, e.lo[0], e.hi[0], e.lo[1], e.hi[1], e.lo[2], e.hi[2])
     raw = e.net.apply(params, normalized)
-    return _decode(jnp.squeeze(raw), e.log10_range[1], e.log10_range[0], e.target_offset)
+    return decode_target(jnp.squeeze(raw), e.log10_range[0], e.log10_range[1], e.target_offset)
 
 
 # ---- files ------------------------------------------------------------------------------------
@@ -201,22 +230,113 @@ def write_weights(path, params) -> None:
     np.savez(path, **flat)
 
 
-def read_emitter(model_dir) -> Emitter:
-    """The emitter in ``model_dir`` (``emitter.json`` + ``weights.npz``)."""
+def _numbers(v, n=None) -> bool:
+    """``v`` is a list of finite numbers (of length ``n``)."""
+    return (isinstance(v, list) and len(v) > 0 and (n is None or len(v) == n)
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool) and np.isfinite(x)
+                    for x in v))
+
+
+def _number(v) -> bool:
+    return _numbers([v])
+
+
+def validate_record(record: dict, *, promoted: bool = False) -> None:
+    """Check an ``emitter.json`` record; raise ``ValueError`` naming every problem.
+
+    The structure every emitter has (schema, kind, net, domain, target, grid, s_max(E) and, for
+    Cherenkov, N_photons(E)), the t0 fit and emission band when present, and the provenance keys
+    the trainer writes. With ``promoted`` (an installed emitter, :func:`load_emitter`): a Cherenkov
+    emitter must also carry ``t0`` and ``emission_band_nm``, and the provenance the promotion adds.
+    """
+    bad = []
+    if record.get('schema') != SCHEMA:
+        bad.append(f"schema {record.get('schema')!r}, this LUCiD reads schema {SCHEMA}")
+    kind = record.get('kind')
+    if kind not in KINDS:
+        bad.append(f"kind {kind!r}, expected one of {KINDS}")
+    net = record.get('net', {})
+    if not (isinstance(net.get('hidden_features'), int) and net['hidden_features'] > 0
+            and isinstance(net.get('hidden_layers'), int) and net['hidden_layers'] >= 0
+            and _number(net.get('w0'))):
+        bad.append(f"net {net!r}: needs hidden_features > 0, hidden_layers >= 0 and w0")
+    dom = record.get('domain', {})
+    for axis in ('energy_mev', _AXIS2.get(kind, 'angle_rad'), 's_over_smax'):
+        if not (_numbers(dom.get(axis), 2) and dom[axis][0] < dom[axis][1]):
+            bad.append(f"domain.{axis} {dom.get(axis)!r}: needs [lo, hi] with lo < hi")
+    tg = record.get('target', {})
+    if not (_number(tg.get('log10_min')) and _number(tg.get('log10_max'))
+            and tg['log10_min'] < tg['log10_max'] and _number(tg.get('offset'))
+            and tg['offset'] > 0):
+        bad.append(f"target {tg!r}: needs log10_min < log10_max and offset > 0")
+    if not (isinstance(record.get('grid_bins'), int) and record['grid_bins'] > 0):
+        bad.append(f"grid_bins {record.get('grid_bins')!r}: needs an integer > 0")
+    sm = record.get('s_max_mm', {})
+    if sm.get('form') not in SMAX_PARAMS:
+        bad.append(f"s_max_mm.form {sm.get('form')!r}, expected one of {sorted(SMAX_PARAMS)}")
+    else:
+        missing = [k for k in SMAX_PARAMS[sm['form']] if k not in sm.get('params', {})]
+        if missing:
+            bad.append(f"s_max_mm.params lacks {missing} of form {sm['form']!r}")
+    has = {k: k in record for k in ('n_photons', 't0', 'emission_band_nm')}
+    if kind == 'dedx':
+        bad += [f"a dE/dx emitter has no {k}" for k, v in has.items() if v]
+    if kind == 'cherenkov':
+        nph = record.get('n_photons', {})
+        if not (nph.get('form') == 'logpoly' and _numbers(nph.get('coeffs'))
+                and _number(nph.get('u0')) and _number(nph.get('du')) and nph['du'] != 0):
+            bad.append("n_photons: needs form 'logpoly', coeffs, u0 and du != 0")
+        if has['t0']:
+            t = record['t0']
+            if t.get('form') != T0_FORM:
+                bad.append(f"unsupported t0 form {t.get('form')!r}; expected {T0_FORM!r}")
+            if not (_number(t.get('c_mm_per_ns')) and t['c_mm_per_ns'] > 0):
+                bad.append("t0.c_mm_per_ns: needs a speed > 0")
+            for k in ('log10_A', 'log10_lambda_mm', 'beta'):
+                if not _numbers(t.get(k), 4):
+                    bad.append(f"t0.{k}: needs 4 cubic coefficients in log10 E")
+        elif promoted:
+            bad.append("a Cherenkov emitter needs its t0 fit (lucid-siren-promote --t0)")
+        if has['emission_band_nm']:
+            band = record['emission_band_nm']
+            if not (_numbers(band, 2) and 0 < band[0] < band[1]):
+                bad.append(f"emission_band_nm {band!r}: needs [lo, hi] nm with 0 < lo < hi")
+        elif promoted:
+            bad.append("a Cherenkov emitter needs emission_band_nm "
+                       "(lucid-siren-promote --emission-band-nm)")
+    prov = record.get('provenance')
+    if not isinstance(prov, dict):
+        bad.append("no provenance block")
+    else:
+        need = PROVENANCE_TRAINED + (PROVENANCE_PROMOTED if promoted else ())
+        missing = [k for k in need if k not in prov]
+        if missing:
+            bad.append(f"provenance lacks {missing}"
+                       + (" (install an emitter with lucid-siren-promote)" if promoted else ""))
+        losses = prov.get('losses')
+        if 'losses' in prov and not (isinstance(losses, dict) and all(k in losses for k in LOSSES)):
+            bad.append(f"provenance.losses {losses!r}: needs {LOSSES}")
+    if not isinstance(record.get('training', {}).get('recipe'), dict):
+        bad.append("no training.recipe")
+    if bad:
+        raise ValueError("invalid emitter record: " + "; ".join(bad))
+
+
+def read_emitter(model_dir, *, promoted: bool = False) -> Emitter:
+    """The emitter in ``model_dir`` (``emitter.json`` + ``weights.npz``), its record checked by
+    :func:`validate_record` (``promoted``: as an installed emitter)."""
     model_dir = Path(model_dir)
     meta = json.loads((model_dir / 'emitter.json').read_text())
-    if meta['schema'] != SCHEMA:
-        raise ValueError(f"{model_dir}/emitter.json: schema {meta['schema']!r}, this LUCiD reads "
-                         f"schema {SCHEMA}")
+    try:
+        validate_record(meta, promoted=promoted)
+    except ValueError as exc:
+        raise ValueError(f"{model_dir}/emitter.json: {exc}") from None
     kind = meta['kind']
     dom = meta['domain']
     axes = (dom['energy_mev'], dom[_AXIS2[kind]], dom['s_over_smax'])
     t0 = c_mm_per_ns = None
     if 't0' in meta:                            # a Cherenkov emitter's; the simulator needs it
         t = meta['t0']
-        if t['form'] != T0_FORM:
-            raise ValueError(f"{model_dir}/emitter.json: unsupported t0 form {t['form']!r}; "
-                             f"expected {T0_FORM!r}")
         t0 = tuple(jnp.asarray(t[k]) for k in ('log10_A', 'log10_lambda_mm', 'beta'))
         c_mm_per_ns = float(t['c_mm_per_ns'])
     return Emitter(
@@ -238,11 +358,14 @@ def read_emitter(model_dir) -> Emitter:
     )
 
 
-def write_emitter(model_dir, record: dict, params) -> None:
-    """Write ``record`` (the ``emitter.json`` content) and ``params`` into ``model_dir``."""
+def write_emitter(model_dir, record: dict, params, *, promoted: bool = False) -> None:
+    """Write ``record`` (the ``emitter.json`` content) and ``params`` into ``model_dir``, after
+    :func:`validate_record` (``promoted``: as an installed emitter)."""
+    record = {'schema': SCHEMA, **record}
+    validate_record(record, promoted=promoted)
     model_dir = Path(model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
-    (model_dir / 'emitter.json').write_text(json.dumps({'schema': SCHEMA, **record}, indent=1) + '\n')
+    (model_dir / 'emitter.json').write_text(json.dumps(record, indent=1) + '\n')
     write_weights(model_dir / 'weights.npz', params)
 
 
@@ -256,5 +379,5 @@ def emitter_dir(particle: str, material: str, kind: str) -> Path:
 
 def load_emitter(particle: str, material: str, kind: str) -> Emitter:
     """The ``kind`` emitter trained for ``particle`` in ``material`` (the emitter set's name, as a
-    material JSON's ``"siren"`` key gives it)."""
-    return read_emitter(emitter_dir(particle, material, kind))
+    material JSON's ``"siren"`` key gives it). Only a promoted emitter loads."""
+    return read_emitter(emitter_dir(particle, material, kind), promoted=True)

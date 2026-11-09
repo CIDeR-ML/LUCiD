@@ -8,7 +8,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 
 def load_user_paths(path: Path) -> Dict[str, str]:
@@ -34,3 +34,12 @@ def load_user_paths(path: Path) -> Dict[str, str]:
             k, v = line.split("=", 1)
             out[k] = v
     return out
+
+
+def missing_settings(env: Dict[str, str], *keys: str) -> List[str]:
+    """The ``keys`` a stage needs that ``env`` (from :func:`load_user_paths`) does not set, plus
+    ``SLURM_ACCOUNT`` on a Slurm cluster (every Slurm submit file charges it)."""
+    need = list(keys)
+    if (env.get("CLUSTER") or "slurm").lower() in ("slurm", "nersc"):
+        need.append("SLURM_ACCOUNT")
+    return [k for k in need if not env.get(k)]

@@ -9,7 +9,7 @@ MeV.
 | directory | contents |
 |---|---|
 | `dataprod/` | the dataset line: `lucid-run-job`, the event loops, the generators (Geant4 macros, GENIE, sntools), the cluster fan-out, the dataset configs and the submit/monitor/verify scripts ([README](dataprod/README.md)) |
-| `siren_inputs/` | PhotonSim scans for SIREN training: the s_max scan (`smax/`), the training-input scan, and training sweeps (`train_siren/`) ([README](siren_inputs/README.md)) |
+| `siren_inputs/` | PhotonSim scans for SIREN training: the s_max scan (`smax/`), the training-input scan, the t0 fit (`t0/`), and training sweeps (`train_siren/`) ([README](siren_inputs/README.md)) |
 | `qa/` | validation of a written dataset (`validations.py`), the trigger study, job-log parsing |
 | `derived_views/` | new labelings of an existing dataset without re-simulating ([README](derived_views/README.md)) |
 | `platform/` | the cluster adapters (Slurm on S3DF and NERSC, HTCondor on LXPLUS), `run_in_container.sh`, and the `user_paths.sh` templates |

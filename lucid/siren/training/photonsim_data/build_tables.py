@@ -109,19 +109,25 @@ def _find_photonsim_dir(*, override: Optional[Path], data_dir: Path) -> Path:
 
 def _read_smax_fit_csv(photonsim_dir: Path, material: str,
                        particle: str) -> Dict[str, Any]:
-    """Return the form-specific params + shared columns from `smax_fit.csv`.
-
-    Dispatches on the row's `form` column (currently "A*E^B" or
-    "smooth_two_power"). The returned dict is what gets welded verbatim into
-    the .h5 metadata (with each key prefixed `smax_`). Raises
-    FileNotFoundError / ValueError if the fit is missing or malformed.
-    """
+    """:func:`read_smax_csv` of `<photonsim_dir>/data/<material>/<particle>/smax_fit.csv`."""
     path = photonsim_dir / "data" / material / particle / "smax_fit.csv"
     if not path.is_file():
         raise FileNotFoundError(
             f"No s_max fit at {path}. Run PhotonSim's tools/smax/analyze_smax.py "
             f"for ({material!r}, {particle!r}) first."
         )
+    return read_smax_csv(path)
+
+
+def read_smax_csv(path: Path) -> Dict[str, Any]:
+    """Return the form-specific params + shared columns from a `smax_fit.csv`.
+
+    Dispatches on the row's `form` column (a key of `SMAX_PARAMS`). The
+    returned dict is what gets welded verbatim into the .h5 metadata (with each
+    key prefixed `smax_`), and so, through `table_curves`, the emitter's
+    `s_max_mm` block. Raises ValueError if the fit is malformed.
+    """
+    path = Path(path)
     with path.open() as fh:
         row = next(csv.DictReader(fh), None)
     if not row:

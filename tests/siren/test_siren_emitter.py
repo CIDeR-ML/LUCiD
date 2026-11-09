@@ -12,8 +12,9 @@ import numpy as np
 import pytest
 
 from lucid.siren.net import SIREN
-from lucid.siren.emitter import (_decode, density, emitter_dir, load_emitter, make_n_photons_fn,
-                                 read_emitter, read_weights, write_emitter)
+from lucid.siren.emitter import (decode_target, density, emitter_dir, encode_target, load_emitter,
+                                 make_n_photons_fn, read_emitter, read_weights, target_range,
+                                 validate_record, write_emitter)
 from lucid.utils import base_dir_path
 
 ROOT = Path(base_dir_path())
@@ -34,6 +35,11 @@ def _record(kind='cherenkov'):
         r['t0'] = {'form': 'stretched_exp_delay', 'c_mm_per_ns': 299.792,
                    'log10_A': [-1.1, 0.0, -0.07, 0.003], 'log10_lambda_mm': [-0.5, 1.0, 0.16, -0.03],
                    'beta': [11.6, -11.5, 3.8, -0.39]}
+        r['emission_band_nm'] = [274.91, 673.83]
+    r['provenance'] = {'material': 'water', 'particle': 'mu-', 'table': 't.h5', 'steps': 10,
+                       'losses': {'final_train': 1.0, 'final_val': 1.0, 'best_val': 1.0},
+                       'init': None, 'commit': None, 'trained_at_utc': None}
+    r['training'] = {'recipe': {}}
     return r
 
 
@@ -66,13 +72,16 @@ def test_write_then_read_is_the_same_emitter(tmp_path, kind):
 
 
 def test_decoding_inverts_the_training_encoding():
-    """The net learns ``(log10(t + offset) - log10_min) / (log10_max - log10_min)``; decoding
-    returns ``t``, an empty bin (t = 0, the encoding's minimum) included: no offset floor."""
+    """The net learns ``encode_target(t) = (log10(t + offset) - log10_min) / (log10_max -
+    log10_min)``, in [0, 1] over the table; ``decode_target`` returns ``t``, an empty bin (t = 0,
+    the encoding's minimum) included: no offset floor."""
     offset, t_max = 1e-3, 300.0
-    lo, hi = np.log10(offset), np.log10(t_max + offset)
-    t = np.array([0.0, 1e-3, 0.05, 1.0, 30.0, t_max])
-    raw = (np.log10(t + offset) - lo) / (hi - lo)
-    got = np.asarray(_decode(jnp.asarray(raw, jnp.float32), hi, lo, offset), np.float64)
+    t = np.array([0.0, 1e-3, 0.05, 1.0, 30.0, t_max], np.float32)
+    lo, hi = target_range(t, offset)
+    np.testing.assert_allclose([lo, hi], [np.log10(offset), np.log10(t_max + offset)], rtol=1e-6)
+    raw = encode_target(t, lo, hi, offset)
+    assert raw.dtype == np.float32 and raw.min() == 0.0 and raw.max() == 1.0
+    got = np.asarray(decode_target(jnp.asarray(raw), lo, hi, offset), np.float64)
     assert got[0] < 1e-9 and np.all(got >= 0.0)
     np.testing.assert_allclose(got[1:], t[1:], rtol=2e-5, atol=1e-8)
 
@@ -87,6 +96,58 @@ def test_an_emitter_of_another_schema_or_t0_form_is_refused(tmp_path):
     (tmp_path / 'emitter.json').write_text(json.dumps({**meta, 'schema': 0}))
     with pytest.raises(ValueError, match='schema'):
         read_emitter(tmp_path)
+
+
+def _promoted(rec):
+    return {**rec, 'provenance': {**rec['provenance'], 'run': 'r', 'selection': None,
+                                  'smax_fit': 's.csv', 'promoted_at_utc': 'now',
+                                  'promoted_commit': None}}
+
+
+def test_validate_record_names_what_is_wrong():
+    """A trainer's record is valid as a run; installed (promoted) it needs the t0 fit, the band
+    and the promotion's provenance. Every problem is named, not only the first."""
+    rec = {'schema': 1, **_record()}
+    validate_record(rec)
+    validate_record(_promoted(rec), promoted=True)
+    run = {k: v for k, v in rec.items() if k not in ('t0', 'emission_band_nm')}
+    validate_record(run)
+    with pytest.raises(ValueError) as e:
+        validate_record(run, promoted=True)
+    for what in ('t0 fit', 'emission_band_nm', "provenance lacks ['run'"):
+        assert what in str(e.value)
+    for bad, what in [({'kind': 'scint'}, 'kind'),
+                      ({'domain': {**rec['domain'], 'energy_mev': [5000.0, 100.0]}}, 'domain.energy_mev'),
+                      ({'target': {**rec['target'], 'offset': 0.0}}, 'offset > 0'),
+                      ({'s_max_mm': {'form': 'A*E^B', 'params': {'A': 1.0}}}, "lacks ['B']"),
+                      ({'t0': {**rec['t0'], 'beta': [1.0, 2.0]}}, 't0.beta'),
+                      ({'emission_band_nm': [600.0, 300.0]}, 'emission_band_nm'),
+                      ({'provenance': {'material': 'water'}}, 'provenance lacks'),
+                      ({'training': {}}, 'training.recipe')]:
+        with pytest.raises(ValueError, match=what.replace('[', r'\[').replace('*', r'\*')):
+            validate_record({**rec, **bad})
+    dedx = {'schema': 1, **_record('dedx')}
+    with pytest.raises(ValueError, match='a dE/dx emitter has no t0'):
+        validate_record({**dedx, 't0': rec['t0']})
+
+
+@pytest.mark.parametrize('emitter', sorted(ROOT.glob('data/*/*/*/emitter.json')),
+                         ids=lambda p: '/'.join(p.parts[-4:-1]))
+def test_every_shipped_emitter_is_a_valid_promoted_record(emitter):
+    validate_record(json.loads(emitter.read_text()), promoted=True)
+
+
+def test_an_installed_emitter_must_be_promoted(tmp_path, monkeypatch):
+    """load_emitter reads data/ as promoted: a training run copied there by hand is refused."""
+    import lucid.siren.emitter as em
+    net = SIREN(hidden_features=8, hidden_layers=1, out_features=1)
+    rec = {k: v for k, v in _record().items() if k not in ('t0', 'emission_band_nm')}
+    write_emitter(tmp_path / 'water' / 'muon' / 'cherenkov', rec,
+                  net.init(jax.random.PRNGKey(0), jnp.zeros((1, 3))))
+    monkeypatch.setattr(em, 'emitter_dir', lambda p, m, k: tmp_path / m / p / k)
+    read_emitter(tmp_path / 'water' / 'muon' / 'cherenkov')
+    with pytest.raises(ValueError, match='lucid-siren-promote'):
+        load_emitter('muon', 'water', 'cherenkov')
 
 
 @pytest.mark.parametrize('particle, kind', [('pion', 'cherenkov'), ('mu-', 'cherenkov'),

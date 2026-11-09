@@ -2,12 +2,13 @@
 
 Training and validation of SIREN emitters on PhotonSim lookup tables. The simulator does not use
 this package; it loads trained emitters through `lucid.siren.emitter`. The command-line workflow
-(`lucid-train-siren`, validation, installing an emitter) is in [`../README.md`](../README.md).
+(`lucid-train-siren`, `lucid-siren-promote`, validation) is in [`../README.md`](../README.md).
 The package `__init__` imports nothing, so import the module you need.
 
 | module | contents |
 |---|---|
 | `train.py` | the `lucid-train-siren` command (`python -m lucid.siren.training.train`) |
+| `promote.py` | the `lucid-siren-promote` command: a training run, with the t0 fit and band, into `data/` |
 | `validate.py` | validation of a trained emitter (`python -m lucid.siren.training.validate`) |
 | `trainer.py` | `Recipe` and `SIRENTrainer` |
 | `nominal.json` | the recipe of every shipped emitter |
@@ -43,7 +44,8 @@ trainer.save_emitter('output/training')         # emitter.json + weights.npz
   `add_callback(fn)` registers `fn(trainer, step)`. `save_emitter(dir)` writes through
   `lucid.siren.emitter.write_emitter`.
 - `PhotonSimDataset`: reads `data/photon_table_average` or `data/dedx_table_average`, scales
-  inputs to [-1, 1] and log-scales targets to [0, 1], keeps a fraction of the near-zero bins
+  inputs to [-1, 1] and log-scales targets to [0, 1] (`normalize_inputs` and `encode_target` of
+  `lucid.siren.emitter`, which inference inverts), keeps a fraction of the near-zero bins
   (`zero_threshold`, `zero_keep_frac`), splits train and validation, and can weight batches
   across energies (`energy_balance`) and by target value (`target_importance`).
 - `TrainingMonitor` reads `training_history.json` from a training directory and plots progress;
@@ -60,7 +62,8 @@ attributes.
 A training run writes to its output directory:
 
 - `emitter.json` and `weights.npz`: the emitter, with its domain, decoding, the table's s_max and
-  N_photons fits, the recipe, the losses and the commit;
+  N_photons fits, the recipe, the losses and the commit, but no t0 fit or emission band (added
+  when `lucid-siren-promote` installs it);
 - `recipe.json`: the resolved recipe, written at the start;
 - `training_history.json`: train and validation loss, learning rate, step;
 - `checkpoint_step_<N>.npz` with `--checkpoint-every`;

@@ -1,9 +1,9 @@
 {
   "name": "example_water_mu",
-  "description": "Example scan config for water/mu- SIREN training. Demonstrates the full knob set (energy_balance, target_importance, zero_threshold, etc.). Override any of these in `runs` to fan out hyperparameter variations. Edit and copy to a new name for your own scans.",
+  "description": "Example scan config for water/mu- SIREN training. h5_path names user_paths.sh variables as ${VAR}; partition and account come from user_paths.sh. Demonstrates the full knob set (energy_balance, target_importance, zero_threshold, etc.). Override any of these in `runs` to fan out hyperparameter variations. Edit and copy to a new name for your own scans.",
 
   "baseline": {
-    "h5_path":           "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/muon/photon_lookup_table.h5",
+    "h5_path":           "${SIREN_INPUTS_BASE_PATH}/training_inputs/water/lookup_tables/muon/photon_lookup_table.h5",
 
     "num_steps":         30000,
     "learning_rate":     1e-4,
@@ -29,9 +29,7 @@
     {"batch_size": 50000, "grad_clip_norm": 5.0}
   ],
 
-  "slurm": {
-    "partition": "turing",
-    "account":   "mli:cider-ml",
+  "resources": {
     "time":      "04:00:00",
     "memory":    "32000",
     "cpus":      "4",

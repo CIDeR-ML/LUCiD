@@ -1,4 +1,4 @@
-"""Cluster-agnostic planning for SIREN training hyperparameter scans (Stage 3).
+"""Cluster-agnostic planning for SIREN training hyperparameter scans.
 
 A scan config defines a `baseline` dict + a `runs` list of explicit
 per-run override dicts. For each run we:
@@ -11,7 +11,7 @@ per-run override dicts. For each run we:
   4. Build the `lucid-train-siren` CLI argument list.
 
 The cluster-specific part (which submit-description to write per run,
-which command to use to submit it) lives in `cluster.py`.
+which command to use to submit it) lives in `lucid.production.platform.adapters`.
 """
 
 from __future__ import annotations

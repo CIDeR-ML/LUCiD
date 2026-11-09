@@ -19,7 +19,7 @@ lucid/production/
 │   ├── fanout.py                  splits a config into jobs and writes their submit files
 │   ├── configs/                   {GeV,SN,Solar,Test}/NN_name.json
 │   └── scripts/                   submit_all_configs.sh, verify_jobs.py, monitor_jobs.*.sh, cleanup
-├── siren_inputs/              SIREN training inputs (stage 1), smax/ (stage 0), train_siren/ (stage 3)
+├── siren_inputs/              SIREN training inputs (stage 1), smax/ (stage 0), t0/ (stage 3), train_siren/ (stage 4)
 ├── qa/                        validation studies
 └── derived_views/             derived datasets (relabelling, de-piling)
 ```

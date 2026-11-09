@@ -39,7 +39,7 @@ from lucid.production.platform.adapters import get_adapter  # noqa: E402
 from lucid.production.siren_inputs.siren_planning import (  # noqa: E402
     build_cells, find_photonsim_dir, parse_schedule, write_per_cell_config,
 )
-from lucid.production.platform.user_paths import load_user_paths  # noqa: E402
+from lucid.production.platform.user_paths import load_user_paths, missing_settings  # noqa: E402
 
 
 USER_PATHS_DEFAULT = SCRIPT_DIR.parent / "platform" / "user_paths.sh"
@@ -287,6 +287,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     env = load_user_paths(args.user_paths)
     adapter = get_adapter(env)
+    missing = missing_settings(env, "LUCID_IMAGE_PATH")
+    if not args.output_base and not (env.get("SIREN_OUTPUT_BASE_PATH")
+                                     or env.get("OUTPUT_BASE_PATH")):
+        missing.append("SIREN_OUTPUT_BASE_PATH (or OUTPUT_BASE_PATH, or -o)")
+    if missing:
+        print(f"error: not set in {args.user_paths}: {', '.join(missing)}", file=sys.stderr)
+        return 2
     if args.array and adapter.submit_cmd != "sbatch":
         print("error: --array is only supported on SLURM clusters (sbatch).",
               file=sys.stderr)

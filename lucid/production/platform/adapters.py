@@ -110,7 +110,15 @@ class ClusterAdapter(ABC):
         raise NotImplementedError
 
     def render_train_run(self, *, run_dir: Path, run_name: str,
-                         cli_args: str, slurm: Dict[str, str]) -> str: ...
+                         cli_args: str, resources: Dict[str, str]) -> str:
+        """Submit description for one ``lucid-train-siren`` run (a GPU job).
+
+        ``resources`` is the train_siren generator's: ``partition`` and ``account`` (Slurm, from
+        ``user_paths.sh``), ``time``, ``memory``, ``cpus``, ``gpus`` and, on HTCondor,
+        ``flavour``. ``LUCID_ENV_BASE`` (the user site with the GPU jaxlib) is exported as
+        ``PYTHONUSERBASE``; ``LUCID_DEV_PATH``, when set, is bound over ``/opt/LUCiD``.
+        """
+        raise NotImplementedError
 
 
 # --- SLURM -------------------------------------------------------------------
@@ -293,19 +301,16 @@ class SlurmAdapter(ClusterAdapter):
             f"\necho \"Job ended: $(date)\"\n"
         )
 
-    def render_train_run(self, *, run_dir, run_name, cli_args, slurm):
-        # train_siren has its own SLURM defaults (GPU job, longer wall),
-        # passed in `slurm` (already merged with config overrides).
-        gpus = slurm.get("gpus", "1")
-        cpus = slurm.get("cpus", "4")
-        memory = slurm.get("memory", "32000")
-        time = slurm.get("time", "04:00:00")
-        partition = slurm["partition"]
+    def render_train_run(self, *, run_dir, run_name, cli_args, resources):
+        gpus = resources.get("gpus", "1")
+        cpus = resources.get("cpus", "4")
+        memory = resources.get("memory", "32000")
+        time = resources.get("time", "04:00:00")
         # Use a single-segment "job" log stem; train_siren doesn't carry job_id.
         out = (
             f"#!/bin/bash\n"
-            f"#SBATCH --partition={partition}\n"
-            f"#SBATCH --account={slurm.get('account', self.env.get('SLURM_ACCOUNT', ''))}\n"
+            f"#SBATCH --partition={resources['partition']}\n"
+            f"#SBATCH --account={resources['account']}\n"
             f"#SBATCH --job-name=train_{run_name}\n"
             f"#SBATCH --output={run_dir}/job-%j.out\n"
             f"#SBATCH --error={run_dir}/job-%j.err\n"
@@ -325,8 +330,7 @@ class SlurmAdapter(ClusterAdapter):
             f"# to the container, otherwise JAX falls back to CPU.\n"
             f"export APPTAINERENV_PYTHONUSERBASE=\"{self.env['LUCID_ENV_BASE']}\"\n"
             f"\n"
-            f"apptainer exec --nv -B {self.apptainer_binds} \\\n"
-            f"    -B {self.env['LUCID_DEV_PATH']}:/opt/LUCiD \\\n"
+            f"{self._container_exec(use_gpu=True)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    lucid-train-siren {cli_args}\n"
             f"\n"
@@ -457,17 +461,13 @@ class NerscAdapter(SlurmAdapter):
             f"\necho \"Job ended: $(date)\"\n"
         )
 
-    def render_train_run(self, *, run_dir, run_name, cli_args, slurm):
-        # train_siren's GPU/SLURM defaults (partition=roma, account=mli:cider-ml)
-        # are SLAC values and aren't wired for Perlmutter yet. Fail loudly
-        # rather than emit a sbatch that calls a bare `apptainer` not on PATH.
+    def render_train_run(self, *, run_dir, run_name, cli_args, resources):
+        # Perlmutter's GPU jobs need --constraint=gpu and the _g account; not wired yet. Fail
+        # loudly rather than emit a sbatch that calls a bare `apptainer` not on PATH.
         raise NotImplementedError(
-            "train_siren is not yet wired for NERSC/Perlmutter. "
-            "See LUCiD/docs/guides/production/clusters.md (NERSC, train_siren): the "
-            "GPU defaults in siren_inputs/train_siren/generate_jobs.py still carry SLAC "
-            "values (partition=roma, account=mli:cider-ml) and need dune_g + "
-            "--constraint=gpu before GPU training can run here."
-        )
+            "train_siren is not yet wired for NERSC/Perlmutter: its GPU job needs "
+            "--constraint=gpu and the SLURM_ACCOUNT_GPU account "
+            "(docs/guides/production/clusters.md, NERSC).")
 
 
 # --- HTCondor (LXPLUS) --------------------------------------------------------
@@ -764,20 +764,13 @@ class HTCondorAdapter(ClusterAdapter):
             f"queue\n"
         )
 
-    def render_train_run(self, *, run_dir, run_name, cli_args, slurm):
-        # `slurm` is the merged SLURM_DEFAULTS+config block; we ignore its
-        # SLURM-specific entries and read cpus/memory/gpus from it.
-        cpus = slurm.get("cpus", "4")
-        memory_mb = slurm.get("memory", "32000")
-        gpus = slurm.get("gpus", "1")
-        flavour = slurm.get("flavour") or self._train_flavour()
+    def render_train_run(self, *, run_dir, run_name, cli_args, resources):
+        # Reads cpus/memory/gpus/flavour from `resources`; partition and account are Slurm's.
+        cpus = resources.get("cpus", "4")
+        memory_mb = resources.get("memory", "32000")
+        gpus = resources.get("gpus", "1")
+        flavour = resources.get("flavour") or self._train_flavour()
         log_dir = self._log_dir(Path(run_dir))
-
-        # train_siren wants LUCID_DEV_PATH bound to /opt/LUCiD; this is the
-        # only adapter that hard-requires the dev-loop bind.
-        binds = [self.apptainer_binds, f"{self.env['LUCID_DEV_PATH']}:/opt/LUCiD"]
-        if self.env.get("PHOTONSIM_DEV_PATH"):
-            binds.append(f"{self.env['PHOTONSIM_DEV_PATH']}:/opt/PhotonSim")
 
         return (
             f"# Auto-generated by lucid.production.platform.adapters\n"
@@ -790,7 +783,7 @@ class HTCondorAdapter(ClusterAdapter):
             f"error                   = {log_dir}/job-$(ClusterId).$(ProcId).err\n"
             f"log                     = {log_dir}/job-$(ClusterId).$(ProcId).log\n"
             f"MY.SingularityImage     = \"{self.env['LUCID_IMAGE_PATH']}\"\n"
-            f"MY.SingularityBind      = \"{','.join(binds)}\"\n"
+            f"MY.SingularityBind      = \"{self._binds_for_classad()}\"\n"
             f"+JobBatchName           = \"train_{run_name}\"\n"
             f"request_cpus            = {cpus}\n"
             f"request_memory          = {memory_mb}\n"

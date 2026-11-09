@@ -7,17 +7,17 @@ Train a SIREN emitter on a PhotonSim lookup table (``lucid-build-photon-table`` 
 table. The working point is ``--recipe`` (default: the committed ``nominal.json``, the recipe of
 every shipped emitter), with any field overridden by its flag. Into ``--output-dir`` go:
 
-- ``emitter.json`` + ``weights.npz``: the emitter (copy both to
-  ``data/<material>/<particle>/<kind>/`` to use it), with the recipe and losses recorded;
+- ``emitter.json`` + ``weights.npz``: the emitter, with the recipe and losses recorded
+  (``lucid-siren-promote`` installs it in ``data/<material>/<particle>/<kind>/``);
 - ``training_history.json``, ``final_training_progress.pdf``, ``prediction_plots/``, and
   ``checkpoint_step_<N>.npz`` with ``--checkpoint-every``.
 
 Usage:
     lucid-train-siren --h5-path T --output-dir D [--recipe R] [--<field> V ...]
-                      [--init W] [--t0 F] [--seed N]
+                      [--init W] [--seed N]
 
-    # a seed of the nominal recipe, with the t0 fit recorded for the simulator
-    lucid-train-siren --h5-path photon_lookup_table.h5 --output-dir runs/s1 --seed 1 --t0 t0.json
+    # a seed of the nominal recipe
+    lucid-train-siren --h5-path photon_lookup_table.h5 --output-dir runs/s1 --seed 1
     # fine-tune water's emitter for a new material
     lucid-train-siren --h5-path wbls/photon_lookup_table.h5 --output-dir runs/wbls \\
         --init data/water/muon/cherenkov/weights.npz --num-steps 20000
@@ -65,9 +65,6 @@ def main(argv=None) -> int:
                             help=f'override the recipe field {f.name}')
     parser.add_argument('--init', type=Path, default=None,
                         help='weights.npz to start from (an emitter or a checkpoint)')
-    parser.add_argument('--t0', type=Path, default=None,
-                        help="calculate_t0.py's t0.json, recorded into a Cherenkov emitter "
-                             "(the simulator needs it)")
     parser.add_argument('--log-every', type=int, default=10, help='history interval (steps)')
     parser.add_argument('--checkpoint-every', type=int, default=0,
                         help='write checkpoint_step_<N>.npz every N steps (default 0: never)')
@@ -99,7 +96,6 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     recipe = Recipe.load(args.recipe, **{f.name: getattr(args, f.name) for f in fields
                                          if getattr(args, f.name) is not None})
-    t0 = json.loads(args.t0.read_text()) if args.t0 else None
     # The resolved recipe, for a run in progress (TrainingMonitor); emitter.json records it too.
     (out / 'recipe.json').write_text(json.dumps(dataclasses.asdict(recipe), indent=1) + '\n')
     logger.info("recipe: %s", dataclasses.asdict(recipe))
@@ -138,7 +134,7 @@ def main(argv=None) -> int:
     trainer.train()
     trainer.save_history(out)
     plt.close(trainer.plot_training_history(save_path=out / 'final_training_progress.pdf'))
-    trainer.save_emitter(out, t0)
+    trainer.save_emitter(out)
     return 0
 
 

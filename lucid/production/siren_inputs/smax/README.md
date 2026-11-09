@@ -9,7 +9,7 @@ Because this stage computes s_max, its macros do not set `/output/smax`.
 
 Cluster setup (Slurm or HTCondor) is in
 [cluster abstraction](../../../../docs/guides/production/cluster-abstraction.md); the whole
-pipeline is in [SIREN training inputs](../../../../docs/guides/production/siren-training-inputs.md).
+pipeline is in [Training a SIREN emitter](../../../../docs/guides/production/siren-training-inputs.md).
 
 ## Quick start
 

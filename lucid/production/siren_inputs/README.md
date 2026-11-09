@@ -1,20 +1,23 @@
 # SIREN training inputs
 
 Cluster fan-out for the PhotonSim scans that SIREN emitters are trained on. Each cell of a scan
-is one (particle, energy) and fills the `PhotonHist_AngleDistanceNorm` histogram (opening angle
-vs `s / s_max`). The same code runs on Slurm (S3DF, NERSC) and HTCondor (LXPLUS); the target is
+is one (particle, energy) and fills, against `s / s_max`, the `PhotonHist_AngleDistanceNorm`
+(opening angle), `dEdxHist_DistanceNorm` (dE/dx) and `PhotonHist_TimeDistanceNorm` (photon
+delay) histograms: the first two make the lookup tables, the third the t0 fit. The same code runs on Slurm (S3DF, NERSC) and HTCondor (LXPLUS); the target is
 chosen by the `user_paths.sh` copied into `../platform/`. The whole pipeline, from the s_max scan
-to a trained emitter, is in
-[SIREN training inputs](../../../docs/guides/production/siren-training-inputs.md); cluster
+to an installed emitter, is in
+[Training a SIREN emitter](../../../docs/guides/production/siren-training-inputs.md); cluster
 setup is in [cluster abstraction](../../../docs/guides/production/cluster-abstraction.md) and
 [clusters](../../../docs/guides/production/clusters.md).
 
 | stage | where |
 |---|---|
-| s_max(E) scan and fit | [`smax/`](smax/README.md) |
-| training-input scan (this directory) | `generate_jobs.py`, `configs/` |
-| lookup table | `lucid-build-photon-table`, `lucid-build-dedx-table` |
-| training sweeps | [`train_siren/`](train_siren/README.md) |
+| 0. s_max(E) scan and fit | [`smax/`](smax/README.md) |
+| 1. training-input scan (this directory) | `generate_jobs.py`, `configs/` |
+| 2. lookup tables | `lucid-build-photon-table`, `lucid-build-dedx-table` |
+| 3. t0 fit, from the stage 1 cells | [`t0/`](t0/README.md) |
+| 4. training sweeps | [`train_siren/`](train_siren/README.md) |
+| 5. install | `lucid-siren-promote` |
 
 Compared with dataset production (`../dataprod/`), these jobs fire the particle along +z
 (`/gun/direction 0 0 1`, the axis PhotonSim's angle histograms assume), set `/output/smax` per
@@ -36,8 +39,10 @@ RUN=../platform/run_in_container.sh
 $RUN lucid.production.siren_inputs.generate_jobs -c configs/water_mu_test.json
 $RUN lucid.production.siren_inputs.generate_jobs -c configs/water_mu_test.json -s
 
-# 3. The full scans (10k events per cell, sub-jobs of about an hour)
+# 3. The full scans (10k events per cell, sub-jobs of about an hour; mu- below 500 MeV, under
+#    the s_max fit's range, is water_mu_lowE.json)
 $RUN lucid.production.siren_inputs.generate_jobs -c configs/water_mu.json -s
+$RUN lucid.production.siren_inputs.generate_jobs -c configs/water_mu_lowE.json -s
 $RUN lucid.production.siren_inputs.generate_jobs -c configs/water_el.json -s
 
 # 4. After each drain, list and resubmit failed or preempted sub-jobs; repeat until none are listed
@@ -137,6 +142,6 @@ python3 <PhotonSim>/tools/siren_inputs/plot_norm_hists.py \
     --input-dir <OUT> --particles mu- --materials water     # angle_distance_norm_<material>_<particle>.png
 ```
 
-Then build the lookup table with `lucid-build-photon-table` (or `lucid-build-dedx-table`) and
-train ([SIREN training inputs](../../../docs/guides/production/siren-training-inputs.md),
-[`train_siren/`](train_siren/README.md)).
+Then build the lookup tables with `lucid-build-photon-table` and `lucid-build-dedx-table`, fit
+t0 ([`t0/`](t0/README.md)), train ([`train_siren/`](train_siren/README.md)) and promote
+([Training a SIREN emitter](../../../docs/guides/production/siren-training-inputs.md)).

@@ -2,15 +2,16 @@
 """The acceptance checks of a trained SIREN emitter.
 
     python -m lucid.siren.training.validate energy   [--material M] [--particle P] [--kind {cherenkov,dedx}] [--energies E1,E2,..] [--threshold T] [--output DIR]
-    python -m lucid.siren.training.validate integral [--material M] [--particle P] [--energies E1,E2,.. | START,END,N] [--nphot N] [--output DIR]
+    python -m lucid.siren.training.validate integral --h5-path T [--material M] [--particle P] [--energies E1,E2,.. | START,END,N] [--nphot N] [--output DIR]
     python -m lucid.siren.training.validate rays     [--material M] [--particle P] [--energies ...] [--nphot N] [--output DIR]
-    python -m lucid.siren.training.validate all      [--material M] [--particle P] [--kind ...] [--output DIR]
+    python -m lucid.siren.training.validate all      [--h5-path T] [--material M] [--particle P] [--kind ...] [--output DIR]
 
 ``energy`` draws the emitter's density over (opening angle or dE/dx, distance) at a few energies
 (the paper's ``fig_siren_profile``); ``integral`` compares the shape's phase-space integral with
-N_photons(E) and the table sum (it needs the lookup table); ``rays`` histograms the generated rays.
-``integral`` and ``rays`` are Cherenkov only. ``--material`` names the emitter set
-(``data/<material>/``).
+N_photons(E) and the table sum (it needs the photon lookup table the emitter was trained on,
+``--h5-path``; no table is distributed); ``rays`` histograms the generated rays. ``integral`` and
+``rays`` are Cherenkov only, and ``all`` of a Cherenkov emitter needs ``--h5-path``.
+``--material`` names the emitter set (``data/<material>/``).
 """
 
 import os
@@ -45,22 +46,16 @@ class PhotonSimValidator:
             material: the emitter set (``data/<material>/``), e.g. 'water'
             particle: 'muon' or 'electron'
             kind: 'cherenkov' or 'dedx'; the integral and ray studies are Cherenkov only
-            h5_path: Optional explicit h5 file path
+            h5_path: the photon lookup table, for the integral study only
         """
         # Store material and particle
         self.material = material
         self.particle = particle
         self.kind = kind
         
-        # Get base directory path
-        base_dir = base_dir_path()
-        
-        # Default h5 path with material/particle structure. The lookup table is
-        # only needed by integral_analysis (the "integral" subcommand); every
-        # other study evaluates the SIREN model alone, so we load it lazily via
-        # the ``dataset`` property instead of requiring it here.
-        if h5_path is None:
-            h5_path = Path(base_dir) / 'data' / material / particle / 'photon_lookup_table.h5'
+        # The lookup table is only needed by integral_analysis (the "integral" subcommand); every
+        # other study evaluates the SIREN model alone, so it is loaded lazily via the ``dataset``
+        # property instead of being required here.
         self._h5_path = h5_path
         self._dataset = None
 
@@ -97,14 +92,12 @@ class PhotonSimValidator:
         run without it. Raises a clear error here if the table is missing.
         """
         if self._dataset is None:
+            if self._h5_path is None:
+                raise ValueError("the integral study needs the photon lookup table the emitter "
+                                 "was trained on: pass --h5-path (h5_path=)")
             h5_path = Path(self._h5_path)
             if not h5_path.exists():
-                raise FileNotFoundError(
-                    f"HDF5 lookup table not found at {h5_path}\n"
-                    f"Please ensure the PhotonSim table exists for "
-                    f"{self.material}/{self.particle} (only needed by the "
-                    f"'integral' study)."
-                )
+                raise FileNotFoundError(f"photon lookup table not found: {h5_path}")
             print(f"Loading dataset from: {h5_path}")
             self._dataset = PhotonSimDataset(h5_path)
         return self._dataset
@@ -501,6 +494,8 @@ def main():
     integral_parser = subparsers.add_parser('integral', help='Run n-photon integral analysis')
     integral_parser.add_argument('--material', type=str, default=argparse.SUPPRESS, help='Material type (overrides global setting)')
     integral_parser.add_argument('--particle', type=str, default=argparse.SUPPRESS, help='Particle type (overrides global setting)')
+    integral_parser.add_argument('--h5-path', type=Path, required=True,
+                                 help='the photon lookup table the emitter was trained on')
     integral_parser.add_argument('--energies', type=str, help='Comma-separated energies or range (e.g., 100,2000,100)')
     integral_parser.add_argument('--nphot', type=int, default=1000000, help='Number of photons')
     integral_parser.add_argument('--output', type=str, help='Output directory')
@@ -522,6 +517,8 @@ def main():
     all_parser.add_argument('--material', type=str, default=argparse.SUPPRESS, help='Material type (overrides global setting)')
     all_parser.add_argument('--particle', type=str, default=argparse.SUPPRESS, help='Particle type (overrides global setting)')
     all_parser.add_argument('--kind', choices=('cherenkov', 'dedx'), default=argparse.SUPPRESS, help='Emitter kind (overrides global setting)')
+    all_parser.add_argument('--h5-path', type=Path, default=None,
+                            help='the photon lookup table (needed for a Cherenkov emitter)')
     all_parser.add_argument('--output', type=str, help='Output directory')
     all_parser.add_argument('--save', action='store_true', help='Save results to output directory')
     all_parser.add_argument('--notebook-mode', action='store_true', default=argparse.SUPPRESS, help='Force notebook mode for plot display')
@@ -545,7 +542,12 @@ def main():
     print(f"  Material: {material}")
     print(f"  Particle: {particle}")
     
-    validator = PhotonSimValidator(material=material, particle=particle, kind=args.kind)
+    h5_path = getattr(args, 'h5_path', None)
+    if args.command == 'all' and args.kind == 'cherenkov' and h5_path is None:
+        parser.error("all runs the integral study of a Cherenkov emitter, which needs --h5-path "
+                     "(the photon lookup table it was trained on)")
+    validator = PhotonSimValidator(material=material, particle=particle, kind=args.kind,
+                                   h5_path=h5_path)
     
     # Parse energy ranges
     def parse_energies(energy_str):

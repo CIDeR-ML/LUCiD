@@ -41,20 +41,21 @@
  "provenance": {
   "material": "water",
   "particle": "mu-",
-  "emission": "dedx",
-  "data_type": "dedx",
-  "selected_from_scan": "water_mu_dedx_seed_scan_nominal",
-  "selected_seed": "seed9",
-  "selection_criterion": "lowest final val_loss across 10-seed scan",
-  "num_steps": 150000,
+  "table": "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/muon/dedx_lookup_table.h5",
+  "steps": 150000,
   "losses": {
    "final_train": 0.0081,
    "final_val": 0.008425,
    "best_val": 0.007885
   },
-  "trained_against_h5": "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/muon/dedx_lookup_table.h5",
-  "source_scan_dir": "/sdf/data/neutrino/cjesus/SIREN_files/training_tests/water_mu_dedx_seed_scan_nominal/seed9",
-  "promoted_at_utc": "2026-05-28T16:13:51.702814+00:00"
+  "init": null,
+  "commit": null,
+  "trained_at_utc": null,
+  "run": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/training_tests/water_mu_dedx_seed_scan_nominal/seed9",
+  "selection": "water_mu_dedx_seed_scan_nominal/seed9: lowest final val_loss across 10-seed scan",
+  "smax_fit": "PhotonSim/data/water/mu-/smax_fit.csv",
+  "promoted_at_utc": "2026-05-28T16:13:51.702814+00:00",
+  "promoted_commit": null
  },
  "training": {
   "recipe": {

@@ -95,20 +95,21 @@
  "provenance": {
   "material": "water",
   "particle": "mu-",
-  "emission": "cherenkov",
-  "data_type": "photon",
-  "selected_from_scan": "water_mu_seed_scan_p100_ti02_n150k",
-  "selected_seed": "seed1",
-  "selection_criterion": "lowest final val_loss across 10-seed scan",
-  "num_steps": 150000,
+  "table": "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/muon/photon_lookup_table.h5",
+  "steps": 150000,
   "losses": {
    "final_train": 0.017735,
    "final_val": 0.018217,
    "best_val": 0.016985
   },
-  "trained_against_h5": "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/muon/photon_lookup_table.h5",
-  "source_scan_dir": "/sdf/data/neutrino/cjesus/SIREN_files/training_tests/water_mu_seed_scan_p100_ti02_n150k/seed1",
-  "promoted_at_utc": "2026-05-22T06:49:29.056196+00:00"
+  "init": null,
+  "commit": null,
+  "trained_at_utc": null,
+  "run": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/training_tests/water_mu_seed_scan_p100_ti02_n150k/seed1",
+  "selection": "water_mu_seed_scan_p100_ti02_n150k/seed1: lowest final val_loss across 10-seed scan",
+  "smax_fit": "PhotonSim/data/water/mu-/smax_fit.csv",
+  "promoted_at_utc": "2026-05-22T06:49:29.056196+00:00",
+  "promoted_commit": null
  },
  "training": {
   "recipe": {

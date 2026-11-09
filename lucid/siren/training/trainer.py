@@ -5,7 +5,8 @@ The training working point is data: :class:`Recipe`, read from ``nominal.json`` 
 every shipped emitter) with any field overridden. :class:`SIRENTrainer` trains a SIREN on a
 :class:`~lucid.siren.training.dataset.PhotonSimDataset` and writes the result as an emitter
 (``emitter.json`` + ``weights.npz``) through :func:`lucid.siren.emitter.write_emitter`, the
-loader's own schema, with the recipe, losses and commit recorded in it.
+loader's own schema, with the recipe, losses and commit recorded in it. ``lucid-siren-promote``
+(:mod:`lucid.siren.training.promote`) adds the t0 fit and emission band and installs it.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ import optax
 from flax.training import train_state
 import matplotlib.pyplot as plt
 
-from lucid.siren.emitter import T0_FORM, read_weights, write_emitter, write_weights
+from lucid.siren.emitter import read_weights, write_emitter, write_weights
 from lucid.siren.net import SIREN
 from lucid.siren.training.dataset import table_curves
 
@@ -344,12 +345,9 @@ class SIRENTrainer:
 
         return fig
 
-    def emitter_record(self, t0: Optional[dict] = None) -> dict:
-        """The ``emitter.json`` content of the trained emitter.
-
-        ``t0`` is a ``calculate_t0.py`` fit (its ``t0.json``), recorded into a Cherenkov emitter
-        for the simulator's emission time.
-        """
+    def emitter_record(self) -> dict:
+        """The ``emitter.json`` content of the trained emitter: a training run's, without the t0
+        fit and emission band that ``lucid-siren-promote`` adds when it installs it."""
         from lucid.utils import git_commit
         ds, r = self.dataset, self.recipe
         axis2 = 'angle_rad' if ds.kind == 'cherenkov' else 'dedx_kev_per_mm'
@@ -366,8 +364,6 @@ class SIRENTrainer:
                's_max_mm': s_max_mm}
         if ds.kind == 'cherenkov':
             rec['n_photons'] = n_photons
-            if t0 is not None:
-                rec['t0'] = _t0_block(t0)
         meta = {k: (v.decode() if isinstance(v, bytes) else v) for k, v in ds.metadata.items()}
         h = self.history
         rec['provenance'] = {
@@ -382,19 +378,7 @@ class SIRENTrainer:
         rec['training'] = {'recipe': dataclasses.asdict(r)}
         return rec
 
-    def save_emitter(self, output_dir: Path, t0: Optional[dict] = None):
+    def save_emitter(self, output_dir: Path):
         """Write the trained emitter (``emitter.json`` + ``weights.npz``) into ``output_dir``."""
-        write_emitter(output_dir, self.emitter_record(t0), self.state.params)
+        write_emitter(output_dir, self.emitter_record(), self.state.params)
         logger.info(f"Saved the emitter to {output_dir}")
-
-
-def _t0_block(t0: dict) -> dict:
-    """A ``calculate_t0.py`` fit (``t0.json``) as the emitter's ``t0`` block."""
-    if t0['form'] != T0_FORM:
-        raise ValueError(f"t0 fit of form {t0['form']!r}; expected {T0_FORM!r}")
-    source = dict(t0.get('provenance', {}))
-    if 'source' in source:
-        source['tool'] = source.pop('source')
-    return {'form': t0['form'], 'c_mm_per_ns': t0['c_mm_per_ns'],
-            'log10_A': t0['A']['log10_poly_logE'], 'log10_lambda_mm': t0['lambda']['log10_poly_logE'],
-            'beta': t0['beta']['poly_logE'], 'source': source}

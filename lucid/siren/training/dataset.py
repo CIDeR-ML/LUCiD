@@ -16,7 +16,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from lucid.siren.emitter import SMAX_PARAMS, _normalize
+from lucid.siren.emitter import (SMAX_PARAMS, decode_target, encode_target, normalize_inputs,
+                                 target_range)
 
 logger = logging.getLogger(__name__)
 
@@ -205,16 +206,13 @@ class PhotonSimDataset:
         self.normalized_bounds['input_max'] = np.array([hi for _, hi in self.domain])
         self.data['inputs_normalized'] = self.normalize(self.data['inputs'])
         
-        # Log-normalize targets: offset avoids log(0) while staying small relative to typical target values
+        # The training target, encode_target (lucid.siren.emitter): log10(t + offset) scaled to
+        # [0, 1] over the table; the offset avoids log(0) and is small against typical targets.
         self.data['targets_log'] = np.log10(self.data['targets'] + self.zero_threshold)
-        self.normalized_bounds['target_min'] = self.data['targets_log'].min()
-        self.normalized_bounds['target_max'] = self.data['targets_log'].max()
-        
-        # Normalize log targets to [0, 1] range for training
-        self.data['targets_log_normalized'] = (
-            (self.data['targets_log'] - self.normalized_bounds['target_min']) / 
-            (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min'])
-        )
+        lo, hi = target_range(self.data['targets'], self.zero_threshold)
+        self.normalized_bounds['target_min'], self.normalized_bounds['target_max'] = lo, hi
+        self.data['targets_log_normalized'] = encode_target(self.data['targets'], lo, hi,
+                                                            self.zero_threshold)
         
         # Filter data but keep a fraction of zero values as low-density anchors.
         # "Zero" is defined as target <= self.zero_threshold (which is also the
@@ -359,7 +357,7 @@ class PhotonSimDataset:
     def normalize(self, inputs: np.ndarray) -> np.ndarray:
         """Physical ``(n, 3)`` inputs ``[E, axis2, s/s_max]`` to the net's ``[-1, 1]`` inputs."""
         (e0, e1), (a0, a1), (r0, r1) = self.domain
-        return np.asarray(_normalize(jnp.asarray(inputs, jnp.float32), e0, e1, a0, a1, r0, r1))
+        return np.asarray(normalize_inputs(jnp.asarray(inputs, jnp.float32), e0, e1, a0, a1, r0, r1))
 
     def get_sample_input(self) -> jax.Array:
         """Get a sample input for model initialization."""
@@ -457,14 +455,10 @@ class PhotonSimDataset:
         )
         
     def denormalize_targets_from_normalized(self, targets_normalized: np.ndarray) -> np.ndarray:
-        """Convert normalized log targets [0,1] back to original scale."""
-        # First denormalize from [0,1] to log scale
-        targets_log = (
-            targets_normalized * (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min']) +
-            self.normalized_bounds['target_min']
-        )
-        # Then convert from log to linear scale
-        return 10 ** targets_log - self.zero_threshold
+        """Net outputs back to targets, with inference's own :func:`decode_target`."""
+        return np.asarray(decode_target(jnp.asarray(targets_normalized),
+                                        self.normalized_bounds['target_min'],
+                                        self.normalized_bounds['target_max'], self.zero_threshold))
         
     @property
     def has_validation(self) -> bool:

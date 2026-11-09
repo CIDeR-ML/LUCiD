@@ -85,3 +85,15 @@ export DEFAULT_GPUS="0"        # SIREN-input / smax: 0; train_siren overrides
 # HTCondor without rebuilding the container.
 # export LUCID_DEV_PATH="/afs/cern.ch/work/${USER:0:1}/$USER/DIFFSIM/LUCiD"
 # export PHOTONSIM_DEV_PATH="/afs/cern.ch/work/${USER:0:1}/$USER/DIFFSIM/PhotonSim"
+# The t0 stage and analyze.sh run PhotonSim's tools/ and read its
+# data/<material>/<particle>/smax_fit.csv from PHOTONSIM_DEV_PATH, so they need it.
+
+# =============================================================================
+# SIREN training: the GPU jaxlib
+# =============================================================================
+# The image's jaxlib is CPU-only. LUCID_ENV_BASE is a Python user site holding
+# the CUDA plugin for the image's jax (0.4.38); train_siren jobs set it as
+# PYTHONUSERBASE, and refuse to be written without it. Make one with
+#   PYTHONUSERBASE=/path/to/env apptainer exec "$LUCID_IMAGE_PATH" \
+#       /opt/conda/bin/python3 -m pip install --user "jax-cuda12-plugin[with_cuda]==0.4.38"
+export LUCID_ENV_BASE="/afs/cern.ch/work/${USER:0:1}/$USER/DIFFSIM/python_env"
