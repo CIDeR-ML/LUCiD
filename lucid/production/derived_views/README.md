@@ -1,93 +1,76 @@
-# Derived views from a LUCiD dataset (no ROOT, no re-sim)
+# Derived views
 
-A **derived view** is a new labeling/representation produced by re-aggregating or re-grouping the
-four stored HDF5 files (`sensor`, `hits`, `step`, `labl`) only — no PhotonSim ROOT, no re-running
-the forward. This directory holds the ROOT-free transforms plus the non-obvious gotchas so they don't
-have to be re-discovered.
-
-Each script takes `SRC DST <param>` and writes a new dataset; run inside the container:
+Scripts that write a new dataset from an existing one by regrouping or relabelling its four
+HDF5 files (`sensor`, `hits`, `step`, `labl`), with no PhotonSim ROOT file and no new simulation.
+Each takes `SRC DST <param>`; run them in the container:
 
 ```bash
 apptainer exec -B /sdf "$LUCID_IMAGE_PATH" python3 <script> SRC DST <param>
 ```
 
-| Script | What it does | `<param>` |
+| script | what it does | `<param>` |
 |---|---|---|
-| `depile.py` | Splits each pile-up event's N interactions into N separate single-interaction events (~2× events for the 2-vertex configs). | `FILE_INDEX` (one file per call; resumable) |
-| `relabel_segments.py` | Particle re-categorization by deflection angle θ. | `θ` in degrees |
-| `relabel_particles.py` | Keep the stored per-track grouping (`split`) or fold every track into its primary (`merge`). | `split` or `merge` |
-| `relabel_cone.py` | Cherenkov-cone per-hit labels (inside / outside a cone of half-angle θ around the primary direction), written into `emission_process` so the viewer's emission toggle shows them. | `θ` in degrees |
+| `depile.py` | splits each pile-up event's N interactions into N single-interaction events; dark hits and trigger windows are dropped | `FILE_INDEX` (one batch per call) |
+| `relabel_segments.py` | redefines particles by the deflection angle between parent and child tracks (below) | angle in degrees |
+| `relabel_particles.py` | keeps the stored grouping of tracks into particles (`split`) or folds every track into its primary (`merge`) | `split` or `merge` |
+| `relabel_cone.py` | labels each hit inside (1) or outside (0) a cone of the given half-angle around the primary direction, written into `emission_process` so the viewer's emission toggle shows it | half-angle in degrees |
 
-`depile.py` is dataset-agnostic and processes one file index at a time (atomic `.part`→rename,
-resumable — re-running skips files whose dest event count already matches). Drive it across a whole
-dataset with the SLURM array in `submit_depile_array.sbatch` (a template: edit `IMG`, `SCRIPT`,
-`SRC`, `DST`, the log paths and `--array`; its example paths are one user's legacy
-`config_000018` pile-up set).
+`depile.py` writes each batch atomically and skips batches already complete, so it can be
+rerun. `submit_depile_array.sbatch` runs it over a whole dataset as a Slurm array; it is a
+template, so set `IMG`, `SCRIPT`, `SRC`, `DST`, the log paths and `--array` first.
 
-## The core idea
-The finest truth lives in `step/sensor_hits` = one row per **(segment, sensor, emission_process)**
-with `PE`/`T`. Everything coarser is an aggregation of it:
-- `sensor/` = sum over everything (per PMT) — the smeared readout.
-- `hits/`   = grouped by particle (per particle, sensor, process).
+The dataset format is in the [dataset schema](../../../docs/reference/dataset-schema.md).
 
-So any view is a **group-by / filter / scatter-sum** over stored columns. Pick: what to **filter**
-(e.g. `emission_process`), what to **group by** (`sensor_idx`, `particle_idx`, `segment_idx→track_idx`),
-and how to **reduce** (PE→sum, T→min). (The `step` modality was formerly called `edep`; the per-segment
-`edep` energy-deposit *value* dataset inside it is unchanged.)
+## How views are built
 
-## What drives each thing in the viewer (so you rewrite the right field)
-| To change… | Rewrite in the dataset files |
+The finest truth is `step/.../sensor_hits`: one row per (segment, sensor, emission process),
+with `PE` and `T`. `hits/` is that grouped by (particle, sensor, process), and `sensor/` is the
+digitized total per PMT. A view is therefore a filter, a group-by and a reduction (PE summed, T
+minimum) over stored columns.
+
+To change what the viewer shows, rewrite:
+
+| to change | rewrite |
 |---|---|
-| per-PMT Cherenkov vs scintillation | `hits/…/emission_process` and `step/…/sensor_hits/emission_process` (int8: 0=Cher, 1=scint) |
-| **Particle** label coloring (PMTs) | `labl/per_track/particle_idx` (viewer maps segment→track→particle via this) |
-| Particle **list/count + species label** | `labl/per_particle/*` (genealogy, category, …) **AND the `n_particles` attr** (see gotcha) |
-| hit-level particle | `hits/…/particle_idx` |
+| Cherenkov vs scintillation per PMT | `hits/.../emission_process` and `step/.../sensor_hits/emission_process` (int8: 0 Cherenkov, 1 scintillation) |
+| particle colouring of PMTs and segments | `labl/.../per_track/particle_idx` (the viewer maps segment to track to particle) |
+| the particle list and species | `labl/.../per_particle/*` and the event's `n_particles` attribute |
+| the particle of each hit | `hits/.../particle_idx` |
 
-- The viewer names a particle by its **genealogy leaf pdg** (`per_particle/genealogy_data` last entry),
-  overridden to π⁰ if any chain track is pdg 111. So a π⁰→γ EM shower shows as **gamma** unless you
-  fold it into the parent hadron.
-- Event selector is **0-based** internally (`event_NNN`, `eventKey=padStart(3)`).
+The viewer names a particle by the PDG code of the last track in its genealogy
+(`per_particle/genealogy_data`), or π⁰ if any track in the chain is a π⁰.
 
-## ⚠ Gotchas (hard-won)
-1. **`n_particles` attribute must be kept in sync.** If you rebuild `labl/per_particle` to a new row
-   count, you MUST also set `h[event].attrs["n_particles"] = N`. The viewer trusts this attr and loops
-   over it — a stale (larger) value makes it read past your table and render **phantom particles**
-   (garbage "gamma/other" entries). Same for `hits`: update `n_particle_hits` (and `n_particles` if
-   present). This was a real bug; symptom = "extra gamma particles that aren't in the file."
-2. **Geometry & medium come from `--detector`, not the dataprod `material` field.** (Generation, not
-   views, but bites the same way.) The WAND detectors and `SK_like` are
-   water ⇒ Cherenkov-only. See [`../README.md`](../README.md).
-3. **What you can re-derive downstream is bounded by what's persisted:**
-   - `step`/`per_track` cover only **meaningful tracks** (above-threshold light producers);
-     sub-threshold and **neutral** tracks (e.g. π⁰) are **not** in the files.
-   - The G4 **creator-process string** (Inelastic/Deflection/…) is consumed at generation and **not
-     persisted**. So you cannot reproduce the literal process-based categorization downstream; use a
-     **geometry/ancestry proxy** instead (deflection angle from `step/dir_*`, branching from
-     `per_track.parent_id`). EM showers from a neutral π⁰ can't be re-attributed to their parent
-     hadron from the files alone (the π⁰ link is missing).
+## Constraints
 
-## Recipe: segment-level particle re-categorization (the θ demo)
-Redefine "particle" purely from `step` geometry + `per_track` ancestry, tunable by a deflection angle θ:
-1. Per track, get start/end direction = `dir_*` of its earliest/latest `step` segment (by `time`).
-2. Walk each track to its parent (`per_track.parent_id`):
-   - EM child (e±, γ) → **absorb** into parent's particle.
-   - hadron child → **same** particle if junction angle `arccos(end_dir(parent)·start_dir(child)) < θ`,
-     else a **new** particle. Primary (`parent_id==0`) = root.
-3. Connected components = particles (union-find). Dense-index them.
-4. Write back: `per_track/particle_idx`; **rebuild** `per_particle` (category, contained,
-   interaction_idx, one-entry genealogy = representative track_id) **and set `n_particles` attr**;
-   re-aggregate `hits` from `step/sensor_hits` (group by new particle, sensor, emission_process;
-   sum PE, min T) and set `n_particle_hits`.
+- Keep the counts in step. When `labl/per_particle` gets a new number of rows, set the event's
+  `n_particles` attribute to match: the viewer loops over that attribute, and a stale larger
+  value shows particles that do not exist. In `hits/`, update `n_particle_hits` (and
+  `n_particles` where present) the same way.
+- Only what is stored can be regrouped. `step` and `per_track` hold the tracks that produced
+  Cherenkov light and their ancestors; other tracks are not in the files. The Geant4 creator
+  process is not stored either, so a process-based categorization cannot be reproduced; use
+  geometry (`step/dir_*`) and ancestry (`per_track.parent_id`) instead.
+- The medium of a dataset comes from the detector it was generated with, not the dataprod
+  `material` field ([production](../README.md#medium)).
 
-Result: smaller θ → more particles (splits at every kink), larger θ → fewer.
-`relabel_segments.py SRC DST θ`. Verified on the 50-π⁺ set: θ=5°→1/8/25, θ=15°→1/6/17,
-θ=45°→1/4/10 particles/event.
+## `relabel_segments.py`
 
-## Serving the viewer
+Defines particles from `step` geometry and `per_track` ancestry, with a deflection angle θ:
 
-Serving a dataset and the SSH tunnel are in [`viewer/README.md`](../../../viewer/README.md). The
-server reads files fresh per request, so after relabeling a hard-reload of the browser shows the new
-labels; two viewers of the same events = two ports + two relabeled copies.
+1. For each track, take the start and end directions (`dir_*` of its earliest and latest
+   segment by `time`).
+2. Walk each track to its parent (`per_track.parent_id`). An electromagnetic child (e±, γ)
+   joins its parent's particle. A hadron child joins its parent's particle if the angle between
+   the parent's end direction and the child's start direction is below θ, and starts a new
+   particle otherwise. A primary (`parent_id == 0`) starts a particle.
+3. The connected groups are the particles, indexed densely.
+4. Write `per_track/particle_idx`; rebuild `per_particle` and set `n_particles`; re-aggregate
+   `hits/` from `step/sensor_hits` (sum PE, minimum T) and set `n_particle_hits`.
 
-## Units
-meters / nanoseconds / MeV throughout.
+A smaller θ gives more particles per event, a larger θ fewer.
+
+## Viewing the result
+
+Serving a dataset to the browser, including over an SSH tunnel, is in
+[`viewer/README.md`](../../../viewer/README.md). The server reads the files on every request, so
+a browser reload shows a relabelled dataset.
