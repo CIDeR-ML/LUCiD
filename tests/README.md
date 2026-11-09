@@ -1,91 +1,69 @@
-# LUCiD Test Suite
+# The test suite
 
-## Running tests
+## Running it
 
 ```bash
-# Fast only — pure math, no JIT (~10s).
-# Every reproduction gate in the repo is marked slow (the tripwire included), so this command
-# runs the unit tests and none of the guarantees.
-pytest tests/ -m "not slow"
-
-# The default. NEVER COLLECTS the files listed in conftest's _SLOW_FILES (test_tripwire.py
-# among them), so it is not the whole suite. The terminal banner names what was dropped.
-pytest tests/
-
-# EVERYTHING. This is the one to run before believing the suite is green.
-pytest tests/ --slow
+pytest tests/ -q          # the fast lane. `addopts = -m 'not slow'` deselects the rest
+pytest tests/ -q --slow   # everything
+pytest tests/ -m slow -q  # the slow lane only -- the same set --slow adds
+pytest tests/path/test_x.py::test_name   # one test
 ```
 
-Two independent mechanisms hide tests here, and they are easy to confuse. `pytest.mark.slow`
-DESELECTS (the test is collected, then filtered out by `-m`). `_SLOW_FILES` in `conftest.py`
-makes `pytest_ignore_collect` refuse to collect the file at all, `-m` or no `-m`.
+There is **one** mechanism: the `slow` marker, assigned by cost (a detector at SK
+scale, a simulator compile beyond the session's, a ROOT file). No basename list, and no
+`pytest_ignore_collect`, so `-m slow` and `--slow` cannot disagree about what is slow.
 
-Tests that need downloaded data (`data/` is gitignored, so a fresh clone or worktree lacks it)
-skip rather than fail, and the end-of-run banner lists them. Set `LUCID_REQUIRE_DATA=1` to make a
-missing-data skip a failure, for a job that is supposed to have the data.
+The forward model itself runs in the fast lane, on the tiny detector (`helpers/tiny.py`, 582 PMTs):
+`conftest.py` (`tiny_sim`) and `physics/conftest.py` (`tiny_sampled_sim`, `tiny_data_sim`) build
+its simulators once per session, and `physics/test_forward_composed.py`,
+`physics/test_incident_qe.py`, `physics/test_physics_hit_time.py` and
+`physics/test_outside_emission.py` hold the composed chain to closed forms and a direct ray trace.
+`physics/test_forward_golden.py` is the one stored reference (marker `golden`): the same forward at
+a working point that uses every stage, with its gradient, at 1e-3.
+`tests/conftest.py` forces `JAX_PLATFORMS=cpu` for the whole suite.
 
-## Test categories
+## Layout
 
-### Fast (~150 tests, <10s) — pure math, no JIT
+One directory per subject. Cost is a marker (`slow`, `gpu`, `requires_data`, `requires_emitter`),
+never a directory, so a new test goes where its subject is, whatever it costs.
 
-These run without building detectors or compiling propagators.
+| directory | what its tests hold to account |
+|---|---|
+| `physics/` | the forward model: emission (sources, scintillation, shotgun, data-mode events), optics, the photon step, reflection, the wavelength-dependent medium, the sensor response, the composed simulator (tiny detector and SK scale), the golden, and the detector/physics parameters and configs |
+| `propagation/` | detector geometry, ray-surface intersection, the sensor grid and lookup, the surface deposit, the overlap table, the propagators' output and gradients |
+| `siren/` | the trained SIREN emitter: its files and loader, s_max(E), the lookup tables, training, ray sampling, and the track forward it feeds |
+| `fitting/` | the losses, the Gauss-Newton transformation and `minimize`, calibration, timing, reconstruction (model, seeding, fit keys), the result analysis and gradient sweeps |
+| `production/` | the readout (digitizer, trigger), event generation and placement, the PhotonSim reader, the dataset reader/writer and labels, and the dataprod jobs and cluster adapters |
+| `paper/` | the paper's figures and studies: entry points, study configs and files, the stored fit record, the loss landscape, the reconstruction chain end to end, and the published-resolution gate |
+| `string/` | the deferred string (IceCube-like) line |
+| top level | the repository itself: imports, shell-script safety, `scripts/download_data.py` |
+| `helpers/` | shared toys and fixtures (the tiny detector, the analytic recon model, paths), no tests |
 
-| File | Tests | What it covers |
-|------|-------|----------------|
-| test_imports.py | 1 (52 parametrized) | All lucid submodules import cleanly |
-| test_params.py | 8 | DetectorParams, ParticleParams, normalize/denormalize, bounds |
-| test_utils.py | 10 | Utility functions (spherical coords, smearing) |
-| test_optics.py | 26 | Optics: normalize, reflection, scatter direction |
-| test_optics_physics.py | 21 | Physics: law of reflection, orthonormal frames, Fresnel |
-| test_losses.py | 7 | Poisson NLL, energy loss, segment logsumexp |
-| test_losses_physics.py | 11 | Loss gradients and numerical stability |
-| test_photon_step.py | 6 | Photon iteration functions (sample, update_factors) |
-| test_photon_step_physics.py | 15 | Absorption, detection probability, TOF, step gradients |
-| test_sensor_response.py | 6 | make_hits_simulation/data/likelihood aggregation |
-| test_sensor_response_physics.py | 13 | Charge conservation, soft-min timing, differentiability |
-| test_pipeline_types.py | 13 | JAX pytree compat, lax.scan, vmap, jit |
-| test_wavelength_physics.py | 10 | Rayleigh scattering, Henyey-Greenstein, Mie phase functions |
-| test_integration.py | 18 | Optics -> photon_step -> sensor_response chain (unit-level) |
-| test_wavelength.py | 18 | Medium properties, QE curve loading, Cherenkov spectrum |
+A fixture lives in the `conftest.py` of the one subject that uses it, or in `tests/conftest.py`
+when several do.
 
-### Slow (~150 tests, marked `@pytest.mark.slow`) — JIT compilation required
+## Data, GPU
 
-These build detectors, compile propagators, or run full simulations.
+A test that needs a downloaded asset says so with a marker, and `conftest.py` resolves it:
 
-**Geometry & propagator (3-30s each):**
+```python
+@pytest.mark.requires_data('water/muon/1000MeV_100events.root')   # files under data/
+@pytest.mark.requires_data(paths.MUON_1GEV_EVENTS)    # a tuple: any one (5-event slice or 100 events)
+@pytest.mark.requires_emitter('muon', 'wbls', dedx=True)   # the files the simulator would load
+```
 
-| File | Tests | What it covers |
-|------|-------|----------------|
-| test_containers.py | 11 | SimConfig, DetectorGeometry.from_config |
-| test_geometry.py | 13 | Detector construction (cylinder, sphere, box), sensor placement |
-| test_registry.py | 13 | Detector registry, factory lookup, JIT compat |
-| test_ray_intersection.py | 27 | Ray-geometry intersection for all detector types |
-| test_sensor_map_validation.py | 13 | Grid auto-derivation, overcrowding validation |
-| test_propagator_output.py | 9 | Propagator output structure (weights, positions, normals) |
-| test_shared_propagator.py | 5 | Shared propagator equivalence across geometries |
-| test_shared_propagator_differentiability.py | 8 | Gradient flow through shared propagator |
-| test_propagation_differentiability.py | 15 | Gradient flow through propagation + photon step |
+`requires_emitter` follows the material JSON's `"siren"` set to
+`data/<set>/<particle>/<cherenkov|dedx>/{emitter.json, weights.npz}` the way the simulator does,
+so a guard cannot point at a stale path. Without the data the test skips with a reason that names
+the missing files, and the end of the run lists them; `LUCID_REQUIRE_DATA=1` turns every such skip
+into a failure, for a job that is supposed to have the fetched assets. There is no other skip
+spelling for data: no `skipif(os.path.exists(...))`, no `pytest.skip` in a body.
 
-**Full simulation (30s+ each):**
+`gpu` tests are deselected unless `LUCID_GATE_GPU=1` (`--slow` does not add them):
 
-| File | Tests | What it covers |
-|------|-------|----------------|
-| test_sk_like_integration.py | 11 | SK_like simulator: laser, isotropic, SIREN track; K convergence; gradients |
-| test_wavelength_integration.py | 13 | Wavelength-mode simulation: scalar vs wavelength; QE weighting; physics consistency |
+```bash
+LUCID_GATE_GPU=1 pytest --slow tests/paper/test_published_resolution.py
+```
 
-## Fixtures (conftest.py)
-
-| Fixture | Scope | What it provides |
-|---------|-------|-----------------|
-| `key` | session | `jax.random.PRNGKey(42)` |
-| `small_cylinder_config` | session | Path to WCTE_like_geom_config.json |
-| `cylinder_detector` | session | Pre-built small generic cylinder (cached) |
-| `fixed_flat_hits` | session | Synthetic sensor hit data for unit tests |
-
-## Config dependencies
-
-Tests reference configs in `config/`:
-- Geometry: `WCTE_like_geom_config.json` (small, fast, algorithmic), `SK_like_geom_config.json` (large, slow). The real `WCTE_geom_config.json` loads measured PMT positions from a separate `.npz` file and is exercised on its own (it is not the generic small-cylinder fixture).
-- Physics: `SK_physics_config.json` (composable format with medium_model + qe_curve references)
-- Materials: `materials/water.json`
-- PMT curves: `pmt/SK_QE.json`, `pmt/HK_QE.json`
+Repository paths come from `helpers/paths.py` (`REPO`, `CONFIG`, `DATA`), never from a test
+file's own depth.

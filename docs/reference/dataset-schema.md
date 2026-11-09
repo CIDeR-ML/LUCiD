@@ -1,17 +1,39 @@
-# LUCiD Dataset Layout
+# Dataset schema
 
-This document describes the concrete HDF5 schema for LUCiD water-Cherenkov
-simulation output, produced by the
-[LUCiD](https://github.com/CIDeR-ML/LUCiD) production pipeline using PhotonSim ROOT files
-as input.
+The HDF5 output of the LUCiD production pipeline (`lucid-run-job`, from PhotonSim ROOT files):
+how to read it, then every field.
 
-The design splits detector output into four parallel HDF5 files -- raw sensor
-readout, per-particle signal decomposition, 3D track segments, and labels --
-so that each ML task can load only the modalities it needs. This document
-specifies the LUCiD-specific instantiation of that design.
+Each batch is split into four parallel HDF5 files -- raw sensor readout, per-particle signal
+decomposition, 3D track segments, and labels -- so that each ML task can load only the
+modalities it needs.
 
-> Looking for "how do I read these files"? Start with the shorter
-> [working with data](working-with-data.md) page; this one is the field-by-field reference.
+## Reading a batch
+
+`lucid.dataset.reader` holds the per-file readers (only needs `h5py`);
+`lucid.dataset.layout.batch_paths` resolves the four files of a batch,
+`<output_dir>/{sensor,hits,step,labl}/wc_*_<F:04d>.h5`:
+
+```python
+from lucid.dataset.layout import batch_paths
+from lucid.dataset.reader import (list_events, read_sensor_event,
+                                  read_hits_event, read_step_event, read_labl_event)
+
+paths = batch_paths('out/', 0)             # {'sensor': Path(...), 'hits': ..., 'step': ..., 'labl': ...}
+n = len(list_events(paths['sensor']))      # events in this batch
+
+sensor = read_sensor_event(paths['sensor'], 0)   # one event -> dict of arrays
+labels = read_labl_event(paths['labl'], 0)       # nested: per_event / per_interaction / per_particle / per_track
+```
+
+For a quick look from the terminal, `python scripts/inspect_dataset.py --path out/`
+prints event counts, charge/hit statistics, and per-event array shapes
+(`--event N` for one event in detail). The `viewer/` app (`python viewer/serve_viewer.py <dataset_dir> --open`) gives an
+interactive 3D event display over the same files; `viewer/README.md` documents serving it
+(including over an SSH tunnel) and its FIELD / EMISSION / HIT / LABEL controls.
+
+`lucid/production/derived_views/` post-processes finished datasets without rerunning the
+simulation — e.g. splitting pile-up batches into single-interaction events (`depile`) and
+recomputing label views (`relabel_*`). See its README for the available views.
 
 ## Overview
 
@@ -55,17 +77,29 @@ These apply across all four files:
   digit_idx)` (or `(segment_idx, sensor_idx, digit_idx)`) key can appear in
   multiple rows differing only in `emission_process` when more than one process
   contributes. Cherenkov-only datasets carry the column with all-zeros so
-  consumers can group/filter by it without a presence check. Pre-Phase-0
-  datasets that lack the column read as all-zeros via the reader's backward-
-  compat default.
+  consumers can group/filter by it without a presence check.
+- **Time dtype**: every absolute time (`T`, `T_reco`, `time`, `t0`,
+  `window_start`/`window_end`) is `float64`. A supernova burst spans seconds
+  while the light timing is sub-ns, which `float32` cannot hold together.
 
 ## Provenance block (every file's `config/`)
 
 The following attrs appear on `config/` of every file:
 
 - `format_version` (int)
-- `n_events` (int)
-- `git_commit` (str) — LUCiD repository commit
+- `n_events` (int) — events kept (after trigger / selection drops)
+- `n_events_requested` (int, optional) — events attempted; `n_events_requested -
+  n_events` is the selection inefficiency
+- `complete` (bool) — written `False` when the file is opened and set `True`
+  only after every event is written. A job killed mid-write leaves it `False`.
+  Health checks (`lucid.dataset.layout.check_batch`) gate on this flag, not on
+  `n_events`, which varies with the trigger; a file without the attribute is
+  treated as complete.
+- `git_commit` (str) — the LUCiD commit that wrote the file: the HEAD of the git checkout
+  it ran from or, in the production image (no `.git/`), the `lucid_sha` of `/opt/VERSIONS`;
+  `"unknown"` when neither says (`lucid.utils.code_version`)
+- `git_dirty` (bool, optional) — whether tracked files differed from that commit (the
+  image's `lucid_dirty`); absent when not known
 - `reflection_model` (str) — reflection model used (`scalar_mix` default, `scalar`, or `angular`) — distinguishes datasets by reflection physics
 - `run_id` (str) — unique batch identifier
 - `dataset_name` (str)
@@ -74,6 +108,17 @@ The following attrs appear on `config/` of every file:
 - `lucid_master_seed` (int) — JAX PRNG root seed for this batch
 - `photonsim_seed` (int, optional) — Geant4 seed used when generating the
   source ROOT file. `-1` if not propagated.
+- `trigger` (str) — `"none"` when the readout trigger is off; otherwise the
+  trigger is described by `trigger_window_ns`, `trigger_n_thr`,
+  `trigger_pad_before_ns`, `trigger_pad_after_ns`.
+- `selection` (str, optional) — how interactions were kept: `"trigger"` (the
+  readout trigger) or `"min_physics_hits"` (the trigger-free truth cut), with
+  `selection_min_physics_hits` (int).
+- `sn_direction` (float64 (3,), supernova only) — true burst direction, unit
+  vector.
+- `sn_ordering`, `sn_transformation` (str, supernova only) — the mass ordering
+  of the burst: the entry of the config's `supernova.orderings` (e.g. `"NMO"`)
+  and the sntools `--transformation` it maps to (e.g. `"AdiabaticMSW_NMO"`).
 
 Plus a per-file `source_event_idx (n_events,) uint32` array in `config/`
 for integrity checks and fast event enumeration.
@@ -102,18 +147,21 @@ sensor.h5
     │ attrs: source_event_idx, n_hits   (= number of digits)
     ├── sensor_idx            (n_hits,) uint16   — PMT index; may repeat (multi-hit)
     ├── PE                    (n_hits,) float32   — digit charge (post readout resolution)
-    └── T                     (n_hits,) float32   — digit first-arrival time, detector frame
+    └── T                     (n_hits,) float64   — digit first-arrival time, detector frame
 ```
 
 Notes:
 - `sensor_idx` is the PMT index (0..n_sensors-1); one row per **digit**, not per PMT.
 - `hits.h5` / `step.h5` rows carry a `digit_idx` FK into this file's per-event
   digit list, decomposing each digit's charge by source (and dark noise).
-- Digitizer model + electronics parameters come from the detector physics
-  config's optional `"digitizer"` block; absent ⇒ `basic`.
+- Digitizer model + electronics parameters come from the dataset config's
+  `"digitizer"` block if it has one, otherwise from the detector physics
+  config's; absent from both ⇒ `basic` (see
+  [digitizer-and-trigger.md](digitizer-and-trigger.md)).
 - Sensor file is the only file that needs smearing parameters in its config.
-- **Readout trigger** (optional `"trigger"` block in the physics config; provenance
-  in `config/` attrs `trigger*`): a sliding-window coincidence trigger keeps only
+- **Readout trigger** (an optional `"trigger"` block, from the dataset config if it has one,
+  otherwise from the detector physics config, like the digitizer's; provenance in `config/`
+  attrs `trigger*`): a sliding-window coincidence trigger keeps only
   in-gate digits and **drops events that don't trigger** (they are absent, leaving
   gaps in `source_event_idx`). Triggered datasets write digits in a **canonical
   `(window_idx, sensor_idx, T)` order**, so each readout window is a contiguous
@@ -137,7 +185,8 @@ hits.h5
     ├── digit_idx             (n_particle_hits,) int32   — FK to sensor.h5 digit (which recorded hit)
     ├── sensor_idx            (n_particle_hits,) uint16
     ├── PE                    (n_particle_hits,) float32   — pre-smearing per-source contribution
-    ├── T                     (n_particle_hits,) float32   — pre-smearing per-source, detector frame
+    ├── T                     (n_particle_hits,) float64   — pre-smearing per-source first arrival, detector frame
+    ├── T_reco                (n_particle_hits,) float64   — same, after the timing response (the time the digitizer windows on); optional
     └── emission_process      (n_particle_hits,) int8     — 0=Cherenkov, 1=scintillation, 2=dark noise
 ```
 
@@ -173,7 +222,7 @@ step.h5
     ├── start_x, start_y, start_z   (n_segments,) float32  — meters
     ├── end_x, end_y, end_z         (n_segments,) float32  — meters
     ├── dir_x, dir_y, dir_z         (n_segments,) float16
-    ├── time                       (n_segments,) float32   — ns, detector frame (t0-shifted)
+    ├── time                       (n_segments,) float64   — ns, detector frame (t0-shifted)
     ├── edep                       (n_segments,) float32   — MeV
     ├── beta_start                 (n_segments,) float32   — particle β at segment start
     ├── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
@@ -185,7 +234,8 @@ step.h5
         ├── digit_idx             (n_segment_hits,) int32  — FK to the sensor.h5 digit
         ├── sensor_idx            (n_segment_hits,) uint16 — FK to sensor_positions
         ├── PE                    (n_segment_hits,) float32 — segment's contribution to that (sensor, digit) PE
-        ├── T                     (n_segment_hits,) float32 — segment's first-arrival time in that digit (ns, detector frame)
+        ├── T                     (n_segment_hits,) float64 — segment's first-arrival time in that digit (ns, detector frame)
+        ├── T_reco                (n_segment_hits,) float64 — same, after the timing response; optional
         └── emission_process      (n_segment_hits,) int8    — 0=Cherenkov, 1=scintillation
 ```
 
@@ -200,7 +250,7 @@ Notes:
   for forward-simulation ML.
 - Each segment row is one raw G4 sub-step (PhotonSim ships unmerged
   segments; the prior in-PhotonSim merger now runs in Python at
-  ingestion time — see `lucid/sources/segment_grouping.py`).
+  ingestion time — see `assign_group_ids` in `lucid/dataset/labels.py`).
   `group_id` holds the merger's output: aggregating segments by
   `group_id` (start = first row's start, end = last row's end, edep
   and n_cherenkov summed, dir / beta_start / time = first row's value)
@@ -213,8 +263,9 @@ Notes:
 - `sensor_hits/` is the per-(segment, sensor) ground truth that `hits.h5`
   is aggregated from: aggregating `sensor_hits.PE` over `segment_idx →
   track_idx → particle_idx` reproduces `hits.h5/event_NNN/PE` exactly
-  (column-sums match `sensor.h5/event_NNN/PE` by construction — shared
-  `qe_weights` in `sensor_response.make_hits_per_segment`). Mandatory in
+  (column-sums match `sensor.h5/event_NNN/PE` by construction: all three
+  tables are aggregated from one per-deposit list in
+  `lucid.simulation.digitizer.digitize_and_decompose`). Mandatory in
   data-mode datasets — re-bucketing into a different particle definition
   is a Python re-aggregation over the same on-disk file.
 
@@ -231,18 +282,18 @@ labl.h5
 └── event_NNN/
     │ attrs: source_event_idx, n_particles, n_tracks
     ├── per_event/
-    │   ├── t0                                   ()   float32 — true emission time
+    │   ├── t0                                   ()   float64 — earliest interaction t0 of the event
     │   └── contained                            ()   bool    — True iff every meaningful segment is fully inside detector; False for empty events
     ├── per_window/                              (triggered datasets only; n_win readout windows)
     │   │ attrs: n_windows
-    │   ├── window_start                         (n_win,)   float32 — gate start, detector frame [ns]
-    │   ├── window_end                           (n_win,)   float32 — gate end
+    │   ├── window_start                         (n_win,)   float64 — gate start, detector frame [ns]
+    │   ├── window_end                           (n_win,)   float64 — gate end, detector frame [ns]
     │   └── digit_offsets                        (n_win+1,) int32   — CSR into sensor.h5: window w = digit rows [off[w], off[w+1])
     ├── per_interaction/                         (1 row for non-pile-up; N rows for N-way pile-up)
     │   ├── source_type, t0, vertex_{x,y,z}       — see save_labl_event docstring
     │   ├── n_primaries, n_particles              — ints per interaction
     │   ├── neutrino_pdg, neutrino_energy_MeV     — GENIE/supernova-only, zeroed for particle-gun
-    │   ├── interaction_channel, channel          — supernova-only: sntools channel code (int) + name ("ibd"/"es"/"o16e"/"o16eb")
+    │   ├── interaction_channel                   — sntools channel code (int32); -1 for non-supernova
     │   ├── contained                            (n_interactions,) bool — AND over particles attributed to this interaction; False if interaction has no particles
     │   └── CSR primary_{track_ids,pdgs,energies}_{offsets,data}
     ├── per_particle/                            (~8 rows for typical LUCiD events)
@@ -286,9 +337,8 @@ Notes:
   `track_idx`.
 - Each track maps to exactly one particle via `particle_idx`. The mapping is
   derived at write time by walking the parent chain from each track until it
-  reaches a categorized particle. Verified injective on production data
-  (>99.9% of tracks map cleanly; orphan housekeeping tracks are flagged as
-  `particle_idx = -1`).
+  reaches a categorized particle; a track with no categorized ancestor gets
+  `particle_idx = -1`.
 - `genealogy_data` is the compressed chain through categorized particles only.
   `ext_genealogy_data` is the full Geant4 chain through all intermediate
   meaningful tracks. Both are kept; they answer different questions.

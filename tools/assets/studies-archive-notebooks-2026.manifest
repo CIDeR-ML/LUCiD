@@ -1,0 +1,92 @@
+# studies-archive-notebooks-2026 (A4) -- the S-class half of good_notebooks/,
+# the seven narrated tutorials that are its canonical twins, and the
+# s3df_jobs/ six of these notebooks read and that main deleted.
+#
+# Two files in good_notebooks/ are deliberately NOT parts, and both are saved
+# output rather than content: displays/event_displays.ipynb (31.4 MB, 97% of
+# the directory) and 00_quickstart.ipynb (691 KB).  Measured cell-source
+# similarity makes both diverged duplicates of a tutorial that does travel
+# here (0.91 and 0.61 against tutorials/00_quickstart.ipynb and
+# tutorials/event_displays.ipynb), so the content is in the asset and only the
+# stored plots are not.  They remain readable at eaf2e89f until the history
+# purge, which is a separate owner decision.
+#
+# tutorials/ is in this asset because sandbox_assets.md A4-A6 named no home for
+# it while target_tree.md section 9 has it merging into notebooks/: without
+# this it would be the one deleted directory with no archive.
+#
+# good_notebooks/figures/*.gif travel in studies-archive-gifs-2026, not here.
+tag: studies-archive-notebooks-2026
+commit: eaf2e89f
+summary: the S-class half of `good_notebooks/` + the tutorials + `s3df_jobs/`
+size: 1.5 MB
+part: eaf2e89f:good_notebooks/README.md
+part: eaf2e89f:good_notebooks/STRUCTURE.md
+part: eaf2e89f:good_notebooks/NOTEBOOK_ANALYSIS.md
+part: eaf2e89f:good_notebooks/NOTEBOOK_DOCUMENTATION.md
+part: eaf2e89f:good_notebooks/wavelength_calibration_findings.md
+part: eaf2e89f:good_notebooks/clear_notebook_outputs.py
+part: eaf2e89f:good_notebooks/archive
+part: eaf2e89f:good_notebooks/calibration
+part: eaf2e89f:good_notebooks/gradients
+part: eaf2e89f:good_notebooks/infrastructure
+part: eaf2e89f:good_notebooks/reconstruction
+part: eaf2e89f:tutorials
+part: eaf2e89f:data/water/muon/range_params.json
+part: eaf2e89f:lucid/utils.py
+part: 85e98bd1:s3df_jobs
+--- INDEX ---
+# studies-archive-notebooks-2026
+
+**Study notebooks, 2026-04 … 2026-09**, as committed. 26 of `good_notebooks`' 28 are here, plus the
+seven narrated `tutorials/`, which are the canonical twins of the five diverged duplicates. Five of
+the 28 duplicate a tutorial — measured by code-cell similarity against `tutorials/`:
+
+| duplicate | tutorial | similarity |
+|---|---|---|
+| `good_notebooks/00_quickstart.ipynb` | `tutorials/00_quickstart.ipynb` | 0.91 |
+| `good_notebooks/calibration/calibrate_optics.ipynb` | `tutorials/calibration_optimization.ipynb` | 0.89 |
+| `good_notebooks/displays/event_displays.ipynb` | `tutorials/event_displays.ipynb` | 0.61 |
+| `good_notebooks/gradients/loss_landscapes.ipynb` | `tutorials/track_gradients.ipynb` | 0.48 |
+| `good_notebooks/reconstruction/two_start_reconstruction.ipynb` | `tutorials/track_optimization.ipynb` | 0.35 |
+
+Three of the five travel here; the two that do not — `00_quickstart.ipynb` (691 KB) and
+`displays/event_displays.ipynb` (31.4 MB) — were 97% of the directory's bytes and are saved plot
+output, not content. Their tutorial twins are in this tarball under `tutorials/`, and both files are
+still readable at `eaf2e89f`.
+
+**~9 of these cannot run against `eaf2e89f`**: four use the flat `DetectorParams` API that no longer
+exists, six read the removed `s3df_jobs/` (included in this asset — regenerate its JSON configs with
+`nrays_config/create_configs.py`, which were never tracked), three read private
+`/sdf/data/neutrino/cjesus` paths, and 14 name a ROOT file the downloader does not fetch.
+
+Two are cited by the paper tree by commit SHA, and those citations resolve here:
+`gradients/grad_loss_and_opt_in_2D.ipynb` (`c603ed1`) by `fig_loss_landscape.py` and
+`reconstruction/track_optimization_visualization.ipynb` by `utils/ovv_plots.py`. The four planning
+`*.md` files are stale inventories: 4 of the 27 notebook names they cite exist nowhere.
+`wavelength_calibration_findings.md` is committed twice, byte-identical, at the root and under
+`calibration/`.
+
+Also `range_params.json`: a linear muon-range fit read only by the archived 3-D track-optimisation
+notebook, with `load_range_params` / `calculate_particle_range` /
+`check_track_endpoint_in_detector` from `lucid/utils.py` (which travels whole, because those three
+functions do not import without the rest of the module). Not used by the library, the paper or
+production.
+
+## What is in this tarball
+
+| path | files | what it is |
+|---|---|---|
+| `good_notebooks/calibration/` | 7 | per-sensor τ bandwidth, wavelength calibration + findings, per-PMT QE maps, multi-source QE convergence, the optics-calibration duplicate |
+| `good_notebooks/gradients/` | 7 | three 1-D parameter scans, two 2-D loss+optimiser notebooks, the loss-landscape duplicate |
+| `good_notebooks/reconstruction/` | 6 | recon anatomy, optimisation-vs-variables, 3-D track visualisation, two-start recon |
+| `good_notebooks/infrastructure/` | 4 | data-vs-prediction hits, the SIREN training cheat-sheet, the performance evaluation |
+| `good_notebooks/archive/` | 7 | six early tracking-optimisation and display notebooks (the three GIFs they produced are in `studies-archive-gifs-2026`) |
+| `good_notebooks/*.md` | 5 | the four planning docs + the duplicated findings note |
+| `good_notebooks/clear_notebook_outputs.py` | 1 | the output stripper that was never enforced — no `.pre-commit-config.yaml` existed |
+| `tutorials/` | 7 | the narrated workflows: quickstart, event displays, calibration optimisation and gradients, track optimisation and gradients, data vs prediction |
+| `s3df_jobs/` | 10 | from `geometry-v2` (`85e98bd1`): the job submitters and `nrays_config/create_configs.py` these notebooks read |
+| `data/water/muon/range_params.json`, `lucid/utils.py` | 2 | the muon-range fit and its three helpers |
+
+The notebooks the committed I/O functions used are readable with `legacy-io-archive`; ship the two
+together.

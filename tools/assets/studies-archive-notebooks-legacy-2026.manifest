@@ -1,0 +1,47 @@
+# studies-archive-notebooks-legacy-2026 (A5) -- the 24 pre-rename notebooks.
+# Built from c799b404, the last commit that touched them: notebooks/ is
+# byte-identical at c799b404 and eaf2e89f (`git diff c799b404 eaf2e89f --
+# notebooks/` is empty), so the earlier commit is the honest provenance.
+#
+# This asset exists so the history purge can drop 18 MB of saved output
+# without losing the record of what was explored.  Nothing in it runs.
+tag: studies-archive-notebooks-legacy-2026
+commit: c799b404
+summary: the 24 pre-rename `notebooks/` + `wcte_bldg157.geo`
+size: 18.3 MB
+part: c799b404:notebooks
+--- INDEX ---
+# studies-archive-notebooks-legacy-2026
+
+**Notebooks from before the `tools` → `lucid` rename** (last touched 2026-06-13). **None runs**: 22
+import `from tools.<x>` and `tools/` holds only `fitqun/`; `siren_training.ipynb` imports a moved
+training path; `validation/grid_visualization.ipynb` imports a module that does not exist. Kept only
+so the history purge can drop 18 MB of bytes without losing the record of what was explored.
+`wcte_bldg157.geo` is a WCTE building survey file referenced by nothing.
+
+24 notebooks in 18.3 MB, of which **17.1 MB is saved output in three files**:
+
+| path | size |
+|---|---|
+| `notebooks/detector_3D_visualization.ipynb` | 9.4 MB |
+| `notebooks/gradient_and_relaxation_analysis.ipynb` | 6.0 MB |
+| `notebooks/gradient_and_relaxation_analysis_noised.ipynb` | 1.8 MB |
+| `notebooks/wcte_bldg157.geo` | 1.2 MB |
+| the other 22 files | 0.1 MB |
+
+## What is in this tarball
+
+| path | files | what it is |
+|---|---|---|
+| `notebooks/*.ipynb` | 17 | detector and grid configuration, calibration, gradient/relaxation analyses, 1-ring track optimisation (Adam and the rest), SIREN training, time validations, BO/Leap parameter calibration |
+| `notebooks/data_vs_sim/` | 5 | data track reconstruction, example-dataset generation, muon data events, time-distribution comparison, 1-D track-parameter scans |
+| `notebooks/validation/` | 2 | grid visualisation (imports a module that does not exist), isotropic forward test |
+| `notebooks/clear_notebook_outputs.py` | 1 | the output stripper, scanning `notebooks/`; never enforced, no `.pre-commit-config.yaml` existed |
+| `notebooks/wcte_bldg157.geo` | 1 | a WCTE building survey file, referenced nowhere |
+
+Three of these (`grid_detector_configuration_visualization.ipynb`, `time_validations.ipynb`,
+`siren_training.ipynb`) were promoted into the tree, outputs stripped, at `notebooks/_source/` for a
+notebook rewrite that was cancelled; that copy is readable at `9e02c407`.
+
+Everything these notebooks import is gone. If you want to read one for its method rather than run
+it, pair it with `legacy-io-archive`, which has the event I/O they call.

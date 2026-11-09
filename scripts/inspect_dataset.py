@@ -11,8 +11,8 @@ Run:  python scripts/inspect_dataset.py --path OUTDIR              # batch 0 of 
 """
 import argparse, os
 import numpy as np
-from lucid.production.verify_output import batch_paths
-from lucid.sources.reader import (list_events, read_sensor_event, read_hits_event,
+from lucid.dataset.layout import batch_paths
+from lucid.dataset.reader import (list_events, read_sensor_event, read_hits_event,
                                   read_step_event, read_labl_event)
 
 

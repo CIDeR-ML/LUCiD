@@ -8,7 +8,7 @@ close agreement means gradients flow correctly through the forward model.
 Run:  python scripts/check_gradients.py
 """
 import argparse
-import jax, jax.numpy as jnp, numpy as np
+import jax, jax.numpy as jnp
 from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 from lucid.sources import laser_source
@@ -31,11 +31,11 @@ def main():
                                   wall_reflection_rate=.2, sensor_reflection_rate=.2,
                                   absorption_length=60., qe=0.07, qe_corrections=jnp.ones(NS))
     src = laser_source(position=[0, 0, det.H/2 - .1], direction=[0, 0, -1], intensity=1e6)
-    sim = setup_event_simulator(args.geom, args.nphot, temperature=None, K=8, is_calibration=True,
-                                hit_mode='aggregated', physics_config=args.physics, wavelength_mode=False,
+    sim = setup_event_simulator(args.geom, args.nphot, source='light_source', temperature=None,
+                                K=8, physics_config=args.physics, wavelength_mode=False,
                                 n_cap=100, n_angular=150, n_height=100)
-    sim_t = setup_event_simulator(args.geom, args.nphot, temperature=None, K=8, is_calibration=True,
-                                  hit_mode='aggregated', physics_config=args.physics, default_detector_params=dp,
+    sim_t = setup_event_simulator(args.geom, args.nphot, source='light_source', temperature=None,
+                                  K=8, physics_config=args.physics, default_detector_params=dp,
                                   wavelength_mode=False, n_cap=100, n_angular=150, n_height=100)
     truth = jax.lax.stop_gradient(sim_t(src, jax.random.PRNGKey(0)))
 

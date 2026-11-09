@@ -1,0 +1,76 @@
+# studies-archive-method-ab-2026 (A7) -- the expected-value vs sampled forward
+# A/B driver.  One file, unchanged since eaf2e89f, with no caller anywhere.
+tag: studies-archive-method-ab-2026
+commit: eaf2e89f
+summary: the expected-vs-sampled A/B driver
+size: 6 KB
+part: eaf2e89f:scripts/compare_method_ab.py
+--- INDEX ---
+# studies-archive-method-ab-2026
+
+> An A/B of the expected-value against the sampled forward on one event. It rebuilds
+> `DetectorParams.from_flat` from 8 scalars in order to resize `qe_corrections`, which **resets** TTS,
+> the per-PMT gains, angular reflection and scintillation to their defaults — so it compares more than
+> the flag it names — and `temperature` changes with the flag the comment claims is isolated. If you
+> revive it, use `load_detector_params(path, num_sensors=N)`, which already does the resize.
+
+## What is in this tarball
+
+| path | size at `eaf2e89f` | what it does |
+|---|---|---|
+| `scripts/compare_method_ab.py` | 6.1 KB, 153 lines | For each source position, draws `n_trials` independent runs at fixed `n_photons` in both propagator modes and reports total-detected-charge mean and σ, the per-sensor mean ratio B/A (≈1 if unbiased), the per-sensor σ ratio on illuminated sensors, and "equivalent photons" `N · var_A/var_B` |
+
+`load_detector_params` is at `lucid/detector_params.py:600` and its second
+parameter is `num_sensors: int = None`, so the one line this study needed
+already existed when it was written.
+
+## The two defects, quoted
+
+**1. It compares more than the flag it names.** `:108-117` builds the detector
+parameters from eight scalars:
+
+```python
+dp = DetectorParams.from_flat(
+    num_sensors=N_sensors,
+    scatter_length=…, mie_scatter_length=…, g=…,
+    wall_reflection_rate=…, sensor_reflection_rate=…,
+    absorption_length=…, qe=…,
+    qe_corrections=jnp.ones(N_sensors),
+)
+```
+
+Everything the physics config carried and `from_flat` does not take — TTS, the
+per-PMT gains, the angular reflection parameters and scintillation — silently
+reverts to its library default. Both arms get the same defaults, so the A/B is
+internally consistent; what it is **not** is an A/B at the configuration named
+on the command line.
+
+**2. `temperature` moves with the flag the comment says is isolated.** The
+comment at `:75-76` reads "Varying only `use_expected_value` isolates the
+propagator." Seven lines later, `:82`:
+
+```python
+temperature=None if not use_expected_value else 0.2,
+```
+
+So the sampled arm runs the hard-step overlap (`None`) and the
+expected-value arm runs a soft kernel at 0.2. Whatever difference the script
+measures is the propagator mode **and** the overlap softness together, and the
+comment asserts the opposite. (In the house naming standard this knob is
+`overlap_sigma_frac`, dimensionless, σ as a fraction of the sensor radius —
+`temperature` is the old spelling that meant two unrelated things.)
+
+## Caller check at `eaf2e89f`
+
+Nobody. No import of `scripts.compare_method_ab` or `compare_method_ab`
+anywhere in `lucid/`, `tests/`, `examples/`, `analysis/`, `tutorials/`, any
+`*.sh`/`*.sbatch`, or `pyproject.toml`'s `[project.scripts]`. The only mention
+in the tree was its own row in `scripts/README.md`.
+
+## If you want this comparison
+
+Ask it as a test, not as a script: fix the detector parameters once with
+`load_detector_params(path, num_sensors=N)`, hold the overlap knob fixed across
+both arms, and assert the per-sensor mean ratio against 1 with a tolerance set
+by the trial count. That is three assertions, and it would have caught both
+defects above.

@@ -3,10 +3,9 @@
 A detector in LUCiD is configuration, not code: a `*_geom_config.json` (shape,
 sensor placement) plus a `*_physics_config.json` (optical properties) is enough
 to point the same simulation engine at a different tank, sphere, box, or
-neutrino telescope. See [geometry & configuration](../concepts/geometry.md) for
-how the two files are read and dispatched, and
-[model your own detector](../guides/model-your-own-detector.md) for writing a
-new pair.
+neutrino telescope. See [model your own detector](../guides/model-your-own-detector.md)
+for how the two files are read and for writing a new pair, and the
+[configuration reference](../reference/config.md) for every key.
 
 ## The list
 
@@ -16,6 +15,8 @@ new pair.
 | `SK_like` | cylinder | algorithmic | water | `SK_like_geom_config.json` / `SK_like_physics_config.json` |
 | `SK_like_wbls` | cylinder | algorithmic | WbLS | `SK_like_wbls_geom_config.json` / `SK_like_wbls_physics_config.json` |
 | `HK` | cylinder | measured PMT positions (`.npz`) | water | `HK_geom_config.json` / `HK_physics_config.json` |
+| `SK_WAND` | cylinder | measured PMT positions (`.npz`) | water | `SK_WAND_geom_config.json` / `SK_WAND_physics_config.json` |
+| `HK_WAND` | cylinder | measured PMT positions (`.npz`) | water | `HK_WAND_geom_config.json` / `HK_WAND_physics_config.json` |
 | `BigHK` | cylinder | algorithmic | water | `BigHK_geom_config.json` / `BigHK_physics_config.json` |
 | `WCTE` | cylinder | measured PMT positions (`.npz`) | water | `WCTE_geom_config.json` / `WCTE_physics_config.json` |
 | `WCTE_like` | cylinder | algorithmic | water | `WCTE_like_geom_config.json` / `WCTE_like_physics_config.json` |
@@ -28,6 +29,10 @@ new pair.
 | `MidBox` | box | algorithmic | water | `MidBox_geom_config.json` / `MidBox_physics_config.json` |
 | `EOS` | cylinder | algorithmic | water | `EOS_geom_config.json` / `EOS_physics_config.json` |
 | `nuSCOPE` | box | algorithmic | water | `nuSCOPE_geom_config.json` / `nuSCOPE_physics_config.json` |
+
+`SK_WAND` and `HK_WAND` are the frozen detector descriptions of the WAND production, and the
+only configs that carry a readout (`digitizer` and `trigger` blocks), which `lucid-run-job` needs
+unless the dataset config states one ([digitizer & trigger](../reference/digitizer-and-trigger.md)).
 
 All config pairs live under `config/` at the repo root. "Algorithmic" sensor
 placement means the sensor positions are generated from a few numbers (radius,
@@ -54,18 +59,14 @@ A few notes on the real-experiment names above:
   `IceCube86_simple` is a lighter-weight string layout used for propagator
   cross-checks, run in a water medium.
 
-`BigHK`, `IWCD`, `EOS`, `MidBox`, and `nuSCOPE` are smaller or larger synthetic
-tanks used for testing and demos rather than a specific real experiment.
+`IWCD`, `EOS` and `nuSCOPE` are named after real or proposed experiments (the
+Intermediate Water Cherenkov Detector, the EOS water-based-scintillator
+demonstrator, nuSCOPE), but here they are scale stand-ins with algorithmic
+placement, not models of those detectors. `BigHK` (an algorithmic cylinder at Hyper-K scale)
+and `MidBox` are synthetic tanks for testing and demos.
 
-## What the tutorials and examples use
+## What the examples use
 
-`SK_like` (cylinder, water, algorithmic) is the default across almost every
-`examples/hello_*.py` script and tutorial notebook (`00_quickstart`,
-`calibration_optimization`, `calibration_gradients`, `track_gradients`,
-`data_vs_prediction`, and the SK-like leg of `track_optimization`). The
-`event_displays` tutorial additionally tours `IceCube86_full`/`IceCube86_ice`
-and `SK_like_wbls` to show a cylinder / sphere / box / string and
-water / WbLS / ice all through the same call; `track_optimization` also runs a
-`JUNO` (sphere) example; and `examples/hello_telescope.py` uses
-`IceCube86_full` with the ice physics config as the neutrino-telescope
-entry point.
+`SK_like` (cylinder, water, algorithmic) is the default across almost every `examples/hello_*.py`
+script. `examples/hello_telescope.py` uses `IceCube86_full` with the ice physics config as the
+neutrino-telescope entry point.

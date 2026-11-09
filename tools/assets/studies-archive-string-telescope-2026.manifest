@@ -1,0 +1,69 @@
+# studies-archive-string-telescope-2026 (A9) -- the two string event producers
+# and the standalone three.js viewer.  The string *propagator* stays in the
+# tree as a library capability (D-SRC-4); only these producers and this second
+# viewer leave.  Parts come from the recorded commit, so the asset is still
+# buildable after they are deleted.
+tag: studies-archive-string-telescope-2026
+commit: eaf2e89f
+summary: the string event producers + the standalone three.js viewer
+size: 56 KB
+part: eaf2e89f:scripts/run_string_cascades.py
+part: eaf2e89f:scripts/run_string_siren_tracks.py
+part: eaf2e89f:viewer/string
+--- INDEX ---
+# studies-archive-string-telescope-2026
+
+**IceCube-86 string-telescope demo**: two event producers writing viewer JSON, plus a standalone
+browser viewer on three.js 0.170 ESM with GIF and MP4 export.
+
+This exists because the string telescope stays in the tree as a **library** capability
+(`lucid/geometry/string.py`, `lucid/propagation/string/string_propagator.py`) while these two
+producers and the second viewer do not (`D-SRC-4`). Nothing in `lucid/`, `tests/` or `analysis/` ever
+imported either script: both are `__main__` drivers, and the viewer is a standalone HTML page.
+
+## What is in this tarball
+
+| path | what it is |
+|---|---|
+| `scripts/run_string_cascades.py` | batch cascade sim through `setup_event_simulator` + the string propagator and the volume photon step, 1M photons x K=20 per event, writing `events.json`, `detector.json` and a per-event `.npz` |
+| `scripts/run_string_siren_tracks.py` | the same for SIREN muon/electron tracks (`--particle muon\|electron`) |
+| `viewer/string/viewer.html` | the second 3-D viewer: three.js 0.170 ESM, DOM and string rendering, GIF and MP4 export |
+| `viewer/string/gif.worker.js` | vendored gif.js 0.2.0 worker |
+| `viewer/string/serve.sh` | a `python3 -m http.server` wrapper |
+| `viewer/string/README.md` | how the producers and the viewer fit together |
+
+## Known defects — read before running anything here
+
+**A wrong-result bug in `run_string_cascades.py`.** The simulation is built from
+`config/IceCube86_full_geom_config.json`, whose `npz_file_path` is `icecube86_full.npz`
+(`run_string_cascades.py:26`), while the `detector.json` the viewer reads is written from
+`icecube86_simple.npz` (`:41`). Those are two different detectors: `icecube86_full.npz` is 86 strings
+x 60 DOMs = **5 160** sensors, `icecube86_simple.npz` is 78 x 60 = **4 680** (measured from
+`total_doms` in each file). The per-DOM hit indices the script writes therefore run to 5 159 against a
+position list 4 680 long, and they do not index the DOM positions written beside them even where they
+are in range. Every cascade display produced by this script is mis-indexed. The viewer is
+not at fault and `run_string_siren_tracks.py` does not have the bug; it is the `det_info` block
+duplicated between the two scripts that hid it.
+
+**`serve.sh` is not safe to run on a shared node.** It serves the whole **repository root** on
+`--bind 0.0.0.0` (`serve.sh:5,8`), which exposes the fetched SIREN models, everything under `data/`
+and the git-ignored `user_paths.sh` to anything that can reach the port — on S3DF, the whole
+interactive pool. Bind `127.0.0.1` and serve a directory holding only the viewer and its JSON.
+
+**No licence record for the vendored or the fetched JavaScript.** `gif.worker.js` carries no licence
+text (gif.js 0.2.0 is MIT upstream — <https://github.com/jnordberg/gif.js> — but the vendored copy
+says so nowhere), and the libraries `viewer.html` fetches from jsDelivr (three.js 0.170 plus its
+`examples/jsm` addons, gif.js 0.2.0, mp4-muxer 5.1.3) carry no SRI `integrity=` hashes. Treat the
+vendored worker as unlicensed until that is checked.
+
+**`viewer/string/README.md` is incomplete.** It documents `track_origin` and `track_direction` but not
+the `vertex` field that `run_string_cascades.py` writes into every event record (`:132`), so a reader
+following the README alone will not render cascade vertices.
+
+**Both producers write into the repository.** Each builds its output path from its own file location
+(`output/cascades_sim/`, `output/siren_tracks_<particle>/`) rather than from an argument, so running
+them dirties the checkout. `run_string_cascades.py` also rebinds the module global `N_EVENTS` from
+inside its `__main__` block, which works only when the file is run as a script and not when it is
+imported. `run_string_siren_tracks.py` imports the private
+`lucid.sources.siren_rays._siren_weights` (`:27`). None of that was fixed; it is why these are an
+archive and not an `examples/` entry.

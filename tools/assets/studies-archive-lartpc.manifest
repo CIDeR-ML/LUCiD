@@ -1,0 +1,81 @@
+# studies-archive-lartpc (A11) -- the LArTPC optical package and its
+# calibration arc, from the `feature/lartpc-bridge` tip.  Nothing here is on
+# main or on geometry-v2: it rests on a +584-line edit to
+# lucid/simulation/simulator.py that this cleanup does not land, which is why
+# it is an asset and a V2-scope question rather than a port.
+tag: studies-archive-lartpc
+commit: 85545f72
+summary: the LArTPC optical package and its calibration arc
+size: 2.9 MB
+part: feature/lartpc-bridge:lucid/lartpc
+part: feature/lartpc-bridge:tests/test_lartpc.py
+part: feature/lartpc-bridge:tests/test_wire.py
+part: feature/lartpc-bridge:tests/test_tts.py
+part: feature/lartpc-bridge:tests/reconciliation/lartpc_baseline.py
+part: feature/lartpc-bridge:tests/reconciliation/lartpc_baseline_ref.npz
+part: feature/lartpc-bridge:tests/reconciliation/lartpc_track_segments.npz
+part: feature/lartpc-bridge:docs/LARTPC_OPTICAL.md
+part: feature/lartpc-bridge:docs/internal/LARTPC_*.md
+part: feature/lartpc-bridge:config/Argon*
+part: feature/lartpc-bridge:config/argon_qe.json
+part: feature/lartpc-bridge:config/materials/argon.json
+part: feature/lartpc-bridge:config/materials/argon_visible.json
+part: feature/lartpc-bridge:config/pmt/SBND_QE.json
+part: feature/lartpc-bridge:studies/lartpc_calibration
+--- INDEX ---
+# studies-archive-lartpc
+
+**The LArTPC optical package**: a JAXTPC→LUCiD photon bridge (a numpy reference and a
+device-resident twin, by design), Frank–Tamm Cherenkov cone emission, TPB wavelength-shifting
+surfaces, an analytic anode-wire transmission factor, and an SPE pulse convolution. Plus the research
+arc behind it: an 11-parameter calibration closure, the t0-vs-x degeneracy, and neutron
+time-of-flight.
+
+Everything here is from the `feature/lartpc-bridge` tip (`85545f72`); none of it is on `main` or on
+`geometry-v2`.
+
+## What is in this tarball
+
+| path | what it is |
+|---|---|
+| `lucid/lartpc/bridge.py` | the Geant4/JAXTPC edep-table → photon bridge, numpy, the CPU reference |
+| `lucid/lartpc/bridge_jax.py` | the device-resident twin of the same bridge |
+| `lucid/lartpc/cherenkov.py` | Frank–Tamm cone emission, 1/λ², prompt |
+| `lucid/lartpc/tpb.py` | VUV→visible conversion at a TPB-coated surface: absorb, re-emit at a new λ, keep propagating |
+| `lucid/lartpc/wire.py` | per-plane analytic transmission `T_k = clip(1 - (1-r)·o·sec^s)` |
+| `lucid/lartpc/response.py` | SPE + electronics pulse convolution, unit-area and charge-preserving |
+| `tests/test_lartpc.py`, `test_wire.py`, `test_tts.py` | the branch's own tests — the only tests these modules have ever had |
+| `tests/reconciliation/lartpc_baseline*.{py,npz}`, `lartpc_track_segments.npz` | the reconciliation baseline and its inputs |
+| `docs/LARTPC_OPTICAL.md` | the physics write-up |
+| `docs/internal/LARTPC_*.md` | the integration plan, the physics provenance, the process map, the **silent-defect register** and the work queue |
+| `config/Argon*`, `config/argon_qe.json`, `config/materials/argon*.json`, `config/pmt/SBND_QE.json` | the 13 ArgonBox/ArgonSBND geometry and physics configs, the argon QE table, the two argon material tables, the SBND PMT QE |
+| `studies/lartpc_calibration/` | the research arc: 116 files, 24 `.npz` of run output, `calib_v2`…`calib_v8`, `fit_t0_x.py`, `test_ntof*.py`, and the results in `NEUTRON_TOF_FINDINGS.md` / `NEUTRON_TOF_METHODS.md` |
+
+## Why it did not land on v1
+
+It rests on a **+584-line edit to `lucid/simulation/simulator.py`** on that branch. That is the
+integration cost, and it is the reason this is an asset rather than a port. Its natural host is V2's
+CSG GDML importer and wire lattice, which already ship MicroBooNE and SBND geometry — so adopting it
+is a **V2-scope decision**, not a v1 one.
+
+Two things to settle if it is ever adopted:
+
+1. **Keep one of the two wire models.** `lucid/lartpc/wire.py` here is a closed-form transmission
+   factor — cheap, differentiable, no per-wire shadow structure. V2's csg carries an exact per-wire
+   lattice. They are a real trade (speed against structure), not a duplication to resolve by taste;
+   whichever survives, document the trade where the choice is made.
+2. **Do not carry `response.py` over.** It is the **third** implementation of one idea: see
+   `csg/waveform.Response` and `main:lucid/simulation/sensor_response.build_make_hits_waveform*`. The
+   consolidation target is main's readout, not a fourth copy.
+
+## Caveats
+
+The 24 `.npz` under `studies/lartpc_calibration/` are run outputs committed into the tree, not
+fixtures — they pin nothing and no test reads them. They travel because they are small (2.0 MB for
+the whole arc) and because `NEUTRON_TOF_FINDINGS.md` reads against them.
+
+The two bridges are two implementations **by design** (a readable CPU reference and a GPU twin), but
+**nothing compares them**: `tests/test_lartpc.py:241` imports `bridge_jax` only to assert that its
+directions are unit vectors. The reference-against-twin check that would make the pair safe to keep
+was never written, so a divergence between them is currently invisible. Write it before trusting
+either half.

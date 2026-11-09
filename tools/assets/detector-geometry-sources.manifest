@@ -1,0 +1,34 @@
+# detector-geometry-sources (A15) -- 5.5 MB of the 6.3 MB config/ tree: three
+# WCSim dumps whose only consumer is a committed converter.  The parts are
+# taken from the recorded commit, not the worktree, so the asset is still
+# buildable after the geofiles leave the tree.
+tag: detector-geometry-sources
+commit: eaf2e89f
+summary: the WCSim geofile dumps behind the tracked npz
+size: 5.5 MB
+part: eaf2e89f:config/geofile_SuperK.txt
+part: eaf2e89f:config/geofile_HyperK_HybridmPMT_WithOD_Realistic.txt
+part: eaf2e89f:config/geofile_NuPRISMBeamTest_16cShort_mPMT.txt
+part: eaf2e89f:scripts/geofile_to_npz.py
+--- INDEX ---
+# detector-geometry-sources
+
+**WCSim geometry dumps** for Super-K, Hyper-K (hybrid mPMT + OD) and the NuPRISM beam test. These are
+the only input to `scripts/geofile_to_npz.py`, which produced the tracked
+`sk_geometry.npz` / `hk_geometry.npz` / `wcte_geometry.npz` — nothing in `lucid/` reads them.
+Regenerate with `python scripts/geofile_to_npz.py <geofile> <out.npz>`. `docs/guides/model-your-own-detector.md`
+cites `geofile_SuperK.txt` literally, so that page points here.
+
+## What is in this tarball
+
+| path | size at this commit | produced |
+|---|---|---|
+| `config/geofile_HyperK_HybridmPMT_WithOD_Realistic.txt` | 4.1 MB | `hk_geometry.npz` |
+| `config/geofile_SuperK.txt` | 1.2 MB | `sk_geometry.npz` |
+| `config/geofile_NuPRISMBeamTest_16cShort_mPMT.txt` | 216 KB | `wcte_geometry.npz` |
+| `scripts/geofile_to_npz.py` | the converter, so the asset is self-contained |  |
+
+The converter stays in the repo, and so do the `.npz` it produced:
+`config/sk_geometry.npz`, `config/hk_geometry.npz` and
+`config/wcte_geometry.npz` are tracked and are what `lucid/` actually reads.
+Nothing in `lucid/` reads a `geofile_*.txt`.

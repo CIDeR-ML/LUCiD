@@ -1,0 +1,180 @@
+name: ci
+
+# The gate. Every pull request runs the suite, with NO path filter: a change
+# under analysis/ (the gold standard) or tests/ is exactly as capable of
+# breaking the suite as one under lucid/, and the previous workflows filtered
+# both out. A failing test fails the merge.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    # L1 of the light gate: `pytest tests/ -q`, the fast lane only.
+    name: unit (L1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      # Non-editable, plain pip, constrained: the dependency set and entry points a user
+      # gets. The tests themselves import the checkout's lucid/, not the installed wheel:
+      # tests/__init__.py makes pytest put the repo root first on sys.path.
+      - run: pip install '.[dev]' -c tests/constraints.txt
+      - run: pytest tests/ -q
+
+  integration:
+    # The slow lane. One marker selects it (tests/conftest.py no longer
+    # refuses files at collection), so this is the same set `--slow` adds.
+    name: integration (slow)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install '.[dev]' -c tests/constraints.txt
+      # -rs names every skip: a gate that silently stopped running shows up.
+      - run: pytest tests/ -m slow -q -rs
+
+  data:
+    # The fast lane again, with the example data installed from the lucid-data
+    # release asset, so the data tests run instead of skipping:
+    # LUCID_REQUIRE_DATA=1 makes a missing data file a failure.
+    name: data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install '.[dev]' -c tests/constraints.txt
+      # Only the installed files: the tracked emitter.json beside them must come
+      # from the checkout, never from an older cache.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            data/water/*/*/weights.npz
+            data/water/*/*MeV_*events.root
+            spatial_overlap_integrals/*.json
+          key: lucid-data-${{ hashFiles('data/MANIFEST.sha256') }}
+      - run: python scripts/download_data.py
+      # The categorizer test's reference ROOT is in no release asset (its docstring says why).
+      - run: >-
+          LUCID_REQUIRE_DATA=1 pytest tests/ -q -rs
+          --deselect tests/production/test_categorizer_byte_identity.py::test_categorizer_matches_legacy_roots
+
+  examples:
+    # Every example at its small size, on CPU, with the example data installed:
+    # an example that no longer runs is a stale doc (the docs include their code).
+    # The editable install is the one install.md documents (config/ and data/
+    # resolve against the checkout); the overlap tables come with the data.
+    name: examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      JAX_PLATFORMS: cpu
+      LUCID_REQUIRE_DATA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -e . -c tests/constraints.txt
+      - uses: actions/cache@v4
+        with:
+          path: |
+            data/water/*/*/weights.npz
+            data/water/*/*MeV_*events.root
+            spatial_overlap_integrals/*.json
+          key: lucid-data-${{ hashFiles('data/MANIFEST.sha256') }}
+      - run: python scripts/download_data.py
+      - run: python examples/hello_simulate.py --n-rays 20000
+      - run: python examples/hello_gradient.py
+      - run: python examples/hello_calibrate.py --n-photons 100000 --steps 3
+      - run: python examples/hello_calibrate_own_optimiser.py --n-photons 100000 --steps 3
+      - run: python examples/seed_reconstruct.py --n-rays 10000 --steps 3 --quick
+      - run: >-
+          python examples/seed_reconstruct.py --geant4 --particle mu --hypothesis e
+          --n-rays 10000 --steps 3 --quick
+      - run: python examples/hello_telescope.py
+      - run: python examples/hello_multiparticle.py --split
+
+  lint:
+    # NOT yet blocking: .pre-commit-config.yaml lands with a backlog of
+    # pre-existing findings; flipping this to blocking is the last step of
+    # clearing that backlog.
+    name: lint (advisory until the backlog clears)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: pre-commit/action@v3.0.1
+
+  licenses:
+    # The licence scan R0.FREEZE.10 asks for. THIRD_PARTY.md §4 declares every
+    # dependency permissive; this is the job that would notice when a new one
+    # is not. A copyleft dependency that is IMPORTED (as opposed to run as a
+    # separate process, which sntools and snewpy are) constrains the licence
+    # the project can adopt, so it fails the job rather than warning.
+    name: licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install '.[dev,viz]' -c tests/constraints.txt pip-licenses
+      - name: No copyleft dependency
+        run: |
+          pip-licenses --format=markdown --with-urls > licenses.md
+          cat licenses.md
+          if pip-licenses --format=csv | grep -iE '(^|,)"?(GNU )?(Affero |Lesser )?General Public License'; then
+            echo "a copyleft dependency appeared: see THIRD_PARTY.md section 4"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licenses
+          path: licenses.md
+
+  links:
+    # Links, snippet includes and backtick repo paths in the Markdown pages
+    # resolve, and the site builds strictly (docs/development.md, "Docs"). docs.yml
+    # builds it again to deploy, on main only; this is the merge gate.
+    name: doc links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: python .github/scripts/check_doc_links.py
+      - run: pip install mkdocs-material
+      - run: mkdocs build --strict -d "$RUNNER_TEMP/site"
+
+  size:
+    # A file over 1 MB or a notebook with outputs is how the repo grew a 32 MB
+    # notebook and force-added GIFs that .gitignore was supposed to stop.
+    name: size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: No tracked file over 1 MB, no notebook with outputs
+        run: python .github/scripts/check_tracked_size.py

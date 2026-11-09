@@ -1,0 +1,140 @@
+# studies-archive-calib-campaign-2026-09 (A2) -- the 2026-09 calibration
+# estimator campaign, with the schur_gn arm its scripts are the only users of.
+# scripts/campaign/ is byte-identical at 71f00e49, eaf2e89f and this branch, so
+# the campaign parts are taken from the recorded commit; schur_gn.py and the
+# portable driver are taken from eaf2e89f, where they are also unchanged.
+tag: studies-archive-calib-campaign-2026-09
+commit: 71f00e49
+summary: the 2026-09 calibration estimator campaign + the `schur_gn` arm it is the only user of
+size: 195 KB
+part: 71f00e49:scripts/campaign
+part: eaf2e89f:scripts/calibrate_campaign.py
+part: eaf2e89f:lucid/fitting/schur_gn.py
+--- INDEX ---
+# studies-archive-calib-campaign-2026-09
+
+> **The 2026-09 calibration estimator campaign**: CRB vs photon budget and source layout, recovery,
+> shot-noise validation, per-PMT gain maps, the reflection split, the spectral curves, and the
+> grid/capstone runs that chose the Neyman + profiled-gains estimator LUCiD ships. Also the arm that
+> was rejected: the sqrt-MSE + free-per-PMT-Schur joint charge+time fit (`fit_charge_time`), whose own
+> module docstring calls it "the arm the calibration campaign rejected".
+>
+> **Not reproducible with current `lucid.fitting`**: the records quote `fit_gn`, `bake_k` and Anscombe
+> `eps`, all retired. The scripts `emit()` fixed conclusions that the committed numbers contradict —
+> the capstone "recovers all" at an RMS worse than the prior spread, "unbiased" sits next to a 10.1%
+> bias, and `g` is reported "recovered to 5.6%" by a script that holds `g` fixed. **Treat the tables as
+> a record of what was run, not as results.** Singular-Fisher CRBs print as 0.00%. Known defect in the
+> rejected arm: its Jacobian keys carry no seed term, so an ensemble shares its Jacobian noise.
+>
+> SK-hardcoded, environment-variable driven, wired for 5 GPUs. The physics worth keeping (the
+> reflection split, source diversity, and that timing needs a sharp source) is restated with current
+> numbers in `docs/guides/calibrate.md`.
+
+**Three corrections to the paragraph above, checked against the code and the
+tables at this commit.** The warning it gives is right; two of its three
+examples name the wrong script, and one names the wrong mechanism.
+
+1. **"recovers all" is a docstring, not an `emit()`.** It is
+   `scripts/campaign/capstone.py:10` — "the fit recovers all from a perturbed
+   start" — and it is fixed text, so it stands whatever the run produces. The
+   committed `CAPSTONE_RESULTS.md` is the contradiction: against a ±15% start,
+   `wall_reflection_rate` lands 10.7% off truth and `sensor_reflection_rate`
+   9.8% off, i.e. no better than the perturbation the fit was supposed to
+   remove. `capstone.py`'s own `emit()` conclusion (`:122`) is a different
+   fixed sentence: "Joint charge+timing in ONE fit: charge → optics + Q-map;
+   timing → T-map + tts."
+2. **The `g` 5.6% claim is right, and the mechanism is worse than stated.**
+   `| g | 0.9 | 0.9507 | 5.6% |` is `CAMPAIGN_RESULTS.md:30` (and the same row
+   in `CAMPAIGN_RESULTS_quick.md`), produced by `run_campaign.py`'s section 3.
+   `g` is `FIELDS7[0]` (`:53`), so it is in the CRB and in the problem — but the
+   recovery fit at `:156-158` passes `fix=(0,)`, commented `# fix g (loose)`,
+   which masks index 0 and holds `g` at its start value for all 120 steps. The
+   report loop at `:166-168` then prints **every** `FIELDS7` entry, `g`
+   included, as `|recovered/truth − 1|`. The start was
+   `theta0 + U(−0.2, 0.2)` (`:152`), so the 5.6% is not a recovery error at
+   all: it is where the random perturbation left a parameter that never moved,
+   printed in a column headed "frac err". Nothing in the record says `g` was
+   frozen. (The script that reports no `g` is `capstone.py`, whose `FIELDS` are
+   `[scatter_length, absorption_length, wall_reflection_rate,
+   sensor_reflection_rate, qe, tts]`.)
+3. **"Unbiased next to a 10.1% bias" is confirmed, in `TIMING_LASER_RESULTS.md`:**
+   "**spot PMTs (μ>1, n=523): implied TTS = 2.201 ns** vs truth 2.0 ns (10.1%) —
+   the headline, unbiased over the direct spot." The word and the number are in
+   one sentence, and the sentence is emitted literally.
+
+**Singular-Fisher CRBs printing 0.00% is confirmed:** `CAMPAIGN_RESULTS.md`'s
+source-diversity table gives `g` a single-laser CRB of `0%` on the same row as
+`loose` for `mie_hunter` — a zero that means the Fisher matrix was singular and
+the inverse unusable, not that `g` was measured perfectly.
+
+## What each committed table recorded
+
+So the conclusion survives without the driver. Every number below is read off the
+committed `*_RESULTS.md` in this tarball; none of it was re-run.
+
+| record | configuration | what it recorded |
+|---|---|---|
+| `CAMPAIGN_RESULTS.md` (67 lines) | SK_like, NS=10764, N_photons=1e6, intensity=1e8, full pass | **Source diversity breaks the degeneracies** — the campaign's central result. With a single laser every global is unconstrained (the per-PMT `k` absorbs any single-source pattern; `scatter`↔`abs`↔`L_M` are confounded); CRBs tighten monotonically single → laser+iso → multi. Reflection split reproduced: `sensor_refl` is the loosest reflectivity, `wall_refl` tighter. `L_R` tightest, `qe` ~0.7–1%, `L_M` the hard one (thin Mie, ~2.3% of the scatter rate). Charge variance breaks QE↔gain exactly: Fano `v/m = g(1+w²)` recovers the SPE width `w = 0.350` against truth 0.35. GN recovery from a 20%-perturbed start, 120 steps: `L_R` 8.4%, `L_M` 16.8%, `L_abs` 4.9%, `wall` 18.7%, `sensor` 2.8%, `qe` 1.9% — and a `g` row reading 5.6% that is the frozen start, not a recovery (see correction 2). |
+| `CAMPAIGN_RESULTS_quick.md` (67 lines) | the same pass at 50 QUICK steps | The same qualitative structure, tighter CRBs quoted (`L_R` 0.005%, `sensor` 4.3% vs `wall` 2.9% at multi) and the recovery explicitly called optimizer-limited at 50 steps. Kept because it is the run the interpretation text was written against. |
+| `GRID_RESULTS.md` (148 lines) | CRB and fit vs photon budget 1e5→1e9, source combo and source location | CRB scales as 1/√budget to within 1.00 for `g`, `L_R`, `L_M` — i.e. the well-determined block is statistics-limited, not systematics-limited. `L_abs`, `wall`, `sensor` and `qe` have CRBs of 94%, 209%, 328% and 43% at 1e5 and are information-starved until ~1e8. The recovery half of the table is labelled "stabilized: bake_k+polyak+Anscombe" — **three stabilisers that no longer exist in `lucid.fitting`**, which is why this table cannot be reproduced. |
+| `CAPSTONE_RESULTS.md` (23 lines) | SK_like, N_photons=5e5, K=8, moments mode, 2 sources, 120 steps, start ±15% | Joint charge+time in one fit: optics + `tts` + per-PMT Q-map + per-PMT T-map. Globals: `L_abs` 1.4%, `qe` 1.0%, `tts` 3.1%, but `scatter_length` 4.8%, `wall` 10.7%, `sensor` 9.8% — the two reflectivities no better than the ±15% start. Q-map corr 0.7013 at RMS 12.3% against a 12% truth spread; T-map corr 0.6631 at RMS 3.357 ns against a 3.0 ns spread. Read as: the maps correlate, the reflectivities do not converge. |
+| `PER_PMT_RESULTS.md` (14 lines) | isotropic source, optics known, closed-form `k̂ = Q/M` | **The positive result that justified the shipped estimator.** Slope(`k̂` vs `k`) = 1.0003 / 1.0038 / 1.0021 for a random spread, a smooth z-trend and both together — unbiased in all three, including the position-correlated trend that biases the reflectivities if ignored. corr 0.82–0.91, RMS 8.4% (the forward-key photon-noise floor). Gauge `mean(log k) = 0` fixes the `qe`↔`mean(k)` degeneracy. Finished in 0.6 min. |
+| `SHOTNOISE_RESULTS.md` (24 lines) | 4 noise seeds, sample-mode shot noise as data, expected forward as model, 40 steps | **The campaign's decisive negative result.** The joint Schur-`k` GN **diverges** on a single-draw shot-noise dataset: `L_abs` −50.9%, `wall` −49.3%, `qe` −12.2% bias, while the 10⁴ free per-PMT `k` overfit the per-sensor noise (median realized σ 83.34% against a 12% truth spread, per-seed corr 0.192). At NPH=3e5 it was worse (−73%/−94%, `k` σ 427%). `L_R` stays tight (set by across-sensor shape, not the amplitude `k` absorbs). realized/CRB is 9.35 for `L_R` and 0.01–0.23 for the rest — the CRB validates **identifiability, not optimiser stability**. This is why LUCiD ships the closed-form profiled gains of `PER_PMT_RESULTS.md` and not this arm. |
+| `REFLECTION_FIT_RESULTS.md` (20 lines) | angular reflection model, λ=400 nm, 3 sources, optics at truth, 100 steps | Six angular parameters fitted. `cathode_nk` 4.4%, `cathode_nr` 8.8% — but against CRBs of 52% and 65%, i.e. recovered far inside a bound so loose the fit is unconstrained there. `wall_R0` 13.3% against a 5.05% CRB and `wall_p` **60.1%** against 10.06% — both outside their bounds. Read as: the angular model's shape parameters are not recoverable at this budget. |
+| `SPECTRAL_FIT_RESULTS.md` (30 lines) | 5 lasers + 5 iso at control λ, per-curve mode, 120 steps | `L_abs(λ)` recovers to max 0.8% against a ~2% CRB — **so the ~13% joint floor was the abs↔Rayleigh per-λ degeneracy, not the optimiser**, which is the finding that justified the staged recipe. But `L_R(λ)` is 14.0% off even fitted alone against a 0.01% CRB: Rayleigh is the stiff direction, the proportional ridge (∝diag) over-damps it and it under-moves. The named fix — Polyak iterate-averaging / reduced ridge on the stiff direction — is the same stabiliser the shot-noise study needed and is **not** in the current fitter. |
+| `TIMING_RESULTS.md` (40 lines) | isotropic, M=200 flashes/run, N_photons=1e6, TTS 2.0 ns, t0 spread 3.0 ns | Per-PMT `t0` RMS recovery 3.262 ns against a flash-noise floor of ≈2.887 ns, corr 0.6800, over all 10764 PMTs — per-PMT `t0` is recovered through the full photon sim at the noise floor. The dominant, well-conditioned timing calibration. |
+| `TIMING_LASER_RESULTS.md` (23 lines) | downward laser NA=0.3, M=300 flashes/run, N_photons=3e5 | **Timing needs a sharp source.** Over the direct spot (μ>1, n=523) the implied TTS is 2.201 ns against truth 2.0 — the 10.1% quoted as "unbiased" above. Halo PMTs give 46.616 ns, 21.2× the spot, inflated by the residual geometric order statistic and cleanly separated by the variance. Selecting the sharpest 25% by reference variance gives 2.009 ns but is biased low at small M (selecting on a noisy variance estimate picks downward fluctuations). |
+| `CAMPAIGN_PLAN.md` | — | The campaign's own task list, including the P6 timing gap that `fit_charge_time` was written for. It is the map to which record answers which question. |
+
+## What is in this tarball
+
+| path | size at its commit | what it is |
+|---|---|---|
+| `scripts/campaign/` | 124 KB, 24 files | 12 drivers, 10 `*_RESULTS.md`, `CAMPAIGN_PLAN.md`, `.gitignore` — taken from `71f00e49` |
+| `scripts/calibrate_campaign.py` | 4.2 KB | the **portable** campaign driver: same question, no env vars, no SK hardcoding, and it runs against the shipped `lucid.fitting.fit`/`crb` rather than the retired `fit_gn`. If you revive one thing from this asset, revive this |
+| `lucid/fitting/schur_gn.py` | 13 KB | the rejected arm's code, so the record is reproducible in principle |
+
+**`scripts/campaign/` is byte-identical at `71f00e49`, `eaf2e89f` and the
+cleanup branch** — the directory was never touched after the campaign ended,
+which is the strongest evidence available that it is a finished record and not
+live code.
+
+## Which parts of `schur_gn.py` are the study, and which are not
+
+`schur_gn.py` travels here whole, but **only part of it is campaign-only**, and
+the module is not deleted by the unit that built this asset. At `eaf2e89f`:
+
+* **campaign-only** — `fit_charge_time` and `ChargeTimeModel`: the joint
+  charge+time arm. Callers are `scripts/campaign/capstone.py:27,88,104`,
+  `scripts/campaign/gridfit.py:23,191,195` and `tests/test_fitting_charge_time.py`.
+  Both script callers are in this tarball, so the test is the only live one left.
+* **no caller at all** — `sqrt_residual` (`:50`). Its own module docstring says
+  so at `:36`: "it has **no caller anywhere in the tree**". The name match in
+  `tests/test_fitting_estimator_unbiased.py:135`
+  (`test_the_sqrt_residuals_displacement_grows_with_noise`) is a name match, not
+  a call.
+* **live, and staying** — `SourceModel` (imported by `lucid/fitting/problem.py:25`),
+  `make_constrained_schur` and `_keys` (imported by `lucid/fitting/fisher.py:27`),
+  and `ridge_inverse`, which is the damping those two use and is pinned by
+  `tests/test_fitting.py:64` and `tests/test_unification_pins.py:10-17`.
+
+So this asset carries the module as a record; retiring the campaign-only half
+of it is a separate edit in `lucid/fitting/`, and the module cannot simply leave
+the tree with `scripts/campaign/`.
+
+## Known defects, all confirmed at this commit
+
+| defect | where |
+|---|---|
+| Conclusions are fixed text independent of the numbers | `capstone.py:10` (docstring), `capstone.py:122` (`emit`), and the "Interpretation"/"Bottom line" blocks of both `CAMPAIGN_RESULTS*.md` |
+| A frozen parameter is reported in the "frac err" column as if it had been fitted | `run_campaign.py:158` masks `g` with `fix=(0,)`; `:166-168` prints it anyway |
+| Three stabilisers the records depend on no longer exist | `GRID_RESULTS.md:56` quotes `bake_k`, `polyak` and Anscombe; `SPECTRAL_FIT_RESULTS.md:28` and `SHOTNOISE_RESULTS.md` name them as the required fix. `fit_gn` is also gone |
+| Singular-Fisher CRBs print as `0.00%` rather than failing | `CAMPAIGN_RESULTS.md`, the `single_laser` column |
+| Report generators overwrite tracked files in the source tree, one truncating and one appending the same file | the `emit()` helpers in the drivers — rerunning a driver rewrote the committed record in place |
+| The rejected arm's Jacobian keys carry no seed term, so an ensemble shares its Jacobian noise | `schur_gn.py`; the rule it violates is documented at `lucid/fitting/calib.py:298-301` |
+| SK-hardcoded, driven by ~15 environment variables, wired for 5 GPUs | every driver; `scripts/calibrate_campaign.py` is the portable answer to this |
+
+Large run artefacts do **not** travel here: the 282 MB CRB-appendix data is on
+S3DF at `/sdf/data/neutrino/omara/lucid_studies/`. `scripts/campaign/.gitignore`
+names what was never committed in the first place (`*_out/`, `grid_out/`,
+`out*/`, `*.log`, `*.png`).

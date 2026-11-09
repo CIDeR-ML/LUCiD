@@ -1,34 +1,94 @@
-"""benchmark_forward — wall-time of the differentiable forward (and its gradient) vs (N, K).
+"""benchmark_forward — warm wall time of what the fits run, vs photon count N and scatter steps K.
 
-Times the JIT-compiled forward pass, and — for the calibration loss — the value_and_grad, as a
-function of photon count N and scatter iterations K. Reports warm timings (JIT excluded) so you
-can size runs and check the gradient overhead. A reproducible driver for LUCiD's efficiency
-claims (the notebook `computational_performance_evaluation` did this ad hoc).
+``--what track``: the reconstruction model, ``lucid.fitting.ReconModel.build`` at the published
+``MODEL_RECIPE`` with N and K replaced: its per-PMT forward (``perpmt``), its ``loss`` and its
+``grad``, against pseudo-data from one sampled forward of the same track.
 
-Run:  python scripts/benchmark_forward.py                 # defaults
-      python scripts/benchmark_forward.py --n 100000 500000 --k 4 8 --repeats 3
+``--what calibration``: the calibration forward, a ``CalibrationForward`` over a light-source
+simulator (one laser and two isotropic sources, one wavelength, the physics config's optics), and
+its Jacobian (``CalibrationForward.jacobian``), the cost of a Gauss-Newton refresh.
+
+Each time is the best of ``--repeats`` calls after one untimed call, so JIT is excluded. The
+paper's timing figure is ``analysis/paper/fig_compute_performance.py``, not this script.
+
+Run:  python scripts/benchmark_forward.py                 # defaults: SK_like, both
+      python scripts/benchmark_forward.py --what track --n 100000 500000 --k 4 8 --repeats 3
 """
-import argparse, time
-import jax, jax.numpy as jnp, numpy as np
-from lucid.geometry import generate_detector
+import argparse
+import time
+from dataclasses import replace
+
+import jax
+import jax.numpy as jnp
+
+from lucid.detector_params import load_detector_params
+from lucid.fitting import (MODEL_RECIPE, CalibrationForward, CalibrationParams, ReconModel,
+                           track_from_vec9, vec9_from_track)
 from lucid.simulation import setup_event_simulator
-from lucid.detector_params import ParticleParams, DetectorParams
-from lucid.losses import WC_smooth_loss
-from lucid.sources import laser_source
+from lucid.sources import isotropic_source, laser_source
 
-GRID = dict(n_cap=80, n_angular=120, n_height=80)
+# The paper's propagation grid (analysis/paper/utils/studies.py PIPELINE['grid']).
+GRID = dict(n_cap=80, n_angular=120, n_height=80, max_candidates_per_ray=8)
+TTS = 2.1               # the paper's data TTS and likelihood sigma (ns)
 
 
-def _time(fn, repeats):
-    fn()  # warm up (JIT compile)
+def best_ms(fn, repeats):
+    """Best wall time of ``fn()`` in ms over ``repeats`` calls, after one untimed (compiling) call."""
+    jax.block_until_ready(fn())
     ts = []
     for _ in range(repeats):
-        t0 = time.perf_counter(); jax.block_until_ready(fn()); ts.append(time.perf_counter() - t0)
-    return 1e3 * min(ts)  # ms, best of
+        t0 = time.perf_counter()
+        jax.block_until_ready(fn())
+        ts.append(time.perf_counter() - t0)
+    return 1e3 * min(ts)
+
+
+def bench_track(args, N, K):
+    model = ReconModel.build(args.geom, args.physics, 'muon', sigma=TTS,
+                             recipe=replace(MODEL_RECIPE, n_rays=N, K=K), grid=GRID)
+    # a 1 GeV muon at the centre, off every symmetry axis; the data are one sampled forward of it
+    t9 = jnp.asarray(vec9_from_track(1000.0, [0.0, 0.0, 0.0], [0.5, 0.5, 0.7071]))
+    dp = load_detector_params(args.physics, num_sensors=model.ND)
+    data_sim = setup_event_simulator(
+        args.geom, N, source='particle', detection='sampled', hits='first_arrival',
+        temperature=None, K=K, physics_config=args.physics, particle='muon', wavelength_mode=True,
+        default_detector_params=dp._replace(response=dp.response._replace(tts=jnp.asarray(TTS))),
+        **GRID)
+    oc, ot = data_sim(track_from_vec9(t9), jax.random.PRNGKey(0))
+    key = jax.random.PRNGKey(1)
+    return dict(forward=best_ms(lambda: model.perpmt(t9, oc, ot, key), args.repeats),
+                loss=best_ms(lambda: model.loss(t9, oc, ot, key), args.repeats),
+                grad=best_ms(lambda: model.grad(t9, oc, ot, key), args.repeats))
+
+
+def bench_calibration(args, N, K):
+    sim = setup_event_simulator(args.geom, N, source='light_source', temperature=None, K=K,
+                                physics_config=args.physics, wavelength_mode=False, **GRID)
+    dp = load_detector_params(args.physics)
+    params = CalibrationParams(n_wavelengths=1)
+    theta = jnp.asarray(params.theta_from_physical(
+        [dict(scatter_length=float(dp.scattering.scatter_length),
+              absorption_length=float(dp.absorption.absorption_length),
+              qe=float(dp.response.qe))],
+        float(dp.reflection.wall_reflection_rate), float(dp.reflection.wall_fspec),
+        float(dp.reflection.sensor_reflection_rate), float(dp.reflection.sensor_fspec)))
+    sources = [laser_source(position=[0.0, 0.0, 0.0], direction=[0.0, 0.0, -1.0], intensity=1e8),
+               isotropic_source(position=[1.0, 0.0, 0.0], intensity=1e8),
+               isotropic_source(position=[-1.0, 0.0, 0.0], intensity=1e8)]
+    forward = CalibrationForward(sim, sources, params)
+    gains = jnp.ones(forward.NS)
+    data_key, forward_key, jacobian_key = jax.random.split(jax.random.PRNGKey(0), 3)
+    data = forward(theta, data_key, gains)
+    q_floor = 0.01 * float(jnp.mean(data))
+    lk = jnp.zeros(forward.NS)
+    return dict(forward=best_ms(lambda: forward(theta, forward_key, gains), args.repeats),
+                jacobian=best_ms(lambda: forward.jacobian(theta, lk, jacobian_key, data, q_floor),
+                                 args.repeats))
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description='Warm wall time of the track and calibration fits.')
+    ap.add_argument('--what', choices=('track', 'calibration', 'both'), default='both')
     ap.add_argument('--geom', default='config/SK_like_geom_config.json')
     ap.add_argument('--physics', default='config/SK_like_physics_config.json')
     ap.add_argument('--n', type=int, nargs='+', default=[100_000, 250_000])
@@ -36,41 +96,16 @@ def main():
     ap.add_argument('--repeats', type=int, default=3)
     args = ap.parse_args()
 
-    det = generate_detector(args.geom); NS = len(det.all_points)
-    print(f'backend: {jax.default_backend()} | {NS} sensors | grid {GRID}')
-    print(f'{"mode":12s}{"N":>10s}{"K":>4s}{"forward(ms)":>13s}{"fwd+grad(ms)":>14s}')
-
-    track = ParticleParams.from_cartesian(energy=1000., position=[0., 0., 0.], direction=[1., 0., 0.], t0=0.)
-    dp = DetectorParams.from_flat(scatter_length=70., mie_scatter_length=3000., g=0.9,
-                                  wall_reflection_rate=.2, sensor_reflection_rate=.2,
-                                  absorption_length=60., qe=0.07, qe_corrections=jnp.ones(NS))
-    src = laser_source(position=[0, 0, det.H/2 - .1], direction=[0, 0, -1], intensity=1e6)
-    pts = jnp.asarray(det.all_points)
-
-    for N in args.n:
-        for K in args.k:
-            # track forward (per-photon mode)
-            trk = setup_event_simulator(args.geom, N, K=K, hit_mode='per_photon', physics_config=args.physics,
-                                        default_detector_params=True, particle='muon', wavelength_mode=True,
-                                        pos_grad_threshold=K, n_grad_iters=K, **GRID)
-            f_trk = _time(lambda: trk(track, jax.random.PRNGKey(0)), args.repeats)
-            print(f'{"track":12s}{N:>10d}{K:>4d}{f_trk:>13.1f}{"—":>14s}')
-
-            # calibration forward + gradient (value_and_grad of the calibration loss over DetectorParams)
-            cal = setup_event_simulator(args.geom, N, temperature=None, K=K, is_calibration=True,
-                                        hit_mode='aggregated', physics_config=args.physics,
-                                        wavelength_mode=False, **GRID)
-            cal_d = setup_event_simulator(args.geom, N, temperature=None, K=K, is_calibration=True,
-                                          hit_mode='aggregated', physics_config=args.physics,
-                                          default_detector_params=dp, wavelength_mode=False, **GRID)
-            truth = jax.lax.stop_gradient(cal_d(src, jax.random.PRNGKey(1)))
-            def loss(x):
-                return WC_smooth_loss(pts, *truth, *cal(src, x, jax.random.PRNGKey(2)),
-                                      lambda_poisson=1.0, lambda_time=0.0, tau=0.5)
-            vg = jax.jit(jax.value_and_grad(loss))
-            f_cal = _time(lambda: cal(src, dp, jax.random.PRNGKey(2)), args.repeats)
-            g_cal = _time(lambda: vg(dp), args.repeats)
-            print(f'{"calib":12s}{N:>10d}{K:>4d}{f_cal:>13.1f}{g_cal:>14.1f}')
+    benches = {'track': bench_track, 'calibration': bench_calibration}
+    what = list(benches) if args.what == 'both' else [args.what]
+    print(f'backend: {jax.default_backend()} | {args.geom} | {args.physics} | '
+          f'warm, best of {args.repeats}, ms')
+    for name in what:
+        for N in args.n:
+            for K in args.k:
+                times = benches[name](args, N, K)
+                print(f'{name:12s} N={N:>9d} K={K:>2d}  '
+                      + '  '.join(f'{k}={v:9.1f}' for k, v in times.items()), flush=True)
 
 
 if __name__ == '__main__':

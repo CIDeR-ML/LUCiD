@@ -7,7 +7,7 @@ name = "lucid-sim"
 dynamic = ["version"]
 description = "Differentiable photon simulation for optical particle detectors"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"   # jax 0.5.3, the pinned toolchain, requires 3.10
 authors = [
     { name = "Omar Alterkait", email = "omar.alterkait@tufts.edu" },
     { name = "César Jesús-Valls" },
@@ -22,24 +22,25 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-    "jax>=0.4.20",
-    "jaxlib>=0.4.20",
+    # The supported range. The one point CI and the published numbers run at is
+    # tests/constraints.txt (read out of develop.sif, docs/getting-started/install.md);
+    # the upper bound is there because a jax minor release has moved forward
+    # numerics before.
+    "jax>=0.5.3,<0.6",
+    "jaxlib>=0.5.3,<0.6",
     "flax>=0.8.0",
     "optax>=0.1.7",
     "numpy>=1.24",
     "scipy>=1.10",
     "h5py>=3.8",
     "tqdm>=4.60",
-    "plotly>=5.0",
     "matplotlib>=3.7",
-    "seaborn>=0.12",
     "uproot>=5.0",
 ]
 
@@ -50,28 +51,73 @@ Repository = "https://github.com/CIDeR-ML/LUCiD"
 Issues = "https://github.com/CIDeR-ML/LUCiD/issues"
 
 [project.optional-dependencies]
-training = ["torch>=2.0"]
-notebooks = ["jupyterlab>=4.0", "ipykernel>=6.0", "nbmake"]
-docs = ["mkdocs-material>=9.5", "mkdocs-jupyter>=0.24", "mkdocstrings[python]>=0.24"]
-dev = ["pytest>=7.0", "lucid-sim[notebooks]"]
-all = ["lucid-sim[training,notebooks,docs,dev]"]
+# The 3D event display (plotly), its static export (kaleido) and the event
+# animation (imageio): lucid.visualization imports each where it is used, and
+# the paper display figures need all three.
+viz = ["plotly>=5.0", "kaleido>=0.2.1", "imageio>=2.16"]
+docs = ["mkdocs-material>=9.5"]
+# What CI installs: the suite, plus the hooks the lint job runs. ruff is
+# pinned to the version in .pre-commit-config.yaml, so a local `ruff check`
+# and the hook cannot disagree about which rules exist.
+dev = [
+    "pytest>=7.0",
+    "pre-commit>=4.0",
+    "ruff==0.17.1",
+]
+all = ["lucid-sim[viz,docs,dev]"]
 
 [project.scripts]
-lucid-optimize = "lucid.optimization.run:main"
-lucid-train-siren = "lucid.siren.train:main"
-lucid-run-job = "lucid.production.run_job:main"
-lucid-build-photon-table = "lucid.siren.training.photonsim_data.build_photon_table:main"
-lucid-build-dedx-table = "lucid.siren.training.photonsim_data.build_dedx_table:main"
+lucid-train-siren = "lucid.siren.training.train:main"
+lucid-run-job = "lucid.production.dataprod.run_job:main"
+lucid-build-photon-table = "lucid.siren.training.photonsim_data.build_tables:main_photon"
+lucid-build-dedx-table = "lucid.siren.training.photonsim_data.build_tables:main_dedx"
 
 [tool.setuptools.packages.find]
 include = ["lucid*"]
 
 [tool.setuptools.package-data]
-"lucid.production.configs" = ["**/*.json"]
+"lucid.production.dataprod.configs" = ["**/*.json"]
+"lucid.siren.training" = ["nominal.json"]
+
+[tool.ruff]
+# The lint standard (docs/development.md), in the form a hook can run. Kept here rather
+# than in .pre-commit-config.yaml's args so that a bare `ruff check` enforces
+# the same rules as the hook.
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ARG", "PTH", "NPY", "RUF", "D", "TD", "FIX"]
+ignore = [
+    # numpy convention: the sections D203/D213 forbid, and the one-blank-line
+    # rules that contradict it.
+    "D203", "D213",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+# A test's name and docstring are its documentation (T3); D1xx on every test
+# function would be noise, and ARG fires on every pytest fixture argument.
+"tests/**" = ["D100", "D101", "D102", "D103", "ARG001", "ARG002"]
+# Example scripts are read top to bottom, not imported.
+"examples/**" = ["D100", "D103"]
 
 [tool.pytest.ini_options]
+# One mechanism (tests/README.md): the marker, deselected here. `--slow`
+# (tests/conftest.py) is an alias for dropping this -m, so the flag and the
+# marker select the same set. There is no basename list anywhere.
+addopts = "-m 'not slow'"
 markers = [
-    "slow: full simulation with JIT compilation (30s+)",
+    "slow: a detector at SK scale, a simulator compile beyond the session's tiny ones, or a ROOT file",
+    "golden: compares against a stored reference (one: tests/physics/test_forward_golden.py; re-capture with LUCID_CAPTURE_GOLDEN=1)",
+    "requires_data(*paths): needs these files under data/ (a tuple: any one of them); skipped without, failed with LUCID_REQUIRE_DATA=1 (tests/conftest.py)",
+    "requires_emitter(particle, material, dedx=False): needs the trained SIREN emitter the simulator would load (the material JSON's 'siren' set); skipped or failed as requires_data",
+    "gpu: needs a GPU; deselected unless LUCID_GATE_GPU=1, never part of the gate",
 ]
 
 [tool.setuptools_scm]
+# Release tags only: a non-version tag (`v1-full`, `studies/...`) nearer HEAD would otherwise be
+# taken for the version and fail the build.
+scm.git.describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*.[0-9]*"]

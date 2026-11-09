@@ -13,11 +13,14 @@ LUCiD runs in one of two regimes, selected by `wavelength_mode` on
 
 ## The medium reference
 
-`lucid.wavelength.medium.make_medium(material, wavelength_grid)` builds the reference curves
-from `config/materials/<material>.json`:
+`lucid.wavelength.medium.load_medium(material)` reads `config/materials/<material>.json`, and
+`medium_on_grid(medium, wavelength_grid)` evaluates its reference curves on the wavelength grid
+(the simulator setup calls both; `make_medium(material, wavelength_grid)` is their composition).
+In wavelength mode the curves come from the material file's fit parameters; the physics
+config's `scalar_mode` lengths are read only in scalar mode.
 
-- **Rayleigh scattering** — a 1/λ⁴ law anchored to the material's measured scattering length
-  (Mie scattering adds a second length and an asymmetry parameter `g` controlling how
+- **Rayleigh scattering** — `P4/λ⁴ · (1 + P5/λ²)`, the material file's symmetric-scattering
+  fit (Mie scattering adds a second coefficient and an asymmetry parameter `g` controlling how
   forward-peaked it is).
 - **Absorption** — for water: the SK-calibration power law in the blue joined onto the
   Pope & Fry (1997) measured data in the red, blended smoothly across the ~464 nm seam so
@@ -64,12 +67,13 @@ calibration fits *departures* from known physics rather than refitting the physi
   `QE / (1 − R0)`, with `R0` the sensor reflectance at normal incidence, so light arriving there
   is detected at the QE. Setup rejects baked-in parameters whose peak QE exceeds `1 − R0`.
 - **Cherenkov spectrum**: track sources sample the 1/λ² Cherenkov spectrum over the physical
-  emission band (`cherenkov_emission_band` on `setup_event_simulator`). Photons outside the
+  emission band, the Cherenkov emitter's `emission_band_nm` (`cherenkov_emission_band` on
+  `setup_event_simulator` overrides it). Photons outside the
   QE knots or medium grid contribute nothing, which is exactly the physical statement that
   they are undetectable.
-- **Scalar projection**: configs that choose a scalar representation for a property get it
-  projected from the referenced λ-curve at `scalar_ref_wavelength` (400 nm by default), so
-  the two regimes agree at the reference wavelength by construction.
+- **Scalar projection**: a config that omits a scalar optical property gets it projected from
+  the referenced λ-curve at the scalar reference wavelength (400 nm), so the two regimes agree
+  at the reference wavelength by construction.
 
 ## `wavelength_sampling`: bare spectrum vs QE-weighted
 
@@ -82,7 +86,7 @@ When LUCiD samples the wavelengths itself (track mode, or calibration with `sour
 - **`'cherenkov_qe'`** — sample λ from `QE(λ)/λ²` directly (inverse-CDF), so the per-photon weight
   collapses to the scalar mean `⟨QE⟩_C`. This is variance-optimal in expected-value mode (it puts
   samples where they are detectable), but it *folds QE into the sampling distribution*. Rejected at
-  setup when `wavelength_mode=False`, no QE curve is loaded, or `is_data=True`.
+  setup when `wavelength_mode=False`, no QE curve is loaded, or `source='photons'`.
 
 The practical consequence: **fitting QE requires the bare spectrum (`'cherenkov'`)**. Once QE is
 baked into the sampling law (`'cherenkov_qe'`), the per-photon weight no longer carries `qe(λ)` as a

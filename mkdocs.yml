@@ -33,6 +33,8 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.highlight
   - pymdownx.superfences
+  # Code on a page is included from the file it runs in (examples/), so it cannot drift.
+  - pymdownx.snippets: { base_path: ['.'], check_paths: true, dedent_subsections: true }
   - pymdownx.arithmatex: { generic: true }
   - tables
   - toc: { permalink: true }
@@ -49,7 +51,6 @@ nav:
       - Bundled detectors: getting-started/detectors.md
   - Concepts:
       - The photon pipeline: concepts/photon-pipeline.md
-      - Geometry & configuration: concepts/geometry.md
       - Architecture: concepts/architecture.md
       - Parameters (DetectorParams): concepts/detector-params-vs-args.md
       - Wavelength physics: concepts/wavelength.md
@@ -64,15 +65,14 @@ nav:
           - From the container (Apptainer / Docker): guides/production/container.md
           - Cluster deployment:
               - How cluster targeting works: guides/production/cluster-abstraction.md
-              - S3DF (SLAC): guides/production/deploy-s3df.md
-              - NERSC (Perlmutter): guides/production/deploy-nersc.md
-              - LXPLUS (CERN): guides/production/deploy-lxplus.md
+              - S3DF, NERSC, LXPLUS: guides/production/clusters.md
           - Training the SIREN emitter: guides/production/siren-training-inputs.md
   - Reference:
       - CLI: reference/cli.md
       - Configuration: reference/config.md
       - Dataset schema: reference/dataset-schema.md
-      - Working with data: reference/working-with-data.md
       - Digitizer & trigger: reference/digitizer-and-trigger.md
       - PMT .npz schema: reference/pmt-npz-schema.md
-  - Contributing: https://github.com/CIDeR-ML/LUCiD/blob/main/CONTRIBUTING.md
+  - Development:
+      - Development: development.md
+      - Studies and archives: studies.md

@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'examples/**'          # pages include code from examples/
       - 'landing/**'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'

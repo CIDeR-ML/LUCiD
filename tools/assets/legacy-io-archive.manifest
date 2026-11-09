@@ -1,0 +1,43 @@
+# legacy-io-archive (A14) -- the three retired event-I/O generations, so HDF5
+# files already on disk stay readable.  This asset must be built BEFORE the
+# code is deleted from the tree (R2.IO.2 / WU-15): that ordering is a
+# correctness requirement, not tidiness.
+tag: legacy-io-archive
+commit: eaf2e89f
+summary: read HDF5 files written before format 6
+size: 176 KB
+part: eaf2e89f:lucid/sources/legacy_io.py
+part: eaf2e89f:lucid/sources/event_io.py
+part: eaf2e89f:lucid/sources/particle_physics.py
+part: eaf2e89f:lucid/generate.py
+part: eaf2e89f:lucid/utils.py
+--- INDEX ---
+# legacy-io-archive
+
+**Retired LUCiD event I/O, as it stood at `v1-full`.** Use it only to **read** HDF5 files written
+before format 6, or ROOT files with per-photon branches on `OpticalPhotons`. Three retired
+generations: single-event v0/v1 HDF5, "particle v1", the flat batch v2 writer/reader, the legacy
+`v_photon` ROOT reader, the four legacy event generators, and the host-side kinematics printers.
+
+**It does not run against current code**: `legacy_io` expects a flat `DetectorParams` (TypeError);
+the legacy particle reader raises on PhotonSim's chunked schema; `generate_events_from_root` omits
+`n_particles` so every save raises into a swallowed `except`; and the `event_io` generator
+double-translates photons and uses the global RNG for `t0`. The nine duplicated kinematics functions
+are inconsistent with themselves (π⁰ mass 135.0 vs 134.98; unknown PDGs silently get the muon mass;
+`analyze_event_directory` raises `NameError`).
+
+The current reader/writer is `lucid.io.dataset` (format 6). The notebooks that used these functions
+are in A4 and A5 — ship this asset together with them.
+
+## What is in this tarball
+
+| path | what it is |
+|---|---|
+| `lucid/sources/legacy_io.py` | single-event v0/v1 HDF5 (576 LOC) |
+| `lucid/sources/event_io.py` | the flat batch v2 trio, the legacy `v_photon` ROOT reader, the four legacy generators, the kinematics printers |
+| `lucid/sources/particle_physics.py` | the "particle v1" reader and the nine duplicated kinematics functions |
+| `lucid/generate.py` | the `lucid.generate` shim the notebooks import |
+| `lucid/utils.py` | whole file; the shim this asset is about is `lucid/utils.py:860-887` |
+
+`event_io.py` travels whole because the retired halves (lines 19-2851 and
+2852-3243 at this commit) do not import without the rest of the module.

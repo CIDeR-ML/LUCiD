@@ -31,14 +31,20 @@ ROOT scan, geometry build, lookup-table construction).
 Usage:
 
     python3 ci_tests/speed_test.py \\
-        --configs dataprod_01_mu.json dataprod_06_e_low_energy.json \\
+        --configs GeV/02_mu.json Solar/01_e_low_energy.json \\
         --n-events 20 \\
         --out-json /out/speed.json --out-md /out/speed.md
 
-GENIE configs need ``GENIE_XSEC_FILE`` set in the environment to a
-spline matching the tune declared in the config; see
+``--configs`` names files under ``lucid/production/dataprod/configs/``; the two
+above are the default. ``lucid-run-job`` is run with the config's own
+``detector`` when it declares one (``Solar/01_e_low_energy.json``: ``HK``) and
+``--detector SK_WAND`` otherwise (``GeV/02_mu.json``), as the fan-out runs them,
+so the timings include the production readout (SPE sampling, dark noise, trigger).
+
+A GENIE config (none ships today) needs ``GENIE_XSEC_FILE`` set in the
+environment to a spline matching the tune declared in the config; see
 ``LUCiD/docs/guides/production/container.md``. When the variable is unset the
-GENIE configs are silently skipped (with a note in the report).
+GENIE configs are skipped (with a note in the report).
 """
 
 from __future__ import annotations
@@ -47,7 +53,6 @@ import argparse
 import json
 import os
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -56,28 +61,25 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lucid.production.qa.job_log import classify
+
 REPO = Path(__file__).resolve().parents[1]
-RUN_JOB = REPO / "lucid" / "production" / "run_job.py"
-CONFIGS_DIR = REPO / "lucid" / "production" / "configs"
+RUN_JOB = REPO / "lucid" / "production" / "dataprod" / "run_job.py"
+CONFIGS_DIR = REPO / "lucid" / "production" / "dataprod" / "configs"
 
 DEFAULT_CONFIGS = [
     "GeV/02_mu.json",                 # single mu — baseline
     "Solar/01_e_low_energy.json",     # low-E electron — fast, EM-dominated
 ]
 
-# ── Stdout patterns from run_job.py + PhotonSim + LUCiD writer ────────
-RE_STEP0 = re.compile(r"^=== Step 0: GENIE")
-RE_STEP2 = re.compile(r"^=== Step 2:")
-RE_STEP3 = re.compile(r"^=== Step 3:")
-RE_STEP4 = re.compile(r"^=== Step 4:")
-RE_PHOTONSIM_EXIT = re.compile(
-    r"PhotonSim exit code:\s*\d+\s*\(elapsed\s*([\d.]+)\s*s\)"
-)
-RE_LUCID_EVENT_TOTAL = re.compile(r"^\s+Event total time:\s*([\d.]+)s")
-RE_LUCID_EVENT_SIM = re.compile(r"^\s+Simulation completed in\s+([\d.]+)s")
-RE_LUCID_STAGE = re.compile(r"^\s+\[timing\]\s+(\w+)\s+([\d.]+)s\s*$")
-RE_LUCID_BATCH_SAVE = re.compile(r"^Batch\s+\d+\s+save time:\s*([\d.]+)s")
-RE_LUCID_DONE = re.compile(r"^Successfully wrote\s+\d+\s+batches?")
+
+# The detector of a config that declares none; the fan-out takes it from -D.
+DEFAULT_DETECTOR = "SK_WAND"
+
+
+def detector_for(config_path: Path) -> str:
+    """The config's own ``detector``, else :data:`DEFAULT_DETECTOR`."""
+    return json.loads(config_path.read_text()).get("detector") or DEFAULT_DETECTOR
 
 
 def uses_genie(config_path: Path) -> bool:
@@ -115,7 +117,6 @@ def run_with_line_timing(cmd: list[str], env: dict) -> tuple[int, list, float]:
 
 def parse_timeline(timeline, n_events: int, has_genie: bool) -> dict:
     """Reduce the timestamped stdout stream to per-stage timing data."""
-    t_step0 = t_step2 = t_step3 = t_step4 = None
     photonsim_internal_elapsed = None
     event_total: list[float] = []
     event_sim: list[float] = []
@@ -123,27 +124,27 @@ def parse_timeline(timeline, n_events: int, has_genie: bool) -> dict:
     stage_times: dict[str, list[float]] = {}
     t_lucid_done = None
 
+    step_at = {}
     for ts, line in timeline:
-        if RE_STEP0.match(line):
-            t_step0 = ts
-        elif RE_STEP2.match(line):
-            t_step2 = ts
-        elif RE_STEP3.match(line):
-            t_step3 = ts
-        elif RE_STEP4.match(line):
-            t_step4 = ts
-        elif (m := RE_PHOTONSIM_EXIT.search(line)):
-            photonsim_internal_elapsed = float(m.group(1))
-        elif (m := RE_LUCID_STAGE.match(line)):
-            stage_times.setdefault(m.group(1), []).append(float(m.group(2)))
-        elif (m := RE_LUCID_EVENT_TOTAL.match(line)):
-            event_total.append(float(m.group(1)))
-        elif (m := RE_LUCID_EVENT_SIM.match(line)):
-            event_sim.append(float(m.group(1)))
-        elif (m := RE_LUCID_BATCH_SAVE.match(line)):
-            batch_save.append(float(m.group(1)))
-        elif RE_LUCID_DONE.match(line):
+        hit = classify(line)
+        if hit is None:
+            continue
+        kind, g = hit
+        if kind == "step":
+            step_at[int(g[0])] = ts
+        elif kind == "photonsim_exit":
+            photonsim_internal_elapsed = float(g[1])
+        elif kind == "stage":
+            stage_times.setdefault(g[0], []).append(float(g[1]))
+        elif kind == "event_total":
+            event_total.append(float(g[0]))
+        elif kind == "event_sim":
+            event_sim.append(float(g[0]))
+        elif kind == "batch_save":
+            batch_save.append(float(g[0]))
+        elif kind == "done":
             t_lucid_done = ts
+    t_step0, t_step2, t_step3, t_step4 = (step_at.get(k) for k in (0, 2, 3, 4))
 
     out: dict = {"n_events": n_events, "stages": {}}
 
@@ -218,6 +219,7 @@ def measure_config(
     cmd = [
         sys.executable, str(RUN_JOB),
         "--config", str(config_path),
+        "--detector", detector_for(config_path),
         "--n-events", str(n_events),
         "--job-id", "1",
         "--master-seed", "42",
@@ -435,9 +437,7 @@ def main(argv=None) -> int:
     for name in configs:
         cfg_path = CONFIGS_DIR / name
         if not cfg_path.is_file():
-            print(f"  {name}: NOT FOUND, skipping")
-            report["configs"][name] = {"skipped": "config file not found"}
-            continue
+            raise SystemExit(f"speed_test: config {cfg_path} not found")
         print(f"  measuring {name} ...", flush=True)
         try:
             log_path = (logs_dir / f"{cfg_path.stem}.log") if logs_dir else None
