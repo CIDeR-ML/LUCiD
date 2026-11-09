@@ -158,12 +158,15 @@ class SlurmAdapter(ClusterAdapter):
         # job is a SLURM array (one submission, one task per sub-job) and logs
         # switch to the array-aware `%A_%a` suffix.
         gpu_line = f"#SBATCH --gpus={gpus}\n" if gpus != "0" else ""
+        qos = self.env.get("SLURM_QOS")
+        qos_line = f"#SBATCH --qos={qos}\n" if qos else ""
         array_line = f"#SBATCH --array={array_spec}\n" if array_spec else ""
         log_suffix = "%A_%a" if array_spec else "%j"
         return (
             f"#!/bin/bash\n"
             f"#SBATCH --partition={partition}\n"
             f"#SBATCH --account={self.env['SLURM_ACCOUNT']}\n"
+            f"{qos_line}"
             f"#SBATCH --job-name={job_name}\n"
             f"#SBATCH --output={cell_dir}/{log_stem}-{log_suffix}.out\n"
             f"#SBATCH --error={cell_dir}/{log_stem}-{log_suffix}.err\n"

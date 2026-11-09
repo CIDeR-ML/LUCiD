@@ -27,3 +27,17 @@ def test_command_job_exports_env_for_the_whole_chain():
     # HTCondor's arguments is itself a quoted string; an embedded double quote
     # would need doubling, so the command must not carry one.
     assert '"' not in args[args.index("-c"):-1]
+
+
+def test_slurm_jobs_carry_the_site_qos_and_cpu_jobs_no_gpu():
+    """A CPU partition that the account reaches only at a preemptable QOS (S3DF milano) needs
+    `--qos` in the job, and a CPU-only job must not inherit a GPU from DEFAULT_GPUS."""
+    from lucid.production.platform.adapters import SlurmAdapter
+    env = {"CLUSTER": "slurm", "LUCID_IMAGE_PATH": "/img.sif", "SLURM_ACCOUNT": "fac:repo",
+           "APPTAINER_BINDS": "/sdf", "DEFAULT_GPUS": "1"}
+    job = dict(command="true", cell_dir=Path("/out/cell"), job_name="j", log_stem="s",
+               partition="milano")
+    body = SlurmAdapter({**env, "SLURM_QOS": "preemptable"}).render_command_job(**job, gpus="0")
+    assert "#SBATCH --qos=preemptable\n" in body and "#SBATCH --gpus" not in body
+    body = SlurmAdapter(env).render_command_job(**job)
+    assert "--qos" not in body and "#SBATCH --gpus=1\n" in body   # unchanged when not asked
