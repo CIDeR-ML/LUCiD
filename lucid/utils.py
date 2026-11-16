@@ -24,24 +24,37 @@ def base_dir_path():
     return os.path.dirname(os.path.abspath(__file__))+'/../'
 
 
-# The container image (container/Dockerfile) installs LUCiD at IMAGE_LUCID_DIR without its .git/
-# and writes the commit it was built from into IMAGE_VERSIONS (``key=value`` lines).
+# The container image (container/Dockerfile) installs LUCiD at IMAGE_LUCID_DIR without its .git/,
+# builds PhotonSim under IMAGE_PHOTONSIM_DIR, and writes what both were built from into
+# IMAGE_VERSIONS (``key=value`` lines).
 IMAGE_LUCID_DIR = '/opt/LUCiD'
+IMAGE_PHOTONSIM_DIR = '/opt/PhotonSim'
 IMAGE_VERSIONS = '/opt/VERSIONS'
 _SHA = re.compile(r'[0-9a-f]{7,40}')
 
 
+def _version_record(path):
+    """The image's version record as a dict, or ``None`` when it cannot be read."""
+    try:
+        with open(path) as f:
+            return dict(line.strip().split('=', 1) for line in f if '=' in line)
+    except OSError:
+        return None
+
+
 @functools.lru_cache(maxsize=None)
 def code_version(checkout=None, image=(IMAGE_LUCID_DIR, IMAGE_VERSIONS)):
-    """``(commit, dirty)`` of the LUCiD code that is running, for provenance.
+    """``(commit, dirty, ref)`` of the LUCiD code that is running, for provenance.
 
     ``checkout`` is the source tree lucid was imported from (default: this package's parent).
-    When it is the top of a git checkout, ``commit`` is its HEAD and ``dirty`` whether a tracked
-    file differs from HEAD (``git status --porcelain --untracked-files=no``). When it is the
-    image's install directory ``image[0]``, which has no ``.git/``, both come from the image's
-    version record ``image[1]``: ``lucid_sha`` and ``lucid_dirty``. Otherwise ``commit`` is
-    ``'unknown'``. ``dirty`` is ``None`` whenever it is not known (an image built before it was
-    recorded, or a failed ``git status``); a missing or malformed SHA is ``'unknown'``, never a
+    When it is the top of a git checkout, ``commit`` is its HEAD, ``dirty`` whether a tracked
+    file differs from HEAD (``git status --porcelain --untracked-files=no``) and ``ref`` the tags
+    at HEAD (comma-separated; ``'none'`` when HEAD is untagged). When it is the image's install
+    directory ``image[0]``, which has no ``.git/``, all three come from the image's version record
+    ``image[1]``: ``lucid_sha``, ``lucid_dirty`` and ``lucid_ref`` (``'none'`` for an image built
+    from an untagged commit). Otherwise ``commit`` and ``ref`` are ``'unknown'``. ``dirty`` is
+    ``None`` whenever it is not known (an image built before it was recorded, or a failed ``git
+    status``), and ``ref`` ``'unknown'``; a missing or malformed SHA is ``'unknown'``, never a
     guess.
     """
     checkout = os.path.realpath(checkout or base_dir_path())
@@ -58,24 +71,47 @@ def code_version(checkout=None, image=(IMAGE_LUCID_DIR, IMAGE_VERSIONS)):
         try:
             commit = git('rev-parse', 'HEAD')
         except (subprocess.CalledProcessError, OSError):
-            return 'unknown', None
+            return 'unknown', None, 'unknown'
         try:
             dirty = bool(git('status', '--porcelain', '--untracked-files=no'))
         except (subprocess.CalledProcessError, OSError):
             dirty = None
-        return commit, dirty
+        try:
+            ref = ','.join(git('tag', '--points-at', 'HEAD').split()) or 'none'
+        except (subprocess.CalledProcessError, OSError):
+            ref = 'unknown'
+        return commit, dirty, ref
 
     image_dir, versions = image
     if checkout != os.path.realpath(image_dir):
-        return 'unknown', None
-    try:
-        with open(versions) as f:
-            record = dict(line.strip().split('=', 1) for line in f if '=' in line)
-    except OSError:
-        return 'unknown', None
+        return 'unknown', None, 'unknown'
+    record = _version_record(versions)
+    if record is None:
+        return 'unknown', None, 'unknown'
     sha = record.get('lucid_sha', '')
     dirty = {'true': True, 'false': False}.get(record.get('lucid_dirty'))
-    return (sha if _SHA.fullmatch(sha) else 'unknown'), dirty
+    return (sha if _SHA.fullmatch(sha) else 'unknown'), dirty, record.get('lucid_ref') or 'unknown'
+
+
+def photonsim_version(binary, image=(IMAGE_PHOTONSIM_DIR, IMAGE_VERSIONS)):
+    """``photonsim_ref``, ``photonsim_commit`` and ``geant4_version`` of the PhotonSim that ran.
+
+    Known only for the image's own build (``binary`` inside ``image[0]``), from the image's version
+    record ``image[1]``: ``photonsim_ref``, ``photonsim_sha`` and ``geant4``. A PhotonSim built
+    anywhere else records nothing about itself, so every value is then ``'unknown'``, as it is for
+    ``binary=None`` (PhotonSim did not run in this process).
+    """
+    out = dict(photonsim_ref='unknown', photonsim_commit='unknown', geant4_version='unknown')
+    image_dir, versions = image
+    root = os.path.realpath(image_dir)
+    if binary is None or os.path.commonpath([os.path.realpath(binary), root]) != root:
+        return out
+    record = _version_record(versions) or {}
+    sha = record.get('photonsim_sha', '')
+    out.update(photonsim_ref=record.get('photonsim_ref') or 'unknown',
+               photonsim_commit=sha if _SHA.fullmatch(sha) else 'unknown',
+               geant4_version=record.get('geant4') or 'unknown')
+    return out
 
 
 def git_commit():

@@ -366,7 +366,7 @@ def test_dataset_meta_records_the_digitizers_smearing_model(model, smearing, lab
                                        medium=types.SimpleNamespace(material="water")),
         reflection_model="scalar_mix")
     meta = dataset_meta(sim, Readout.from_blocks(model), dataset_name="t", run_id="r",
-                        git_commit="g", source_files=["a.root"], master_seed=1,
+                        git_commit="g", source_files=["a.root"], master_seed=1, job_id=1,
                         n_events_requested=1, apply_smearing=smearing, detector_bounds=None)
     assert (meta["smearing_charge_function"], meta["smearing_time_function"]) == labels
     assert meta["digitizer_model"] == model

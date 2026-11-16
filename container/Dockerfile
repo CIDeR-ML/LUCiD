@@ -136,16 +136,20 @@ ENV PHOTONSIM_BIN=/opt/PhotonSim/build/PhotonSim \
 # cannot say which sources it was built from — which is how a .sif drifted four
 # months behind the registry unnoticed. Recorded both as a file the image can
 # print about itself and as OCI labels readable without running it. lucid.utils.code_version
-# reads lucid_sha and lucid_dirty (true/false: tracked changes in the build context) into every
-# dataset batch's config/git_commit and git_dirty; keep the key=value format.
+# reads lucid_sha, lucid_dirty (true/false: tracked changes in the build context) and lucid_ref
+# (the release tag, "none" for an untagged build) into every dataset batch's config/git_commit,
+# git_dirty and lucid_ref, and lucid.utils.photonsim_version reads photonsim_ref, photonsim_sha
+# and geant4 into its photonsim_ref, photonsim_commit and geant4_version; keep the key=value
+# format.
 # -----------------------------------------------------------------------------
 ARG LUCID_SHA=unknown
 ARG LUCID_DIRTY=unknown
+ARG LUCID_REF=unknown
 ARG PHOTONSIM_SHA=unknown
 ARG PHOTONSIM_REF=unknown
 ARG BUILD_DATE=unknown
-RUN printf 'lucid_sha=%s\nlucid_dirty=%s\nlucid_source=%s\nphotonsim_sha=%s\nphotonsim_ref=%s\nphotonsim_source=%s\nbuild_date=%s\ngeant4=%s\n' \
-      "$LUCID_SHA" "$LUCID_DIRTY" "https://github.com/CIDeR-ML/LUCiD" \
+RUN printf 'lucid_sha=%s\nlucid_dirty=%s\nlucid_ref=%s\nlucid_source=%s\nphotonsim_sha=%s\nphotonsim_ref=%s\nphotonsim_source=%s\nbuild_date=%s\ngeant4=%s\n' \
+      "$LUCID_SHA" "$LUCID_DIRTY" "$LUCID_REF" "https://github.com/CIDeR-ML/LUCiD" \
       "$PHOTONSIM_SHA" "$PHOTONSIM_REF" "https://github.com/cesarjesusvalls/PhotonSim" \
       "$BUILD_DATE" "$(/opt/conda/bin/geant4-config --version 2>/dev/null || echo unknown)" \
       > /opt/VERSIONS \
@@ -155,6 +159,7 @@ LABEL org.opencontainers.image.title="LUCiD" \
       org.opencontainers.image.description="nuisancemc/tutorial:nuint2024 + conda GEANT4 11.3 + PhotonSim + LUCiD" \
       org.opencontainers.image.source="https://github.com/CIDeR-ML/LUCiD" \
       org.opencontainers.image.revision="${LUCID_SHA}" \
+      org.opencontainers.image.version="${LUCID_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       ml.cider.photonsim.revision="${PHOTONSIM_SHA}" \
       ml.cider.photonsim.ref="${PHOTONSIM_REF}"

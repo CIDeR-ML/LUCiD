@@ -25,7 +25,7 @@ lucid-run-job --config lucid/production/dataprod/configs/GeV/02_mu.json \
 | `--detector` | selects `config/<detector>_{geom,physics}_config.json`. Required unless the config declares `detector` (then it must match) or with `--skip-lucid`. The readout comes from the dataset config, else from this physics config; only `SK_WAND` and `HK_WAND` carry one ([digitizer and trigger](digitizer-and-trigger.md)) |
 | `--n-events` | events in this job (default: the config's `n_events_per_job`, else 100) |
 | `--test` | 2 events; overrides `--n-events` |
-| `--master-seed` | seed for PhotonSim/GEANT4 and, unless `--lucid-seed` is given, the LUCiD draws (default: random) |
+| `--master-seed` | seed for the generator, PhotonSim/GEANT4 and, unless `--lucid-seed` is given, the LUCiD draws (default: drawn from the clock). The batch records it and every seed derived from it. Required when the job is split across invocations (`--skip-genie`, `--skip-photonsim`, `--skip-lucid`), so that each derives the same seeds |
 | `--lucid-seed` | seed for the LUCiD draws only (vertex, rotation, t0, propagation, smearing), to re-place the same GEANT4 sample |
 | `--override-energy-MeV` | monoenergetic primaries at this energy (MeV), for energy scans |
 | `--keep-root` | keep the intermediate PhotonSim ROOT file (otherwise `cleanup_root_files` in the config decides) |

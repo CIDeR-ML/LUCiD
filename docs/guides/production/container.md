@@ -55,7 +55,9 @@ It reports three stages (GEANT4 macro, PhotonSim, LUCiD writer) and ends with a 
 
 - `--detector` (`SK_WAND` or `HK_WAND`) chooses the geometry and the readout for a `GeV` config
   (section 4).
-- `--master-seed` is random by default; set it to make the job reproducible.
+- `--master-seed` is drawn from the clock by default. Either way the batch records every seed
+  it ran with, its configs and arguments, and the image's LUCiD and PhotonSim versions, so it can
+  be rerun from its own metadata ([dataset schema](../../reference/dataset-schema.md)).
 
 All flags: [command-line tools](../../reference/cli.md#lucid-run-job).
 

@@ -373,12 +373,14 @@ def _run_lucid(
     job_id: int,
     detector: str,
     readout,
+    provenance: dict,
     sn_ordering: Optional[str] = None,
 ) -> None:
     """Import LUCiD and write the four-file batch for this job.
 
     ``sn_ordering`` is ``--sn-ordering`` (supernova only; see
-    :func:`~lucid.production.dataprod.generators.supernova.resolve_ordering`).
+    :func:`~lucid.production.dataprod.generators.supernova.resolve_ordering`). ``provenance`` is
+    :func:`_provenance`'s record, written into every file.
 
     Imports are deferred so that `--help` works without jax/numpy/uproot
     installed (e.g. on the login node).
@@ -430,6 +432,7 @@ def _run_lucid(
             sn_direction=sn_direction,
             sn_ordering=ordering,
             sn_transformation=transformation,
+            provenance=provenance,
             **_lucid_options(config),
         )
         print(f"LUCiD wrote {len(saved_files)} files under "
@@ -451,6 +454,7 @@ def _run_lucid(
         apply_rotation=bool(lucid_opts.get("apply_rotation", False)),
         primary_source=primary_source(config),
         pad_size_buckets=lucid_opts.get("pad_size_buckets", None),
+        provenance=provenance,
         **_lucid_options(config),
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,hits,step,labl}}/")
@@ -506,7 +510,36 @@ def _lucid_seed(args: argparse.Namespace) -> int:
     return resolve_master_seed(args.lucid_seed if args.lucid_seed is not None else args.master_seed)
 
 
+def _provenance(args: argparse.Namespace, argv: list[str], photonsim_bin: Optional[str],
+                streams: list) -> dict:
+    """How this job made its batch, written into every file's ``config/`` so that the batch can
+    be regenerated from its own metadata (docs/reference/dataset-schema.md).
+
+    The job's arguments and dataset config (the ``--config`` file as given), the detector's
+    physics and geometry config files, the master seed and the seeds that each PhotonSim stream
+    and its generator (GENIE / sntools) ran with, and the PhotonSim that ran (``'unknown'`` with
+    ``--skip-photonsim``: it ran in another invocation). ``streams`` holds one
+    ``(derive_subprocess_seeds(...), fed_by_a_generator)`` per PhotonSim stream, in vertex order.
+    The writer adds the LUCiD side itself: ``lucid_master_seed``, ``job_id``, the code version and
+    the resolved digitizer.
+    """
+    from lucid.utils import photonsim_version
+    physics = Path(physics_config_path(args.detector))
+    return {
+        "detector": args.detector,
+        "physics_config": physics.read_text(),
+        "geometry_config": (physics.parent / f"{args.detector}_geom_config.json").read_text(),
+        "dataset_config": Path(args.config).read_text(),
+        "run_job_args": json.dumps(argv),
+        "master_seed": args.master_seed,
+        "photonsim_seeds": [[s["photonsim_seed1"], s["photonsim_seed2"]] for s, _ in streams],
+        "generator_seeds": [s["genie_seed"] if fed else -1 for s, fed in streams],
+        **photonsim_version(None if args.skip_photonsim else photonsim_bin),
+    }
+
+
 def main(argv: Optional[list[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = _parse_args(argv)
 
     # Overlap-cache location. Read here and not in the forward path (B6 ratchet).
@@ -554,12 +587,23 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"Error in {args.config!r}: {e}", file=sys.stderr)
             return EXIT_CONFIG
 
+    # Every GENIE / sntools / PhotonSim seed derives from the master seed, and the batch records
+    # them as the seeds that ran: a job split across invocations must name it, or each invocation
+    # would draw its own. Resolved once, so that a drawn seed feeds PhotonSim and LUCiD alike.
+    from lucid.production.dataprod.seeds import resolve_master_seed
+    if args.master_seed is None and (args.skip_genie or args.skip_photonsim or args.skip_lucid):
+        print("Error: a job split across invocations (--skip-genie / --skip-photonsim / "
+              "--skip-lucid) needs --master-seed, so that every invocation derives the same "
+              "seeds and the batch records the ones that ran.", file=sys.stderr)
+        return EXIT_CONFIG
+    args.master_seed = resolve_master_seed(args.master_seed)
+
     prepared = _prepare(args, config)
     if isinstance(prepared, int):
         return prepared
     n_events, photonsim_bin, output_dir = prepared
     if config.get("pile_up"):
-        return _main_pileup(args, config, n_events, photonsim_bin, output_dir, readout)
+        return _main_pileup(args, argv, config, n_events, photonsim_bin, output_dir, readout)
 
     job_id_padded = f"{args.job_id:06d}"
     file_index = args.job_id - 1
@@ -573,6 +617,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"    config_number:{config.get('config_number', '?')}")
     print(f"    job_id:       {args.job_id} (file_index={file_index})")
     print(f"    n_events:     {n_events}")
+    print(f"    master_seed:  {args.master_seed}")
     print(f"    output_dir:   {output_dir}")
 
     # Deterministic path for the GENIE rootracker file, regardless of
@@ -732,6 +777,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             job_id=args.job_id,
             detector=args.detector,
             readout=readout,
+            provenance=_provenance(args, argv, photonsim_bin, [(subproc_seeds, uses_rootracker)]),
             sn_ordering=args.sn_ordering,
         )
     except Exception as e:
@@ -762,7 +808,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     return EXIT_OK
 
 
-def _main_pileup(args: argparse.Namespace, config: dict, n_events: int,
+def _main_pileup(args: argparse.Namespace, argv: list[str], config: dict, n_events: int,
                  photonsim_bin: Optional[str], output_dir: Path, readout) -> int:
     """Run a pile-up job: N PhotonSim streams -> merged event."""
     vertices = config["vertices"]
@@ -777,6 +823,7 @@ def _main_pileup(args: argparse.Namespace, config: dict, n_events: int,
     print(f"    job_id:        {args.job_id} (file_index={file_index})")
     print(f"    n_events:      {n_events}")
     print(f"    n_vertices:    {n_vertices}")
+    print(f"    master_seed:   {args.master_seed}")
     print(f"    output_dir:    {output_dir}")
 
     from lucid.production.dataprod.seeds import derive_subprocess_seeds
@@ -784,6 +831,7 @@ def _main_pileup(args: argparse.Namespace, config: dict, n_events: int,
 
     root_paths: list[Path] = []
     vertex_sources: list[str] = []
+    streams: list = []  # (subprocess seeds, fed by GENIE) per vertex, for _provenance
 
     for vidx, vertex in enumerate(vertices):
         sub_cfg = _build_vertex_subconfig(config, vertex)
@@ -792,6 +840,7 @@ def _main_pileup(args: argparse.Namespace, config: dict, n_events: int,
         subproc_seeds = derive_subprocess_seeds(
             args.master_seed, args.job_id, vertex_idx=vidx
         )
+        streams.append((subproc_seeds, uses_genie_v))
         gtrac_path = output_dir / f"gntp_job_{job_id_padded}_v{vidx}.gtrac.root"
         root_filename = f"output_job_{job_id_padded}_v{vidx}.root"
         root_path = output_dir / root_filename
@@ -879,6 +928,7 @@ def _main_pileup(args: argparse.Namespace, config: dict, n_events: int,
         job_id=args.job_id,
         readout=readout,
         dataset_name=config["name"],
+        provenance=_provenance(args, argv, photonsim_bin, streams),
         **_lucid_options(config),
     )
     print(f"LUCiD wrote {len(saved_files)} files.")

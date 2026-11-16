@@ -6,6 +6,7 @@ group into an open file.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -49,8 +50,9 @@ def _smearing_functions(digitizer, apply_smearing):
 
 
 def dataset_meta(event_simulator, readout, *, dataset_name, run_id, git_commit, source_files,
-                 master_seed, n_events_requested, apply_smearing, detector_bounds,
-                 git_dirty=None, sn_direction=None, sn_ordering=None, sn_transformation=None):
+                 master_seed, job_id, n_events_requested, apply_smearing, detector_bounds,
+                 git_dirty=None, lucid_ref=None, provenance=None, sn_direction=None,
+                 sn_ordering=None, sn_transformation=None):
     """The ``config/`` attributes of one production batch, before :func:`write_batch` adds the
     event and sensor counts and the file index.
 
@@ -65,10 +67,18 @@ def dataset_meta(event_simulator, readout, *, dataset_name, run_id, git_commit, 
     git_dirty : bool or None
         Whether the code had uncommitted changes (:func:`lucid.utils.code_version`); ``None``
         (not known) writes no ``git_dirty``.
+    lucid_ref : str or None
+        The LUCiD release tag of :func:`lucid.utils.code_version`; ``None`` writes no ``lucid_ref``.
+    provenance : dict or None
+        What ``lucid-run-job`` adds so that the batch can be regenerated from its own metadata
+        (its arguments and dataset config, the detector's config files, the master seed and the
+        PhotonSim / generator seeds, the PhotonSim that ran); see ``run_job._provenance``.
     source_files : list of path
         The PhotonSim ROOT file(s) the batch was read from.
     master_seed : int
         The LUCiD-side seed.
+    job_id : int
+        The job number the LUCiD-side seeds are folded with (``file_index + 1`` in production).
     n_events_requested : int
         Events attempted before selection (``n_events`` counts the kept ones).
     apply_smearing : bool
@@ -90,7 +100,9 @@ def dataset_meta(event_simulator, readout, *, dataset_name, run_id, git_commit, 
         'dataset_name': dataset_name,
         'source_file': ','.join(os.path.abspath(str(p)) for p in source_files),
         'lucid_master_seed': int(master_seed),
-        'photonsim_seed': -1,
+        'job_id': int(job_id),
+        # the digitizer as resolved (preset + dataset overrides), not only its preset name
+        'digitizer_config': json.dumps(readout.digitizer, sort_keys=True),
         'detector_type': str(det_geom.detector_type),
         'material': str(det_geom.medium.material),
         'reflection_model': str(event_simulator.reflection_model),
@@ -99,7 +111,10 @@ def dataset_meta(event_simulator, readout, *, dataset_name, run_id, git_commit, 
         'smearing_time_function': time_fn,
         **readout.meta(),
         'label_names': ['category'],
+        **(provenance or {}),
     }
+    if lucid_ref is not None:
+        meta['lucid_ref'] = str(lucid_ref)
     if sn_direction is not None:
         meta['sn_direction'] = [float(x) for x in sn_direction]
     if sn_ordering is not None:
@@ -148,6 +163,12 @@ def write_batch(out_root, file_index, events, meta, sensor_positions):
     return [str(paths[sub]) for sub in SUBDIRS]
 
 
+# String attributes of a batch's provenance; see docs/reference/dataset-schema.md.
+_PROVENANCE_TEXT = ('lucid_ref', 'photonsim_ref', 'photonsim_commit', 'geant4_version', 'detector',
+                    'physics_config', 'geometry_config', 'digitizer_config', 'dataset_config',
+                    'run_job_args')
+
+
 def _write_common_config_attrs(f, config_meta):
     """Create ``config/`` group with provenance attrs common to all files."""
     cfg = f.require_group('config')
@@ -171,7 +192,19 @@ def _write_common_config_attrs(f, config_meta):
     cfg.attrs['file_index'] = int(config_meta.get('file_index', 0))
     cfg.attrs['source_file'] = str(config_meta['source_file'])
     cfg.attrs['lucid_master_seed'] = int(config_meta['lucid_master_seed'])
-    cfg.attrs['photonsim_seed'] = int(config_meta.get('photonsim_seed', -1))
+    cfg.attrs['job_id'] = int(config_meta.get('job_id', -1))
+    # Everything a batch needs to be regenerated from its own metadata (dataset_meta's
+    # ``provenance`` and ``lucid_ref``): written when known.
+    for key in _PROVENANCE_TEXT:
+        if key in config_meta:
+            cfg.attrs[key] = str(config_meta[key])
+    if 'master_seed' in config_meta:
+        cfg.attrs['master_seed'] = int(config_meta['master_seed'])
+    if 'photonsim_seeds' in config_meta:
+        # one (seed1, seed2) row per PhotonSim stream (vertex); -1 = that stream had no generator
+        cfg.attrs['photonsim_seeds'] = np.asarray(config_meta['photonsim_seeds'],
+                                                  dtype=np.int64).reshape(-1, 2)
+        cfg.attrs['generator_seeds'] = np.asarray(config_meta['generator_seeds'], dtype=np.int64)
     # Trigger provenance ("none" when the readout trigger is off).
     cfg.attrs['trigger'] = str(config_meta.get('trigger', 'none'))
     if config_meta.get('trigger', 'none') != 'none':

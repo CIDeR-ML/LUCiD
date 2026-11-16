@@ -55,9 +55,9 @@ def _t0(keys):
 
 
 def _code_version():
-    """``dataset_meta``'s ``git_commit`` and ``git_dirty``."""
-    commit, dirty = code_version()
-    return {'git_commit': commit, 'git_dirty': dirty}
+    """``dataset_meta``'s ``git_commit``, ``git_dirty`` and ``lucid_ref``."""
+    commit, dirty, ref = code_version()
+    return {'git_commit': commit, 'git_dirty': dirty, 'lucid_ref': ref}
 
 
 def _sensor_positions(event_simulator):
@@ -87,7 +87,8 @@ def _write(output_dir, file_index, events, meta, sensor_positions):
 
 def run_particles(event_simulator, root_file, *, output_dir, file_index, n_events, master_seed,
                   job_id, readout, dataset_name, apply_smearing, apply_translation,
-                  apply_rotation=False, primary_source='particles', pad_size_buckets=None):
+                  apply_rotation=False, primary_source='particles', pad_size_buckets=None,
+                  provenance=None):
     """One event per PhotonSim entry, entries ``0 .. n_events-1``, written as one batch.
 
     Parameters
@@ -124,6 +125,8 @@ def run_particles(event_simulator, root_file, *, output_dir, file_index, n_event
         'particles' or 'genie': ``per_interaction/source_type``.
     pad_size_buckets : sequence of int, optional
         Kernel ray buckets (default ``DEFAULT_RAYS_BUCKETS``).
+    provenance : dict, optional
+        ``lucid-run-job``'s record of how the batch was made (:func:`dataset_meta`).
 
     Returns
     -------
@@ -189,13 +192,15 @@ def run_particles(event_simulator, root_file, *, output_dir, file_index, n_event
 
     meta = dataset_meta(
         event_simulator, readout, dataset_name=dataset_name, run_id=str(uuid.uuid4()),
-        **_code_version(), source_files=[root_file], master_seed=master_seed,
-        n_events_requested=n_events, apply_smearing=apply_smearing, detector_bounds=bounds)
+        **_code_version(), source_files=[root_file], master_seed=master_seed, job_id=job_id,
+        n_events_requested=n_events, apply_smearing=apply_smearing, detector_bounds=bounds,
+        provenance=provenance)
     return _write(output_dir, file_index, events, meta, sensor_positions)
 
 
 def run_pileup(event_simulator, root_files, primary_sources, *, output_dir, file_index, n_events,
-               master_seed, job_id, readout, dataset_name, apply_smearing, apply_translation):
+               master_seed, job_id, readout, dataset_name, apply_smearing, apply_translation,
+               provenance=None):
     """Pile-up: event ``i`` merges entry ``i`` of every vertex's PhotonSim file.
 
     Each vertex gets its own t0, fiducial vertex and keys (``interaction_idx`` = vertex index);
@@ -279,8 +284,9 @@ def run_pileup(event_simulator, root_files, primary_sources, *, output_dir, file
 
     meta = dataset_meta(
         event_simulator, readout, dataset_name=dataset_name, run_id=str(uuid.uuid4()),
-        **_code_version(), source_files=root_files, master_seed=master_seed,
-        n_events_requested=n_events, apply_smearing=apply_smearing, detector_bounds=bounds)
+        **_code_version(), source_files=root_files, master_seed=master_seed, job_id=job_id,
+        n_events_requested=n_events, apply_smearing=apply_smearing, detector_bounds=bounds,
+        provenance=provenance)
     return _write(output_dir, file_index, events, meta, sensor_positions)
 
 
@@ -412,7 +418,7 @@ def _concat_triggered_chunks(chunks):
 def run_supernova(event_simulator, burst_root_file, interaction_times_ms, *, output_dir,
                   file_index, master_seed, job_id, readout, dataset_name, apply_smearing,
                   apply_translation, sn_ordering, sn_transformation, interaction_channels=None,
-                  sn_direction=None, source_event_idx=0):
+                  sn_direction=None, source_event_idx=0, provenance=None):
     """ONE all-at-once supernova event from a burst PhotonSim file (one entry per interaction).
 
     Interactions are placed at their true times, ``t0_i = global_t0 + interaction_times_ms[i] *
@@ -529,7 +535,8 @@ def run_supernova(event_simulator, burst_root_file, interaction_times_ms, *, out
     meta = dataset_meta(
         event_simulator, readout, dataset_name=dataset_name, run_id=str(uuid.uuid4()),
         **_code_version(), source_files=[burst_root_file], master_seed=master_seed,
-        n_events_requested=1, apply_smearing=apply_smearing, detector_bounds=bounds,
+        job_id=job_id, n_events_requested=1, apply_smearing=apply_smearing,
+        detector_bounds=bounds, provenance=provenance,
         sn_direction=sn_direction or [0.0, 0.0, 1.0], sn_ordering=sn_ordering,
         sn_transformation=sn_transformation)
     event = _concat_triggered_chunks(surviving)

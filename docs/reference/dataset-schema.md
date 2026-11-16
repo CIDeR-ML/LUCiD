@@ -57,17 +57,29 @@ derived datasets without re-simulating, such as splitting pile-up into single in
 | `n_events` | events kept |
 | `n_events_requested` | events generated (optional); the difference is the selection loss |
 | `complete` | `False` while writing, `True` once every event is written; a killed job leaves `False` |
-| `git_commit`, `git_dirty` | the LUCiD commit that wrote the file (from the checkout, or `/opt/VERSIONS` in the production image; `"unknown"` otherwise) and whether tracked files differed (optional) |
+| `git_commit`, `git_dirty`, `lucid_ref` | the LUCiD commit that wrote the file (from the checkout, or `/opt/VERSIONS` in the production image; `"unknown"` otherwise), whether tracked files differed (optional), and its release tag (`"none"` when untagged) |
+| `photonsim_ref`, `photonsim_commit`, `geant4_version` | the PhotonSim that made the source file: known when the job ran the image's own build (`/opt/VERSIONS`), `"unknown"` otherwise (a build elsewhere, or `--skip-photonsim`) |
 | `reflection_model` | `scalar_mix`, `scalar` or `angular` |
 | `run_id`, `dataset_name`, `file_index` | batch identifier, dataset name, `NNNN` |
 | `source_file` | the PhotonSim ROOT file |
-| `lucid_master_seed` | the batch's JAX seed |
-| `photonsim_seed` | the GEANT4 seed (optional; `-1` if unknown) |
+| `master_seed` | the job's master seed, from which the generator and PhotonSim seeds derive (`lucid-run-job` only) |
+| `photonsim_seeds` | `(n_streams, 2)` int64: the two GEANT4 seeds of each PhotonSim stream (one per pile-up vertex) |
+| `generator_seeds` | `(n_streams,)` int64: the GENIE or sntools seed of each stream; `-1` for a particle gun |
+| `lucid_master_seed`, `job_id` | the LUCiD-side seed and the job number its per-event keys are folded with |
+| `detector`, `physics_config`, `geometry_config` | the detector name and its two config files, verbatim |
+| `digitizer_config` | the digitizer as resolved (preset and dataset overrides), JSON |
+| `dataset_config`, `run_job_args` | the `--config` file verbatim, and the `lucid-run-job` arguments (JSON list) |
 | `trigger` | `"none"` without a trigger; otherwise `trigger_window_ns`, `trigger_n_thr`, `trigger_pad_before_ns`, `trigger_pad_after_ns` describe it |
 | `selection`, `selection_min_physics_hits` | how interactions were kept: `"trigger"` or `"min_physics_hits"` with its threshold (optional) |
 | `sn_direction`, `sn_ordering`, `sn_transformation` | supernova only: burst direction (unit vector), mass ordering, and the sntools transformation it maps to |
 
 `config/source_event_idx` (`(n_events,)` uint32) lists the kept events' PhotonSim entries.
+
+A batch written by `lucid-run-job` carries everything that regenerates it: run the image of
+`lucid_ref` / `git_commit` (PhotonSim `photonsim_ref`), with `dataset_config` saved as the
+`--config` file, the other `run_job_args`, and `--master-seed master_seed --lucid-seed
+lucid_master_seed`. The physics and digitizer it ran with are in the file itself, so a changed
+`config/` does not go unnoticed.
 
 ## `sensor/`: recorded digits
 

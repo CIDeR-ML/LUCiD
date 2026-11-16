@@ -35,10 +35,11 @@ def test_run_job_requires_a_detector(tmp_path, capsys):
     assert "declares no 'detector'; pass --detector" in capsys.readouterr().err
     assert not (tmp_path / 'out').exists()
     assert _parse_args(argv + ['--skip-lucid']).detector is None
-    # Solar declares HK: no flag, and the run gets past the detector and readout checks to the
-    # missing PhotonSim output
+    # Solar declares HK_WAND: no flag, and the run gets past the detector and readout checks to
+    # the missing PhotonSim output (a split job names its master seed)
     solar = ['--config', os.path.join(CONFIGS, 'Solar/01_e_low_energy.json'),
-             '--output-dir', str(tmp_path / 'solar'), '--job-id', '1', '--skip-photonsim']
+             '--output-dir', str(tmp_path / 'solar'), '--job-id', '1', '--skip-photonsim',
+             '--master-seed', '1']
     assert main(solar) == 20
     assert 'output_job_000001.root does not exist' in capsys.readouterr().err
 

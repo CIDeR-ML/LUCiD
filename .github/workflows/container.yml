@@ -97,6 +97,7 @@ jobs:
           build-args: |
             LUCID_SHA=${{ github.sha }}
             LUCID_DIRTY=${{ env.LUCID_DIRTY }}
+            LUCID_REF=${{ github.ref_type == 'tag' && github.ref_name || 'none' }}
             PHOTONSIM_SHA=${{ env.PHOTONSIM_SHA }}
             PHOTONSIM_REF=${{ env.PHOTONSIM_REF }}
             BUILD_DATE=${{ env.BUILD_DATE }}

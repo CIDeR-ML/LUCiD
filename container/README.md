@@ -20,10 +20,10 @@ apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest      # Apptainer
   apply `pyproject.toml`'s `jax>=0.5.3,<0.6`, and the image runs jax 0.4.38.
 - PhotonSim built at `/opt/PhotonSim/build`.
 - PMT overlap tables pre-computed for the `*_WAND` detectors. Production jobs do not use them.
-- `/opt/VERSIONS`: the LUCiD and PhotonSim commits, whether the LUCiD build context had
-  uncommitted changes (`lucid_dirty`), the build date and the Geant4 version. Every dataset batch
-  written in the image records the LUCiD commit and dirty flag as `config/git_commit` and
-  `git_dirty`.
+- `/opt/VERSIONS`: the LUCiD and PhotonSim commits and release tags, whether the LUCiD build
+  context had uncommitted changes (`lucid_dirty`), the build date and the Geant4 version. Every
+  dataset batch written in the image records them as `config/git_commit`, `git_dirty`,
+  `lucid_ref`, `photonsim_commit`, `photonsim_ref` and `geant4_version`.
 
 ## Rebuild
 
@@ -32,10 +32,13 @@ From the directory that contains both `LUCiD/` and `PhotonSim/`:
 ```bash
 docker build --platform linux/amd64 --provenance=false --sbom=false \
     --build-arg LUCID_SHA=$(git -C LUCiD rev-parse HEAD) --build-arg LUCID_DIRTY=false \
+    --build-arg LUCID_REF=$(git -C LUCiD describe --tags --exact-match 2>/dev/null || echo none) \
+    --build-arg PHOTONSIM_SHA=$(git -C PhotonSim rev-parse HEAD) \
+    --build-arg PHOTONSIM_REF=$(git -C PhotonSim describe --tags --exact-match 2>/dev/null || echo none) \
     -f LUCiD/container/Dockerfile -t lucid:latest .
 ```
 
-Without `LUCID_SHA` the image, and every batch it writes, records `lucid_sha=unknown`. Set
+Without these the image, and every batch it writes, records them as `unknown`. Set
 `LUCID_DIRTY=true` when the checkout has uncommitted changes. A change to LUCiD's source rebuilds
 only the last layers. To run a modified checkout without rebuilding, bind-mount it over
 `/opt/LUCiD` as the [container guide](../docs/guides/production/container.md) describes.

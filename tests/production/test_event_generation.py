@@ -805,6 +805,47 @@ def test_every_path_resolves_the_master_seed_mod_2_31_minus_1(tmp_path, fake_roo
     assert a["sensor"]["event_000/T"].size > 0
 
 
+@pytest.mark.parametrize("path", sorted(_PATHS))
+def test_every_file_records_what_regenerates_it(tmp_path, fake_root, monkeypatch, detector, path):
+    """Each file carries the job's arguments and dataset config, the detector's config files, the
+    resolved digitizer and every seed the job ran with (two per PhotonSim stream, one per
+    generator stream, the LUCiD one), so a batch can be rerun from its own metadata."""
+    from lucid.production.dataprod.run_job import physics_config_path
+    from lucid.production.dataprod.seeds import derive_subprocess_seeds
+    _run_job(tmp_path, fake_root, monkeypatch, detector, path, 5)
+    out = tmp_path / f"{path}_5"
+    seeds = [derive_subprocess_seeds(5, 1, vertex_idx=v) for v in range(len(_PATHS[path][1]))]
+    for kind, f in _files(out).items():
+        c = f["config"]
+        assert (c["master_seed"], c["lucid_master_seed"], c["job_id"]) == (5, 5, 1), kind
+        np.testing.assert_array_equal(
+            c["photonsim_seeds"], [[s["photonsim_seed1"], s["photonsim_seed2"]] for s in seeds])
+        np.testing.assert_array_equal(  # sntools feeds the supernova stream; particle guns: none
+            c["generator_seeds"], [s["genie_seed"] if path == "supernova" else -1 for s in seeds])
+        assert c["dataset_config"] == (out / "cfg.json").read_text()
+        assert json.loads(c["run_job_args"])[:2] == ["--config", str(out / "cfg.json")]
+        assert c["detector"] == "SK_like"
+        with open(physics_config_path("SK_like")) as phys:
+            assert c["physics_config"] == phys.read()
+        assert json.loads(c["digitizer_config"])["dark_rate_khz"] == 0.0
+        assert c["lucid_ref"] and c["git_commit"] != "unknown"
+        # --skip-photonsim: PhotonSim ran in another invocation, so this one cannot vouch for it
+        assert c["photonsim_commit"] == c["photonsim_ref"] == "unknown"
+
+
+def test_a_split_job_must_name_its_master_seed(tmp_path, capsys):
+    """Each invocation of a split job derives the PhotonSim / generator seeds from the master seed,
+    and the batch records them: without --master-seed each would draw its own."""
+    from lucid.production.dataprod import run_job
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"name": "t", "material": "water", "digitizer": SKI_NO_DARK,
+                               "trigger": None, **_PARTICLES}))
+    rc = run_job.main(["--config", str(cfg), "--detector", "SK_like", "--job-id", "1",
+                       "--output-dir", str(tmp_path / "out"), "--skip-photonsim"])
+    assert rc == run_job.EXIT_CONFIG and "needs --master-seed" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
 # --------------------------------------------------------------------------
 # helpers the drivers rely on
 # --------------------------------------------------------------------------

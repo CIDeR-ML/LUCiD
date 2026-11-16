@@ -100,7 +100,6 @@ def write_common_config(cfg_grp, n_events, provenance_extras=None):
     cfg_grp.attrs['file_index'] = 0
     cfg_grp.attrs['source_file'] = 'synthetic'
     cfg_grp.attrs['lucid_master_seed'] = 42
-    cfg_grp.attrs['photonsim_seed'] = -1
     if provenance_extras:
         for k, v in provenance_extras.items():
             cfg_grp.attrs[k] = v

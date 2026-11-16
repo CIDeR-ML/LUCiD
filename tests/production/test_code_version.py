@@ -13,7 +13,7 @@ import h5py
 import pytest
 
 from lucid import utils
-from lucid.utils import code_version
+from lucid.utils import code_version, photonsim_version
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 
@@ -36,24 +36,25 @@ def _image(tmp_path, record):
 
 
 def _record(**over):
-    keys = dict(lucid_sha=SHA, lucid_dirty="false", lucid_source="https://github.com/CIDeR-ML/LUCiD",
-                photonsim_sha="f" * 40, build_date="2026-11-08T00:00:00Z")
+    keys = dict(lucid_sha=SHA, lucid_dirty="false", lucid_ref="v9.9.9",
+                lucid_source="https://github.com/CIDeR-ML/LUCiD", photonsim_sha="f" * 40,
+                photonsim_ref="v1.0.3", build_date="2026-11-08T00:00:00Z", geant4="11.3.2")
     keys.update(over)
     return "".join(f"{k}={v}\n" for k, v in keys.items() if v is not None)
 
 
-def test_the_image_install_takes_its_commit_and_dirty_flag_from_the_version_record(tmp_path):
+def test_the_image_install_takes_its_commit_dirty_flag_and_tag_from_the_version_record(tmp_path):
     install, image = _image(tmp_path, _record())
-    assert code_version(install, image) == (SHA, False)
+    assert code_version(install, image) == (SHA, False, "v9.9.9")
     code_version.cache_clear()
-    install, image = _image(tmp_path / "d", _record(lucid_dirty="true"))
-    assert code_version(install, image) == (SHA, True)
+    install, image = _image(tmp_path / "d", _record(lucid_dirty="true", lucid_ref="none"))
+    assert code_version(install, image) == (SHA, True, "none")
 
 
-def test_an_image_record_without_lucid_dirty_leaves_dirty_unknown(tmp_path):
-    """Images built before ``lucid_dirty`` was recorded say nothing about it."""
-    install, image = _image(tmp_path, _record(lucid_dirty=None))
-    assert code_version(install, image) == (SHA, None)
+def test_an_image_record_without_lucid_dirty_or_ref_leaves_them_unknown(tmp_path):
+    """Images built before ``lucid_dirty`` and ``lucid_ref`` were recorded say nothing about them."""
+    install, image = _image(tmp_path, _record(lucid_dirty=None, lucid_ref=None))
+    assert code_version(install, image) == (SHA, None, "unknown")
 
 
 @pytest.mark.parametrize("record", [None, _record(lucid_sha="unknown"), _record(lucid_sha=""),
@@ -69,7 +70,7 @@ def test_a_gitless_tree_that_is_not_the_image_install_is_unknown(tmp_path):
     _, image = _image(tmp_path, _record())
     other = tmp_path / "copy" / "LUCiD"
     other.mkdir(parents=True)
-    assert code_version(str(other), image) == ("unknown", None)
+    assert code_version(str(other), image) == ("unknown", None, "unknown")
 
 
 def _git(cwd, *args):
@@ -77,7 +78,7 @@ def _git(cwd, *args):
                                     "-c", "user.email=t@t", *args], text=True).strip()
 
 
-def test_a_git_checkout_gives_head_and_whether_tracked_files_changed(tmp_path):
+def test_a_git_checkout_gives_head_whether_tracked_files_changed_and_its_tag(tmp_path):
     repo = tmp_path / "LUCiD"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -86,24 +87,27 @@ def test_a_git_checkout_gives_head_and_whether_tracked_files_changed(tmp_path):
     _git(repo, "commit", "-qm", "c")
     head = _git(repo, "rev-parse", "HEAD")
     _, image = _image(tmp_path / "img", _record())   # a checkout wins over any image record
-    assert code_version(str(repo), image) == (head, False)
+    assert code_version(str(repo), image) == (head, False, "none")
+    _git(repo, "tag", "v1.2.3")
+    code_version.cache_clear()
+    assert code_version(str(repo), image) == (head, False, "v1.2.3")
     (repo / "untracked.txt").write_text("scratch\n")  # untracked files do not count
     code_version.cache_clear()
-    assert code_version(str(repo), image) == (head, False)
+    assert code_version(str(repo), image) == (head, False, "v1.2.3")
     (repo / "a.py").write_text("x = 2\n")
     code_version.cache_clear()
-    assert code_version(str(repo), image) == (head, True)
+    assert code_version(str(repo), image) == (head, True, "v1.2.3")
     # a tree that only sits inside a repository is not that repository's code
     sub = repo / "vendored"
     sub.mkdir()
     code_version.cache_clear()
-    assert code_version(str(sub), image) == ("unknown", None)
+    assert code_version(str(sub), image) == ("unknown", None, "unknown")
 
 
 def test_the_running_checkout_is_found():
     """This test suite runs from a checkout: a real commit, and ``git_commit`` agrees."""
-    commit, dirty = code_version()
-    assert len(commit) == 40 and dirty in (True, False)
+    commit, dirty, ref = code_version()
+    assert len(commit) == 40 and dirty in (True, False) and ref
     assert utils.git_commit() == commit
 
 
@@ -139,3 +143,21 @@ def test_the_batch_records_the_image_commit_and_dirty_flag(tmp_path, monkeypatch
                 assert "git_dirty" not in attrs
             else:
                 assert bool(attrs["git_dirty"]) is dirty
+
+
+def test_the_photonsim_version_is_the_image_record_only_for_the_image_build(tmp_path):
+    """A PhotonSim binary inside the image's PhotonSim directory is the build the record describes;
+    any other binary, or none (PhotonSim ran in another invocation), is unknown."""
+    _, (_, versions) = _image(tmp_path, _record())
+    built = tmp_path / "opt" / "PhotonSim" / "build" / "PhotonSim"
+    built.parent.mkdir(parents=True)
+    built.touch()
+    image = (str(tmp_path / "opt" / "PhotonSim"), versions)
+    assert photonsim_version(str(built), image) == {
+        "photonsim_ref": "v1.0.3", "photonsim_commit": "f" * 40, "geant4_version": "11.3.2"}
+    unknown = dict.fromkeys(("photonsim_ref", "photonsim_commit", "geant4_version"), "unknown")
+    elsewhere = tmp_path / "home" / "PhotonSim" / "build" / "PhotonSim"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.touch()
+    assert photonsim_version(str(elsewhere), image) == unknown
+    assert photonsim_version(None, image) == unknown
