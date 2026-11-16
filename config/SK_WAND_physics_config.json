@@ -12,7 +12,7 @@
     "model": "ski"
   },
   "trigger": {
-    "_note": "SK trigger: HK's n_thr=45 scaled by the PMT ratio (11096/19746=0.562). Validated 2026-07-23 with lucid.production.trigger_study on WAND/SK/GeV config_06: 300 events, physics efficiency 100.0% on every event, 1-5 gates/event. NOT revalidated against the 2026-09-28 reflection change, which lowers wall reflectivity 0.2 -> 0.05 and so reduces late light: recheck efficiency before trusting the gate count.",
+    "_note": "SK trigger: n_thr 25 is HK's 45 scaled by the PMT count (45 x 11096/19746 = 25.3), which leaves SK a smaller dark-noise margin: per 200 ns window SK sees 7.2 +- 2.7 dark digits, so 25 is the mean + 6.7 sigma and continuous dark noise alone opens 8.4 Hz of gates (42 in 5 s simulated); HK sees 15.3 +- 3.9 and 45 is the mean + 7.6 sigma (none in 2 s). Revalidated 2026-11-16 at the measured reflectivity (0.05 wall / 0.25 sensor), this block applied offline to untriggered data: on 60 GeV muons (GeV/02_mu, dark over 500 ns) every event triggers, 100.00% of muon and 99.89% of Michel digits kept, 0 dark-only gates, mean gate 1183 ns, a Michel gets its own gate in 24 of 53 events; single electrons uniform in the volume (1-12 MeV, events with >= 1 physics hit) are 90% efficient (a gate holds one of their digits) at 2.6 MeV kinetic energy (2.9 MeV at n_thr 26, 3.4 MeV at 30). First validated 2026-07-23 at 0.2 / 0.2 on WAND/SK/GeV config_06: 300 events, physics efficiency 100.0% on every event, 1-5 gates/event.",
     "window_ns": 200.0,
     "n_thr": 25,
     "pad_before_ns": 300.0,
