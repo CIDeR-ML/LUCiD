@@ -109,9 +109,9 @@ def check_batch(
                 fi = int(cfg_attrs.get("file_index", -1))
                 n_events = int(cfg_attrs.get("n_events", -1))
                 # Health is the completion flag, not the event count (trigger/
-                # selection make the count vary). Absent => a pre-flag file, treat
-                # as complete for backward compatibility.
-                complete = bool(cfg_attrs.get("complete", True))
+                # selection make the count vary). The writer sets it last, so a
+                # file without it is incomplete.
+                complete = bool(cfg_attrs.get("complete", False))
                 n_req = int(cfg_attrs.get("n_events_requested", n_events))
         except Exception as e:
             messages.append(f"UNREADABLE: {path}: {e!r}")

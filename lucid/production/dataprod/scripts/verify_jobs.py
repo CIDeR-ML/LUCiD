@@ -62,9 +62,8 @@ def is_complete(cell_dir: Path, file_index: int,
                 n_by_sub[sub] = int(h["config"].attrs.get("n_events", -1))
                 # Completion flag is the authoritative health signal: a job killed
                 # mid-write leaves files that exist (opened 'w' before the event
-                # loop) but with complete=False. Absent => a pre-flag file, assume
-                # complete for backward compatibility.
-                if not bool(h["config"].attrs.get("complete", True)):
+                # loop) but with complete=False. A file without it is incomplete too.
+                if not bool(h["config"].attrs.get("complete", False)):
                     return False, f"incomplete {sub} (config/complete != True)"
         except Exception as e:
             return False, f"unreadable {sub}: {e!r}"

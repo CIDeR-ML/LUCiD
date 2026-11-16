@@ -4,6 +4,7 @@ import h5py
 from lucid.dataset.layout import batch_paths, check_batch, list_batches
 from lucid.dataset.reader import iter_events
 from lucid.dataset.writer import write_batch
+from lucid.production.dataprod.scripts.verify_jobs import is_complete
 
 from tests.helpers.event_fixture import build_synthetic_event
 
@@ -29,3 +30,17 @@ def test_written_batches_are_found_and_pass_the_check(tmp_path):
     assert ok, messages
     ok, messages = check_batch(tmp_path, 10, expected_dataset_name='another name')
     assert not ok and any('BAD_DATASET_NAME' in m for m in messages)
+
+
+def test_a_file_without_the_complete_flag_fails_both_checks(tmp_path):
+    """The writer sets config/complete only after the last event, so its absence means the file
+    is not one this writer finished: check_batch and verify_jobs both fail it."""
+    cfg, ev, sensor_positions = build_synthetic_event()
+    write_batch(tmp_path, 0, [ev], cfg, sensor_positions)
+    assert check_batch(tmp_path, 0)[0] and is_complete(tmp_path, 0, None)[0]
+    with h5py.File(batch_paths(tmp_path, 0)['hits'], 'a') as f:
+        del f['config'].attrs['complete']
+    ok, messages = check_batch(tmp_path, 0)
+    assert not ok and any('INCOMPLETE' in m for m in messages)
+    ok, reason = is_complete(tmp_path, 0, None)
+    assert not ok and 'incomplete hits' in reason
