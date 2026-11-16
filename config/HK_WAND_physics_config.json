@@ -1,9 +1,10 @@
 {
-  "_comment": "Frozen HK detector description for the WAND production. Pinned so edits to HK_physics_config.json cannot silently change the campaign. Values match those used for WAND/HK/GeV in 2026-07; fspec is written out explicitly rather than inherited from detector_params._ANGULAR_REFL_DEFAULTS.",
+  "_comment": "Frozen HK detector description for the WAND production. Pinned so edits to HK_physics_config.json cannot silently change the campaign; fspec is written out explicitly rather than inherited from detector_params._ANGULAR_REFL_DEFAULTS. Reflection rates were the placeholder 0.2/0.2 for every HK_WAND dataset up to 2026-11-16 (as for WAND/HK/GeV in 2026-07), then moved to the measured values below, the ones SK_WAND carries since 2026-09-28. HK_WAND datasets written before 2026-11-16 used 0.2/0.2 and are a DIFFERENT generation, not extra statistics for this one.",
+  "_comment_reflection": "wall: SK black PET liner, R~0.05, ~55% specular [Abe et al., NIM A737 (2014) 253]. sensor: PMT glass + bialkali photocathode from water, R~0.25, ~90% specular [Motta & Schonert, NIM A539 (2005) 217].",
   "medium_model": "materials/water.json",
   "qe_curve": "pmt/HK_QE.json",
-  "wall_reflection_rate": 0.2,
-  "sensor_reflection_rate": 0.2,
+  "wall_reflection_rate": 0.05,
+  "sensor_reflection_rate": 0.25,
   "wall_fspec": 0.55,
   "sensor_fspec": 0.9,
   "qe_corrections": 1.0,
@@ -11,7 +12,7 @@
     "model": "hk"
   },
   "trigger": {
-    "_note": "HK high-E real trigger - validated on muons (muon 99.9%, Michel 99.4% hits kept, 0 dark windows) and config_18 pile-up (99.97% physics hits kept, 0 dark windows).",
+    "_note": "HK high-E real trigger. Revalidated 2026-11-16 at the measured reflectivity (0.05 wall / 0.25 sensor) on 60 GeV muons (GeV/02_mu untriggered, dark over 500 ns, this block applied offline): every event triggers, 99.99% of muon and 99.83% of Michel digits kept, 0 dark-only gates; the mean gate shortens 1578 -> 1356 ns and a Michel gets its own gate in 22 of 56 events (14 at 0.2 / 0.2). First validated at 0.2 / 0.2 on muons (muon 99.9%, Michel 99.4% hits kept, 0 dark windows) and config_18 pile-up (99.97% physics hits kept, 0 dark windows); the pile-up check was not repeated.",
     "window_ns": 200.0,
     "n_thr": 45,
     "pad_before_ns": 300.0,

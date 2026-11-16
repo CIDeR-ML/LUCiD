@@ -87,14 +87,11 @@ def test_wand_pair_loads_as_one_detector(detector):
             f"{detector}: qe_corrections is {qe_c.shape}, geometry has {n_sensors} sensors")
 
 
-def test_the_two_wand_detectors_disagree_about_surface_optics():
-    """HK_WAND still carries the pre-2026-09-28 placeholder reflectivities.
-
-    SK_WAND carries the measured 0.05 wall / 0.25 sensor; HK_WAND carries
-    0.2/0.2, so the HK and SK legs of one WAND campaign do not share a surface
-    model. This test asserts what is true today rather than what should be, so
-    that fixing HK_WAND is a deliberate act with a number in its commit message
-    and not a silent edit.
+def test_the_two_wand_detectors_share_the_measured_surface_optics():
+    """Both carry the measured 0.05 wall / 0.25 sensor reflectivity (Abe et al., NIM A737
+    (2014) 253): SK_WAND since 2026-09-28, HK_WAND since 2026-11-16 (0.2/0.2 before). A move
+    is a new dataset generation, so it is a deliberate act with a number in its commit
+    message, never a silent edit.
     """
     values = {}
     for detector in WAND_DETECTORS:
@@ -103,6 +100,4 @@ def test_the_two_wand_detectors_disagree_about_surface_optics():
         values[detector] = (raw.get("wall_reflection_rate"),
                             raw.get("sensor_reflection_rate"))
     assert values["SK_WAND"] == (0.05, 0.25), values["SK_WAND"]
-    assert values["HK_WAND"] == (0.2, 0.2), (
-        f"HK_WAND reflectivities moved to {values['HK_WAND']} — if that is the "
-        f"measured pair, update this test in the same commit")
+    assert values["HK_WAND"] == (0.05, 0.25), values["HK_WAND"]
