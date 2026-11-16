@@ -94,7 +94,7 @@ PhotonSim runs. To use one, add `"digitizer": "basic"` (or `"ski"`, `"hk"`) and
 `"trigger": null` (or a trigger block) to a copy of the dataset config
 ([digitizer and trigger](../../reference/digitizer-and-trigger.md)).
 
-The `Solar`, `SN` and `Test` configs declare `"detector": "HK"` and their own readout; they need
+The `Solar`, `SN` and `Test` configs declare `"detector": "HK_WAND"` and their own readout; they need
 no `--detector`, and a different one stops the job.
 
 ## 5. Changing things

@@ -77,9 +77,9 @@ def test_run_job_refuses_a_config_without_readout_before_photonsim(tmp_path, cap
 
 def test_run_job_refuses_a_detector_other_than_the_one_the_config_declares(tmp_path, capsys):
     cfg = json.loads(SOLAR.read_text())
-    assert cfg["detector"] == "HK"
+    assert cfg["detector"] == "HK_WAND"
     assert _main(tmp_path, cfg, "SK_WAND") == run_job.EXIT_CONFIG
-    assert "declares detector 'HK', but --detector is 'SK_WAND'" in capsys.readouterr().err
+    assert "declares detector 'HK_WAND', but --detector is 'SK_WAND'" in capsys.readouterr().err
 
 
 def test_supernova_needs_its_selection_stated(tmp_path, capsys):
@@ -119,14 +119,15 @@ def _user_paths(tmp_path):
 
 
 def test_fanout_passes_a_self_contained_config_its_own_detector(tmp_path, capsys):
-    """``-D SK_WAND`` over every block (``submit_all_configs.sh``): the HK config keeps HK, so
-    the job's ``--detector`` matches the config and run_job's mismatch check does not trip."""
+    """``-D SK_WAND`` over every block (``submit_all_configs.sh``): the Solar config keeps its
+    HK_WAND, so the job's ``--detector`` matches the config and run_job's mismatch check does not
+    trip."""
     rc = fanout.main(["-c", str(SOLAR), "-D", "SK_WAND", "-t",
                       "--user-paths", _user_paths(tmp_path)])
     assert rc == 0
     subs = list((tmp_path / "prod").rglob("submit_job_*"))
-    assert subs and all("--detector HK " in p.read_text() for p in subs)
-    assert all("/HK/" in str(p) for p in subs)
+    assert subs and all("--detector HK_WAND " in p.read_text() for p in subs)
+    assert all("/HK_WAND/" in str(p) for p in subs)
 
 
 def test_fanout_refuses_a_config_whose_readout_does_not_resolve(tmp_path, capsys):

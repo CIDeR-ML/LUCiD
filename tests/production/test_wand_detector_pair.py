@@ -101,3 +101,15 @@ def test_the_two_wand_detectors_share_the_measured_surface_optics():
                             raw.get("sensor_reflection_rate"))
     assert values["SK_WAND"] == (0.05, 0.25), values["SK_WAND"]
     assert values["HK_WAND"] == (0.05, 0.25), values["HK_WAND"]
+
+
+def test_shipped_dataset_configs_name_only_frozen_detectors():
+    """A shipped dataset config names a WAND detector or none (the fan-out's -D then picks
+    one): a generic physics config can change under a dataset without production noticing."""
+    root = os.path.join(str(REPO), "lucid", "production", "dataprod", "configs")
+    configs = sorted(os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs if f.endswith(".json"))
+    assert configs
+    for path in configs:
+        with open(path) as f:
+            detector = json.load(f).get("detector")
+        assert detector is None or detector in WAND_DETECTORS, f"{path} names {detector!r}"

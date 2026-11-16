@@ -37,7 +37,7 @@ Usage:
 
 ``--configs`` names files under ``lucid/production/dataprod/configs/``; the two
 above are the default. ``lucid-run-job`` is run with the config's own
-``detector`` when it declares one (``Solar/01_e_low_energy.json``: ``HK``) and
+``detector`` when it declares one (``Solar/01_e_low_energy.json``: ``HK_WAND``) and
 ``--detector SK_WAND`` otherwise (``GeV/02_mu.json``), as the fan-out runs them,
 so the timings include the production readout (SPE sampling, dark noise, trigger).
 
