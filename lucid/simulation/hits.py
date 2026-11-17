@@ -234,8 +234,10 @@ def first_arrival_sampled(
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_sensors)
     detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_sensors)
 
-    # CHARGE is gated on a valid first-arrival time (detector_mins>0 & finite).
-    nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
+    # CHARGE is gated on the sensor holding a detected photon (a finite first arrival). Photons
+    # with a true time <= 0 are already out (timing_mask), so, as in production and the expected
+    # and truth paths, the TTS may move the first arrival to <= 0 without dropping the sensor.
+    nonzero_mask = (total_charge > 1e-10) & jnp.isfinite(detector_mins)
 
     # TIME: first-arrival of the per-photon-TTS-smeared photons (no post-hoc smear).
     # PER-SENSOR gate: only lit sensors carry a time; empty sensors are exactly 0

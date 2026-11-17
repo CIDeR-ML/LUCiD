@@ -176,6 +176,24 @@ class TestDataMode:
                                 err_msg=f"t = {t_k}")
 
 
+    def test_a_sensor_smeared_to_a_negative_first_arrival_keeps_its_charge(self):
+        """A photon counts when its TRUE time is > 0 (production's rule), and a sensor that any
+        counted photon reached keeps its charge and its smeared first arrival, even when the TTS
+        moves that below 0, as next to a wall. Gating the sensor on its smeared time dropped it,
+        charge and time; the earliest sensors are the brightest. Same sensors as the expected path."""
+        w = jnp.ones(102)
+        idx = jnp.array([0] * 100 + [1, 2])
+        t = jnp.array([0.3] * 100 + [50.0, -1.0])     # sensor 2's only photon has true time < 0
+        kw = dict(qe=1.0, qe_corrections=jnp.ones(4), key=jax.random.PRNGKey(3), tts=2.1)
+        q, tm = on_deposits(first_arrival_sampled, w, idx, t, 4, **kw)
+        assert float(q[0]) == 100.0 and float(tm[0]) < 0.0   # min of 100 smeared 0.3 ns arrivals
+        assert float(q[1]) == 1.0 and 40.0 < float(tm[1]) < 60.0
+        npt.assert_array_equal(np.asarray(q[2:]), 0.0)
+        npt.assert_array_equal(np.asarray(tm[2:]), 0.0)
+        q_expected, _ = on_deposits(first_arrival_expected, w, idx, t, 4, **kw)
+        npt.assert_array_equal(np.asarray(q) > 0, np.asarray(q_expected) > 0)
+
+
 class TestDifferentiability:
     def test_simulation_grad_wrt_weights(self):
         """first_arrival_expected should be differentiable w.r.t. flat_weights."""
