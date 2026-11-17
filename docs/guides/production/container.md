@@ -71,8 +71,14 @@ All flags: [command-line tools](../../reference/cli.md#lucid-run-job).
 | `GeV/04_e.json` | one e, charge drawn per event | 1 to 2000 |
 | `GeV/06_pi0.json` | one pi0 | 200 to 2000 |
 | `GeV/07_gamma.json` | one gamma | 1 to 2130 |
+| `GeV/08_2mu.json` | two mu at one vertex, each charge drawn independently | 200 to 2000 each |
+| `GeV/09_mu_pip.json` | mu- and pi+ at one vertex | 200 to 2000 each |
+| `GeV/10_e_pip.json` | e- and pi+ at one vertex | e 100 to 2000, pi 200 to 2000 |
+| `GeV/11_e_pi0.json` | e- and pi0 at one vertex | e 100 to 2000, pi0 200 to 2000 |
+| `GeV/12_mu_pi0.json` | mu- and pi0 at one vertex | 200 to 2000 each |
 
-`01` is the training set; `02` to `07` are one-species test sets. The single-particle sets draw
+`01` is the training set; `02` to `07` are one-species test sets and `08` to `12` two-particle
+test sets, each particle with its own energy and isotropic direction. The single-particle sets draw
 the charge per event because the two charges end differently (mu- can be captured, mu+ always
 decays; pi- is captured, pi+ decays), while their Cherenkov light does not tell them apart. In a
 config of your own, express "one particle of either charge" as a bomb with

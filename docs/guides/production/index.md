@@ -26,7 +26,7 @@ your own. Event counts are the configs' `nominal_train` and `nominal_test`.
 
 | block | configs | nominal events | detector |
 |---|---|---|---|
-| `GeV` | `01_pbomb` (particle bomb); `02_mu`, `03_pi`, `04_e`, `06_pi0`, `07_gamma` (single particles); `02_mu_fast`, `02_mu_metrics`, `02_mu_smoke` (small `02_mu` variants) | `01`: train 1,000,000, test 50,000. `02` to `07`: test 50,000 (variants 60, 500, 10) | none: pass `SK_WAND` or `HK_WAND` |
+| `GeV` | `01_pbomb` (particle bomb); `02_mu`, `03_pi`, `04_e`, `06_pi0`, `07_gamma` (single particles); `08_2mu`, `09_mu_pip`, `10_e_pip`, `11_e_pi0`, `12_mu_pi0` (two particles at one vertex); `02_mu_fast`, `02_mu_metrics`, `02_mu_smoke` (small `02_mu` variants) | `01`: train 1,000,000, test 50,000. `02` to `07` and `08`: test 50,000; `09` to `12`: test 10,000 (variants 60, 500, 10) | none: pass `SK_WAND` or `HK_WAND` |
 | `Solar` | `01_e_low_energy` | train 1,000,000, test 50,000 | `HK_WAND` (declared) |
 | `SN` | `01_supernova_50kpc` | 5 bursts | `HK_WAND` (declared) |
 | `Test` | `01_pile_up_bombs` | 500 | `HK_WAND` (declared) |

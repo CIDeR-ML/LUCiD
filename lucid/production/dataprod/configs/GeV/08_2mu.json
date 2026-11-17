@@ -1,0 +1,37 @@
+{
+  "name": "two muons (random charges)",
+  "description": "Two muons per event from a single vertex, each charge drawn independently from {mu-, mu+} (mu-mu- / mu-mu+ / mu+mu+ at 25/50/25%). Each muon has its own kinetic energy, uniform in [200, 2000] MeV, and its own isotropic direction. Bomb source with min_particles = max_particles = 2, sampling with replacement.",
+  "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 50000,
+  "seconds_per_event": 4.833,
+  "target_seconds_per_job": 1159.92,
+  "selection": {
+    "mode": "trigger"
+  },
+  "primary_source": "bomb",
+  "bomb": {
+    "min_particles": 2,
+    "max_particles": 2,
+    "candidates": [
+      {
+        "type": "mu-",
+        "energy_min_MeV": 200,
+        "energy_max_MeV": 2000
+      },
+      {
+        "type": "mu+",
+        "energy_min_MeV": 200,
+        "energy_max_MeV": 2000
+      }
+    ]
+  },
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "cleanup_root_files": true
+}

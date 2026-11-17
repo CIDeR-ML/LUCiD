@@ -47,7 +47,7 @@ def test_run_job_requires_a_detector(tmp_path, capsys):
 def test_dataprod_configs_well_formed():
     from lucid.production.dataprod.run_job import _load_config, _readout
     # configs live in block subdirectories (GeV/, SN/, Solar/, Test/) as NN_name.json.
-    # GeV is trimmed to the production set (01-06); with SN/Solar/Test that's 9 blocks.
+    # GeV holds the WAND training and test sets (01-12) and small 02_mu variants.
     files = sorted(glob.glob(os.path.join(CONFIGS, '*', '[0-9][0-9]_*.json')))
     assert len(files) >= 9, f"expected the block dataprod configs, found {len(files)}"
     for f in files:

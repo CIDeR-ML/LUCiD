@@ -1,0 +1,33 @@
+{
+  "name": "e- plus pi0",
+  "description": "One e- and one pi0 per event from a single vertex. The e- kinetic energy is uniform in [100, 2000] MeV, the pi0 kinetic energy uniform in [200, 2000] MeV; each has its own isotropic direction. Fixed two-entry particles list: both particles are in every event.",
+  "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 10000,
+  "seconds_per_event": 11.575,
+  "target_seconds_per_job": 1157.51,
+  "selection": {
+    "mode": "trigger"
+  },
+  "energy_distribution": "uniform",
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "particles": [
+    {
+      "type": "e-",
+      "energy_min_MeV": 100,
+      "energy_max_MeV": 2000
+    },
+    {
+      "type": "pi0",
+      "energy_min_MeV": 200,
+      "energy_max_MeV": 2000
+    }
+  ],
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "cleanup_root_files": true
+}

@@ -1,0 +1,33 @@
+{
+  "name": "mu- plus pi+",
+  "description": "One mu- and one pi+ per event from a single vertex (a CC1pi+ topology). Each particle has its own kinetic energy, uniform in [200, 2000] MeV, and its own isotropic direction. Fixed two-entry particles list: both particles are in every event.",
+  "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 10000,
+  "seconds_per_event": 8.106,
+  "target_seconds_per_job": 810.61,
+  "selection": {
+    "mode": "trigger"
+  },
+  "energy_distribution": "uniform",
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "particles": [
+    {
+      "type": "mu-",
+      "energy_min_MeV": 200,
+      "energy_max_MeV": 2000
+    },
+    {
+      "type": "pi+",
+      "energy_min_MeV": 200,
+      "energy_max_MeV": 2000
+    }
+  ],
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "cleanup_root_files": true
+}
