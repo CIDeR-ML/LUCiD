@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 """Identify dataprod jobs that did not finish.
 
-Walks a dataprod output tree, finds every `submit_job_NNNNNN.sbatch`
-whose four-file batch is missing, unreadable, or has the wrong
-n_events. The truth check is straightforward:
-
-  1. All four `wc_{sensor,hits,step,labl}_<file_index:04d>.h5` exist
-     (where `file_index = job_id - 1`).
-  2. Each file opens with h5py and carries a `config/` group.
-  3. `config.attrs['n_events']` equals the per-job event count requested
-     in the config (`n_events_per_job`).
+Walks a dataprod output tree and finds every `submit_job_NNNNNN.sbatch`
+whose batch (`file_index = job_id - 1`) fails `lucid.dataset.layout.check_batch`
+-- the same check every job runs on its own output -- or holds more events than
+the job requested (fewer is selection, not a failure).
 
 This is the dataset-prod analog of `siren_inputs/resubmit_failed.py`,
 but datasets don't need merging — each `file_index` batch is an
@@ -37,51 +32,21 @@ import sys
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
-from lucid.dataset.layout import batch_paths
-from lucid.dataset.schema import SUBDIRS
+from lucid.dataset.layout import check_batch
 
 
 def is_complete(cell_dir: Path, file_index: int,
                 expected_events: Optional[int]) -> Tuple[bool, str]:
-    """True iff the four files exist, are flagged complete and agree on n_events <= expected.
+    """True iff batch ``file_index`` passes :func:`lucid.dataset.layout.check_batch` with at most
+    ``expected_events`` events (fewer is selection, not a failure).
 
-    Returns (ok, short_reason). `short_reason` is "" when ok.
+    Returns (ok, short_reason). `short_reason` is "" when ok, else the first failure line.
     """
-    import h5py
-
-    paths = batch_paths(cell_dir, file_index)
-    n_by_sub = {}
-    for sub in SUBDIRS:
-        p = paths[sub]
-        if not p.is_file():
-            return False, f"missing {sub}"
-        if p.stat().st_size == 0:
-            return False, f"empty {sub}"
-        try:
-            with h5py.File(p, "r") as h:
-                n_by_sub[sub] = int(h["config"].attrs.get("n_events", -1))
-                # Completion flag is the authoritative health signal: a job killed
-                # mid-write leaves files that exist (opened 'w' before the event
-                # loop) but with complete=False. A file without it is incomplete too.
-                if not bool(h["config"].attrs.get("complete", False)):
-                    return False, f"incomplete {sub} (config/complete != True)"
-        except Exception as e:
-            return False, f"unreadable {sub}: {e!r}"
-        if n_by_sub[sub] < 0:
-            return False, f"bad n_events={n_by_sub[sub]} in {sub}"
-
-    # The four files are written together, so they must agree on n_events.
-    if len(set(n_by_sub.values())) != 1:
-        return False, f"n_events mismatch across files: {n_by_sub}"
-    n = next(iter(n_by_sub.values()))
-
-    # The count is allowed to vary: any selection (real trigger or the low-E
-    # min_physics_hits truth cut) drops events, so a complete job writes
-    # n <= expected. Crashes are caught by the completion flag above, not inferred
-    # from the count, so n < expected on a complete job is just selection inefficiency.
-    if expected_events is not None and n > expected_events:
-        return False, f"n_events={n} > expected {expected_events}"
-    return True, ""
+    ok, messages = check_batch(cell_dir, file_index, max_events=expected_events)
+    if ok:
+        return True, ""
+    return False, next((m for m in messages if not m.startswith(("OK", "EMPTY_KEPT"))),
+                       "failed the batch check")
 
 
 # submit_job_NNNNNN.{sbatch|sub}  -> job_id = int(NNNNNN)

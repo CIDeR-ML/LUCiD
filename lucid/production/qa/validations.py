@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from lucid.dataset.layout import batch_paths, list_batches
+from lucid.dataset.layout import batch_paths, check_batch, list_batches
 from lucid.dataset.schema import EMISSION_PROCESS_DARK
 
 
@@ -42,30 +42,21 @@ def _cat(parts, dtype):
 
 
 def check_integrity(dataset: Path):
-    """All shards readable, n_events attr == event groups, modalities agree,
-    and the file_index sequence is gap-free (a missing shard means a job died
-    before its first write and left no file to flag)."""
+    """Every shard passes :func:`lucid.dataset.layout.check_batch`, and the file_index sequence
+    has no gap between the first and the last shard (a missing shard means a job died before its
+    first write and left no file to flag; a production need not start at file_index 0)."""
     import h5py
     present = list_batches(dataset)
-    gaps = sorted(set(range(max(present) + 1)) - set(present)) if present else []
+    gaps = sorted(set(range(present[0], present[-1] + 1)) - set(present)) if present else []
     corrupt, nev, commits = [], [], set()
     for fi in present:
-        per, ok = {}, True
-        for m, path in batch_paths(dataset, fi).items():
-            try:
-                with h5py.File(path, "r") as f:
-                    ne = int(f["config"].attrs.get("n_events", -1))
-                    groups = sum(1 for k in f.keys() if k.startswith("event_"))
-                    per[m] = (ne, groups)
-                    commits.add(str(f["config"].attrs.get("git_commit", "?"))[:12])
-            except Exception:
-                ok = False
+        ok, messages = check_batch(dataset, fi)
         if not ok:
-            corrupt.append((fi, "unreadable"))
-        elif len({v[0] for v in per.values()}) != 1 or any(a != b for a, b in per.values()):
-            corrupt.append((fi, "inconsistent"))
-        else:
-            nev.append(per["sensor"][0])
+            corrupt.append((fi, next(m for m in messages if not m.startswith(("OK", "EMPTY_KEPT")))))
+            continue
+        with h5py.File(batch_paths(dataset, fi)["sensor"], "r") as f:
+            nev.append(int(f["config"].attrs["n_events"]))
+            commits.add(str(f["config"].attrs.get("git_commit", "?"))[:12])
     # Multiple commits are reported but not failed: a long campaign legitimately
     # spans commits (e.g. tooling fixes landing mid-run) and this check cannot
     # tell a physics change from a script-only one. The list is always printed
