@@ -358,6 +358,21 @@ TRIG = {"window_ns": 50.0, "n_thr": 4, "pad_before_ns": 10.0, "pad_after_ns": 20
 SKI_NO_DARK = {"model": "ski", "dark_rate_khz": 0.0}
 
 
+def test_single_vertex_digit_times_sit_on_the_absolute_tdc_grid(tmp_path, fake_root, detector):
+    """The TDC rounds the detector-frame time. Rounding the event's own time and adding t0 after
+    put every digit on t0 + k * 0.4 ns, so each event's digit times gave away t0 modulo 0.4 ns."""
+    path = fake_root(tmp_path / "ps.root", [_muon_michel_event()])
+    drivers.run_particles(
+        _StubSimulator(detector), path, output_dir=str(tmp_path / "out"), file_index=0,
+        n_events=1, master_seed=7, job_id=1, readout=Readout.from_blocks(SKI_NO_DARK, TRIG),
+        dataset_name="t", apply_smearing=True, apply_translation=False, pad_size_buckets=(64,))
+    f = _files(tmp_path / "out")
+    t0 = float(f["labl"]["event_000/per_event/t0"])
+    steps = np.asarray(f["sensor"]["event_000/T"], np.float64) / 0.4
+    assert steps.size > 1 and abs(t0 / 0.4 - round(t0 / 0.4)) > 1e-3   # t0 itself is off-grid
+    np.testing.assert_allclose(steps, np.round(steps), atol=1e-6)
+
+
 def test_particles_driver_writes_what_the_event_implies(tmp_path, fake_root, detector):
     ev0, ev1 = _muon_michel_event(), _dim_muon_event()
     path = fake_root(tmp_path / "ps.root", [ev0, ev1])

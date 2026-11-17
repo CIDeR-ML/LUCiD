@@ -771,25 +771,25 @@ _SEGMENT_KEYS = ('start_x', 'start_y', 'start_z', 'end_x', 'end_y', 'end_z',
 
 
 def _digitize_local_frame(stream, *, n_sensors, readout, rng, apply_resolution):
-    """One stream digitized in its own time frame, digit times then shifted by its t0 (float64).
+    """One stream digitized in the detector frame: its deposit times shifted by its t0 first.
 
-    The late-light cap of the digitizer is then measured against the earliest deposit
-    (``t_ref=None``); the pooled path measures it against each deposit's interaction t0.
+    The shift comes before digitizing so that the TDC rounds the absolute time, as a real TDC
+    does. Rounding the stream's own time and adding t0 after put every digit on t0 + k * tdc_ns,
+    so each event's digit times gave away t0 modulo the TDC step. The late-light cap of the
+    digitizer is measured against the earliest deposit (``t_ref=None``), which a common shift does
+    not move; the pooled path measures it against each deposit's interaction t0.
     """
+    # float64: t0 can reach second-scale (supernova bursts) where float32 loses the sub-ns timing.
+    t0 = np.float64(stream['t0'])
+    deposits = dict(stream['deposits'])
+    for k in ('t_true', 't_reco'):
+        deposits[k] = np.asarray(deposits[k], np.float64) + t0
     sensor_digits, hits_sparse, seg_hits = digitize_and_decompose(
-        **stream['deposits'],
+        **deposits,
         n_sensors=int(n_sensors), model=readout.digitizer, rng=rng,
         dark_rate_khz=float(readout.digitizer.get('dark_rate_khz', 0.0)),
         readout_pad_ns=readout.dark_pad_ns(),
         apply_resolution=apply_resolution)
-    # Every digit / decomposition row is a real hit, so a flat add suffices. Done in float64:
-    # t0 can reach second-scale (supernova bursts) where float32 loses the sub-ns light timing.
-    t0 = np.float64(stream['t0'])
-    for d, cols in ((sensor_digits, ('T',)), (hits_sparse, ('T', 'T_reco')),
-                    (seg_hits, ('T', 'T_reco'))):
-        for k in cols:
-            if k in d and d[k].size:
-                d[k] = d[k].astype(np.float64) + t0
     meta = stream['interaction_meta']
     return {
         'n_particles': len(stream['particles']),
@@ -914,10 +914,10 @@ def digitize(streams, *, n_sensors, readout, rng, detector_bounds, apply_resolut
     apply_resolution : bool
         Apply the digitizer's charge and time resolution.
     local_frame : bool
-        One stream only: digitize it in its own time frame and shift the digit times by its t0
-        (the single-vertex production path). Otherwise the streams are pooled in the detector
-        frame (pile-up, supernova). The two differ in the late-light cap reference and in float
-        rounding, and the pooled event keeps only the written segment columns (no ``group_id``).
+        One stream only, shifted by its t0 and digitized in the detector frame (the
+        single-vertex production path). Otherwise the streams are pooled in the detector frame
+        (pile-up, supernova). The two differ in the late-light cap reference, and the pooled
+        event keeps only the written segment columns (no ``group_id``).
 
     Returns
     -------

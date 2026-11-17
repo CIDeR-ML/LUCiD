@@ -487,8 +487,8 @@ def digitize_and_decompose(
     the per-deposit charge into the ``digit_idx``-aware decompositions.
 
     All input arrays are per detected deposit (QE already applied upstream),
-    in the G4/vertex time frame — the caller applies the per-interaction t0
-    shift to the returned times.
+    in the detector time frame: the caller adds each interaction's t0 first, so
+    the TDC step rounds absolute times.
 
     Returns ``(sensor_digits, hits_sparse, seg_hits)``:
       * ``sensor_digits``: ``{sensor_idx, PE, T}`` — the recorded digits (a
