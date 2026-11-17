@@ -1,35 +1,12 @@
-"""Stage 4 byte-identity gate: the Python categorizer reproduces
-PhotonSim's C++ ``TrackInfo_Category`` / ``Particle_GenealogyData`` /
-``Particle_ExtGenealogyData`` exactly.
+"""The categorizer (``lucid.dataset.labels.categorize_event``) on hand-built track lists.
 
-Two checks:
-
-1. ``test_categorizer_unit_decision_tree``: hand-rolled mini-events
-   exercising each branch of the decision tree (Primary, DecayElectron
-   from μ-decay, Gamma from π0, SecondaryPion from inelastic / from a
-   categorized-pion parent, plus the Cherenkov-threshold gate and the
-   category-parent walk).
-
-2. ``test_categorizer_matches_legacy_roots`` (requires_data): on a
-   PhotonSim ROOT file produced *after* the all-tracks dump landed, placed at
-   ``data/photonsim/categorizer_reference.root``, asserts every event's
-   ``category`` array equals ``TrackInfo_Category``, every particle's
-   genealogy equals ``Particle_GenealogyData`` (in order), and every
-   ``Particle_ExtGenealogyData`` matches. The example events the lucid-data
-   release asset ships predate that dump (no ``TrackInfo_Category`` branch),
-   so no shipped asset serves it yet.
-
-Sub-ids are NOT compared — they tie within a multi-secondary decay
-where Geant4's stack (LIFO) order differs from track-id order; the
-sub-id is downstream metadata only and not consumed by inst.h5 /
-labl.h5.
+Each test exercises a branch of the decision tree that picks which tracks become particles
+(primary, decay electron from mu decay or capture, gamma from pi0, secondary pion), the
+Cherenkov-threshold gates, and the category-parent walk.
 """
 from __future__ import annotations
 
 import numpy as np
-import pytest
-
-from tests.helpers import paths
 
 from lucid.dataset.labels import (
     CAT_PRIMARY, CAT_DECAY_ELECTRON, CAT_SECONDARY_PION, CAT_GAMMA, CAT_NONE,
@@ -157,89 +134,3 @@ def test_primary_only_event_collapses_to_one_particle():
     res = categorize_event(rows, meaningful_track_parent_pdg={1: (0, 13)})
     assert res.genealogies == [(1,)]
     assert res.ext_genealogies == [(1,)]
-
-
-# ---- Byte-identity vs legacy ROOT ------------------------------------------
-
-_REFERENCE = 'photonsim/categorizer_reference.root'
-
-
-@pytest.mark.requires_data(_REFERENCE)
-def test_categorizer_matches_legacy_roots():
-    """Every event in the ROOT file matches the legacy C++ output."""
-    import uproot
-
-    root_path = str(paths.data_file(_REFERENCE))
-    f = uproot.open(root_path)
-    t = f['OpticalPhotons']
-    arr = t.arrays([
-        'TrackInfo_TrackID', 'TrackInfo_PDG', 'TrackInfo_ParentTrackID',
-        'TrackInfo_Energy', 'TrackInfo_CreatorProcess', 'TrackInfo_Category',
-        'MTrack_TrackID', 'MTrack_ParentID', 'MTrack_PDG', 'MTrack_NCherenkov',
-        'Particle_GenealogySize', 'Particle_GenealogyData',
-        'Particle_ExtGenealogySize', 'Particle_ExtGenealogyData',
-    ], library='np')
-
-    n_events = t.num_entries
-    assert n_events > 0, f'no events in {root_path}'
-
-    failures: list[str] = []
-    for ev in range(n_events):
-        tid = np.asarray(arr['TrackInfo_TrackID'][ev], dtype=np.int64)
-        pdg = np.asarray(arr['TrackInfo_PDG'][ev], dtype=np.int64)
-        par = np.asarray(arr['TrackInfo_ParentTrackID'][ev], dtype=np.int64)
-        ke = np.asarray(arr['TrackInfo_Energy'][ev], dtype=np.float64)
-        cp_arr = arr['TrackInfo_CreatorProcess'][ev]
-        cat_root = np.asarray(arr['TrackInfo_Category'][ev], dtype=np.int64)
-        rows = [
-            TrackEntry(track_id=int(tid[i]), parent_id=int(par[i]),
-                       pdg=int(pdg[i]), ke_mev=float(ke[i]),
-                       creator_process=str(cp_arr[i]))
-            for i in range(len(tid))
-        ]
-        mt_id = np.asarray(arr['MTrack_TrackID'][ev], dtype=np.int64)
-        mt_pa = np.asarray(arr['MTrack_ParentID'][ev], dtype=np.int64)
-        mt_pdg = np.asarray(arr['MTrack_PDG'][ev], dtype=np.int64)
-        mt_nch = np.asarray(arr['MTrack_NCherenkov'][ev], dtype=np.int64)
-        mt_parent = {int(mt_id[i]): (int(mt_pa[i]), int(mt_pdg[i]))
-                     for i in range(len(mt_id))}
-        mt_cher = {int(mt_id[i]): int(mt_nch[i]) for i in range(len(mt_id))}
-
-        res = categorize_event(rows, meaningful_track_parent_pdg=mt_parent,
-                               cherenkov_count_by_mt_track=mt_cher)
-
-        cat_py = np.asarray(
-            [res.category_by_track_id[int(tid[i])] for i in range(len(tid))],
-            dtype=np.int64)
-        if not np.array_equal(cat_py, cat_root):
-            n_diff = int((cat_py != cat_root).sum())
-            failures.append(
-                f'event {ev}: TrackInfo_Category mismatch on {n_diff} of '
-                f'{len(tid)} tracks')
-            continue
-
-        # Genealogies — order must match (lexicographic / std::map iteration).
-        sizes = np.asarray(arr['Particle_GenealogySize'][ev], dtype=np.int64)
-        data = np.asarray(arr['Particle_GenealogyData'][ev], dtype=np.int64)
-        off = 0
-        gen_root: list[tuple[int, ...]] = []
-        for s in sizes:
-            gen_root.append(tuple(int(x) for x in data[off:off + s]))
-            off += int(s)
-        if gen_root != res.genealogies:
-            failures.append(
-                f'event {ev}: genealogy mismatch '
-                f'(ROOT n={len(gen_root)} Py n={len(res.genealogies)})')
-            continue
-
-        sizes_e = np.asarray(arr['Particle_ExtGenealogySize'][ev], dtype=np.int64)
-        data_e = np.asarray(arr['Particle_ExtGenealogyData'][ev], dtype=np.int64)
-        off = 0
-        ext_root: list[tuple[int, ...]] = []
-        for s in sizes_e:
-            ext_root.append(tuple(int(x) for x in data_e[off:off + s]))
-            off += int(s)
-        if ext_root != res.ext_genealogies:
-            failures.append(f'event {ev}: ext-genealogy mismatch')
-
-    assert not failures, '\n'.join(failures)

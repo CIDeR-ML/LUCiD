@@ -69,10 +69,7 @@ jobs:
             spatial_overlap_integrals/*.json
           key: lucid-data-${{ hashFiles('data/MANIFEST.sha256') }}
       - run: python scripts/download_data.py
-      # The categorizer test's reference ROOT is in no release asset (its docstring says why).
-      - run: >-
-          LUCID_REQUIRE_DATA=1 pytest tests/ -q -rs
-          --deselect tests/production/test_categorizer_byte_identity.py::test_categorizer_matches_legacy_roots
+      - run: LUCID_REQUIRE_DATA=1 pytest tests/ -q -rs
 
   examples:
     # Every example at its small size, on CPU, with the example data installed:
