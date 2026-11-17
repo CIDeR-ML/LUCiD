@@ -53,7 +53,7 @@ def _lucid_modules():
 # Not importable by design, so not import-tested:
 #   *.__main__                       a CLI entry point; importing it is running it
 #   lucid.production.derived_views.* standalone scripts that read sys.argv and write files at
-#                                    module scope (``python depile.py SRC DST IDX``)
+#                                    module scope (``python relabel_cone.py SRC DST THETA``)
 _NOT_MODULES = ('lucid.production.derived_views.',)
 MODULES = [m for m in _lucid_modules()
            if not m.endswith('.__main__') and not m.startswith(_NOT_MODULES)]

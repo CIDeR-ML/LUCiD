@@ -1,8 +1,9 @@
 # Derived views
 
-Scripts that write a new dataset from an existing one by regrouping or relabelling its four
-HDF5 files (`sensor`, `hits`, `step`, `labl`), with no PhotonSim ROOT file and no new simulation.
-Each takes `SRC DST <param>`; run them in the container:
+Scripts that write a new dataset from an existing one with its labels redefined: they copy the
+four HDF5 files and rewrite the labels (`labl`, and the per-particle split in `hits`), never the
+measurement (`sensor`). No PhotonSim ROOT file and no new simulation. Each takes
+`SRC DST <param>` and relabels every batch of `SRC`; run them in the container:
 
 ```bash
 apptainer exec -B /sdf "$LUCID_IMAGE_PATH" python3 <script> SRC DST <param>
@@ -10,14 +11,9 @@ apptainer exec -B /sdf "$LUCID_IMAGE_PATH" python3 <script> SRC DST <param>
 
 | script | what it does | `<param>` |
 |---|---|---|
-| `depile.py` | splits each pile-up event's N interactions into N single-interaction events; dark hits and trigger windows are dropped | `FILE_INDEX` (one batch per call) |
 | `relabel_segments.py` | redefines particles by the deflection angle between parent and child tracks (below) | angle in degrees |
 | `relabel_particles.py` | keeps the stored grouping of tracks into particles (`split`) or folds every track into its primary (`merge`) | `split` or `merge` |
-| `relabel_cone.py` | labels each hit inside (1) or outside (0) a cone of the given half-angle around the primary direction, written into `emission_process` so the viewer's emission toggle shows it | half-angle in degrees |
-
-`depile.py` writes each batch atomically and skips batches already complete, so it can be
-rerun. `submit_depile_array.sbatch` runs it over a whole dataset as a Slurm array; it is a
-template, so set `IMG`, `SCRIPT`, `SRC`, `DST`, the log paths and `--array` first.
+| `relabel_cone.py` | labels each hit inside (1) or outside (0) a cone of the given half-angle around the primary direction, written into `emission_process` so the viewer's emission toggle shows it; dark-noise rows keep their code (2) | half-angle in degrees |
 
 The dataset format is in the [dataset schema](../../../docs/reference/dataset-schema.md).
 

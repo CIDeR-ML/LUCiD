@@ -29,8 +29,9 @@ labels = read_labl_event(paths['labl'], 0)      # nested: per_event, per_interac
 The readers need only h5py. From the shell, `python scripts/inspect_dataset.py --path out/`
 prints event counts, charge statistics and array shapes (`--event N` for one event). The
 `viewer/` app (`python viewer/serve_viewer.py <dataset_dir> --open`) is an interactive 3D event
-display of the same files; see `viewer/README.md`. `lucid/production/derived_views/` makes
-derived datasets without re-simulating, such as splitting pile-up into single interactions.
+display of the same files; see `viewer/README.md`. `lucid/production/derived_views/` writes
+copies of a dataset with its labels redefined (what a particle is, hits inside a cone), without
+re-simulating.
 
 ## Conventions
 

@@ -16,25 +16,19 @@ The number of particles changes with theta -> per_particle is rebuilt to match.
 
 Rewrites: labl/per_track/particle_idx, labl/per_particle (full rebuild),
 and re-aggregates hits/ from step/sensor_hits under the new definition.
+Every batch of SRC is relabelled.
 
 Usage: relabel_segments.py SRC DST THETA_DEG
 """
-import sys, os, shutil, glob
+import sys, os, shutil
 import numpy as np
 import h5py
 
+from lucid.dataset.layout import batch_paths, list_batches
 from lucid.dataset.schema import EMISSION_PROCESS_DARK
 
-src, dst, theta = sys.argv[1], sys.argv[2], float(sys.argv[3])
-cos_thr = np.cos(np.deg2rad(theta))
 EM = {11, -11, 22}
 
-if os.path.exists(dst):
-    shutil.rmtree(dst)
-shutil.copytree(src, dst)
-labl_f = sorted(glob.glob(os.path.join(dst, "labl/*.h5")))[0]
-edep_f = sorted(glob.glob(os.path.join(dst, "step/*.h5")))[0]
-hits_f = sorted(glob.glob(os.path.join(dst, "hits/*.h5")))[0]
 
 class UF:
     def __init__(s, n): s.p = list(range(n))
@@ -43,12 +37,10 @@ class UF:
         return x
     def union(s, a, b): s.p[s.find(a)] = s.find(b)
 
-with h5py.File(labl_f, "r") as h:
-    evs = [k for k in h if k.startswith("event_")]
 
-counts = []
-for ev in evs:
-    with h5py.File(edep_f, "r") as h:
+def relabel_event(labl_f, step_f, hits_f, ev, cos_thr):
+    """Rewrite one event in place; returns its new number of particles."""
+    with h5py.File(step_f, "r") as h:
         g = h[ev]
         seg_track = g["track_idx"][:]                     # per-segment -> per_track row
         seg_dir = np.stack([g["dir_x"][:], g["dir_y"][:], g["dir_z"][:]], 1).astype(np.float64)
@@ -64,8 +56,7 @@ for ev in evs:
         pt = h[ev]["per_track"]
         track_id = pt["track_id"][:]; parent_id = pt["parent_id"][:]; pdg = pt["pdg"][:]
         old_pid = pt["particle_idx"][:]
-        pp = h[ev]["per_particle"]
-        old_cat = pp["category"][:]
+        old_cat = h[ev]["per_particle"]["category"][:]
 
     nT = len(track_id)
     row_of_tid = {int(track_id[i]): i for i in range(nT)}
@@ -98,15 +89,13 @@ for ev in evs:
     uniq = {r: i for i, r in enumerate(sorted(set(roots.tolist())))}
     new_pid = np.array([uniq[r] for r in roots], dtype=np.int64)
     N = len(uniq)
-    counts.append(N)
 
     # representative track per new particle (prefer a primary, else lowest track_id)
     rep = {}
     for t in range(nT):
         c = new_pid[t]
-        if c not in rep or (parent_id[t] == 0) or (track_id[t] < track_id[rep[c]]):
-            if c not in rep or parent_id[t] == 0 or track_id[t] < track_id[rep[c]]:
-                rep[c] = t
+        if c not in rep or parent_id[t] == 0 or track_id[t] < track_id[rep[c]]:
+            rep[c] = t
     # contained per new particle = AND over member segments
     contained_new = np.ones(N, bool)
     for s in range(len(seg_track)):
@@ -149,7 +138,7 @@ for ev in evs:
     hd = np.array([k[2] for k in ks], np.int32)          # digit_idx (FK preserved)
     he = np.array([k[3] for k in ks], np.int8)
     hpe = np.array([key[k][0] for k in ks], np.float32)
-    ht  = np.array([key[k][1] for k in ks], np.float64)   # absolute time stays float64
+    ht = np.array([key[k][1] for k in ks], np.float64)    # absolute time stays float64
     htr = np.array([key[k][2] for k in ks], np.float64)
     _cols = ("particle_idx", "digit_idx", "sensor_idx", "PE", "T", "T_reco", "emission_process")
     _phys = {"particle_idx": hp, "digit_idx": hd, "sensor_idx": hs,
@@ -168,6 +157,27 @@ for ev in evs:
         g.attrs["n_particle_hits"] = np.int64(len(hp) + int(dark.sum()))
         if "n_particles" in g.attrs:
             g.attrs["n_particles"] = np.int64(N)
+    return N
 
-counts = np.array(counts)
-print(f"[theta={theta:.0f}] particles/event min/med/max = {counts.min()}/{int(np.median(counts))}/{counts.max()}; wrote {dst}")
+
+def main():
+    src, dst, theta = sys.argv[1], sys.argv[2], float(sys.argv[3])
+    cos_thr = np.cos(np.deg2rad(theta))
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+    counts = []
+    for batch in list_batches(dst):
+        paths = batch_paths(dst, batch)
+        with h5py.File(paths["labl"], "r") as h:
+            evs = [k for k in h if k.startswith("event_")]
+        for ev in evs:
+            counts.append(relabel_event(paths["labl"], paths["step"], paths["hits"], ev, cos_thr))
+    counts = np.array(counts) if counts else np.zeros(1, int)
+    print(f"[theta={theta:.0f}] particles/event min/med/max = "
+          f"{counts.min()}/{int(np.median(counts))}/{counts.max()}; wrote {dst}")
+
+
+if __name__ == "__main__":
+    main()
