@@ -212,7 +212,7 @@ numbers.
 ### Running the JAX stack on a GPU
 
 The production image's `jaxlib` is CPU-only (`jax.devices()` shows `CpuDevice` even with
-`--nv`), and its jax is 0.4.38, outside the `>=0.5.3,<0.6` range the library declares. GPU work
+`--nv`); its jax is 0.5.3. GPU work
 layers a user-site environment holding `jax-cuda12-plugin`, the matching `nvidia-*-cu12` wheels
 and optax onto the image, through `APPTAINERENV_PYTHONUSERBASE`, plus `--nv`:
 
