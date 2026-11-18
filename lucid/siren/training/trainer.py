@@ -8,23 +8,24 @@ every shipped emitter) with any field overridden. :class:`SIRENTrainer` trains a
 loader's own schema, with the recipe, losses and commit recorded in it. ``lucid-siren-promote``
 (:mod:`lucid.siren.training.promote`) adds the t0 fit and emission band and installs it.
 """
+
 from __future__ import annotations
 
 import dataclasses
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
-import time
+from typing import Any, Callable, Dict, Optional
 
-import numpy as np
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import numpy as np
 import optax
 from flax.training import train_state
-import matplotlib.pyplot as plt
 
 from lucid.siren.emitter import read_weights, write_emitter, write_weights
 from lucid.siren.net import SIREN
@@ -32,13 +33,14 @@ from lucid.siren.training.dataset import table_curves
 
 logger = logging.getLogger(__name__)
 
-NOMINAL = Path(__file__).with_name('nominal.json')
-GRID_BINS = 250        # the ray samplers' first-pass grid, recorded into every new emitter
+NOMINAL = Path(__file__).with_name("nominal.json")
+GRID_BINS = 250  # the ray samplers' first-pass grid, recorded into every new emitter
 
 
 @dataclass(frozen=True)
 class Recipe:
     """A training working point; the fields are those of ``nominal.json``."""
+
     # network
     hidden_features: int
     hidden_layers: int
@@ -67,15 +69,17 @@ class Recipe:
     seed: int
 
     @classmethod
-    def load(cls, path=NOMINAL, **overrides) -> 'Recipe':
+    def load(cls, path=NOMINAL, **overrides) -> "Recipe":
         """The recipe in ``path`` with ``overrides``; an unknown or missing field raises."""
         values = {**json.loads(Path(path).read_text()), **overrides}
         names = {f.name for f in dataclasses.fields(cls)}
         unknown, missing = sorted(set(values) - names), sorted(names - set(values))
         if unknown or missing:
             raise ValueError(f"{path}: unknown recipe fields {unknown}, missing {missing}")
-        if values['optimizer'] not in ('adam', 'adamw', 'sgd'):
-            raise ValueError(f"optimizer must be 'adam', 'adamw' or 'sgd', got {values['optimizer']!r}")
+        if values["optimizer"] not in ("adam", "adamw", "sgd"):
+            raise ValueError(
+                f"optimizer must be 'adam', 'adamw' or 'sgd', got {values['optimizer']!r}"
+            )
         return cls(**values)
 
 
@@ -123,7 +127,7 @@ class SIRENTrainer:
             hidden_features=recipe.hidden_features,
             hidden_layers=recipe.hidden_layers,
             out_features=1,
-            w0=recipe.w0
+            w0=recipe.w0,
         )
 
         # Check JAX devices
@@ -132,16 +136,11 @@ class SIRENTrainer:
         # Initialize state variables
         self.state = None
         self.rng = jax.random.PRNGKey(recipe.seed)
-        self.history = {
-            'train_loss': [],
-            'val_loss': [],
-            'learning_rate': [],
-            'step': []
-        }
+        self.history = {"train_loss": [], "val_loss": [], "learning_rate": [], "step": []}
 
         # Patience scheduler state
         self.current_lr = recipe.learning_rate
-        self.best_val_loss = float('inf')
+        self.best_val_loss = float("inf")
         self.patience_counter = 0
         self.lr_reductions = 0
 
@@ -159,15 +158,15 @@ class SIRENTrainer:
     def _make_optimizer(self, lr: float):
         """The recipe's optimiser at learning rate ``lr``."""
         r = self.recipe
-        if r.optimizer == 'adamw':
+        if r.optimizer == "adamw":
             base = optax.adamw(learning_rate=lr, weight_decay=r.weight_decay)
-        elif r.optimizer == 'sgd':
+        elif r.optimizer == "sgd":
             base = optax.sgd(learning_rate=lr, momentum=0.9)
         else:
             base = optax.adam(learning_rate=lr)
         parts = [optax.clip_by_global_norm(r.grad_clip_norm)] if r.grad_clip_norm > 0 else []
         parts.append(base)
-        if r.optimizer != 'adamw' and r.weight_decay > 0:
+        if r.optimizer != "adamw" and r.weight_decay > 0:
             parts.append(optax.add_decayed_weights(r.weight_decay))
         return optax.chain(*parts)
 
@@ -179,10 +178,12 @@ class SIRENTrainer:
         else:
             params = self.model.init(self.rng, self.dataset.get_sample_input())
         self.state = train_state.TrainState.create(
-            apply_fn=self.model.apply, params=params, tx=self._make_optimizer(self.current_lr))
+            apply_fn=self.model.apply, params=params, tx=self._make_optimizer(self.current_lr)
+        )
 
     def _create_train_step(self):
         """Create JIT-compiled training step function."""
+
         @jax.jit
         def train_step(state, batch):
             """Single training step."""
@@ -202,6 +203,7 @@ class SIRENTrainer:
 
     def _create_eval_step(self):
         """Create JIT-compiled evaluation step function."""
+
         @jax.jit
         def eval_step(state, batch):
             """Single evaluation step (the training loss)."""
@@ -233,7 +235,9 @@ class SIRENTrainer:
             logger.info(f"✅ Validation loss improved to {val_loss:.6f} - patience reset")
         else:
             self.patience_counter += 1
-            logger.info(f"⏳ No improvement for {self.patience_counter}/{self.recipe.patience} checks")
+            logger.info(
+                f"⏳ No improvement for {self.patience_counter}/{self.recipe.patience} checks"
+            )
 
             # Check if we should reduce learning rate
             if self.patience_counter >= self.recipe.patience:
@@ -265,21 +269,25 @@ class SIRENTrainer:
         for step in range(total_steps):
             self.rng, batch_rng, val_rng = jax.random.split(self.rng, 3)
             train_batch = self.dataset.get_batch(
-                self.recipe.batch_size, rng=batch_rng, split='train', normalized=True)
+                self.recipe.batch_size, rng=batch_rng, split="train", normalized=True
+            )
             self.state, train_loss = train_step(self.state, train_batch)
 
             if step % self.log_every == 0:
-                self.history['train_loss'].append(float(train_loss))
-                self.history['step'].append(step)
-                self.history['learning_rate'].append(float(self.current_lr))
-                logger.info(f"Step {step:4d}/{total_steps}: Loss={train_loss:.6f}, LR={self.current_lr:.2e}")
+                self.history["train_loss"].append(float(train_loss))
+                self.history["step"].append(step)
+                self.history["learning_rate"].append(float(self.current_lr))
+                logger.info(
+                    f"Step {step:4d}/{total_steps}: Loss={train_loss:.6f}, LR={self.current_lr:.2e}"
+                )
 
             # Validation and patience checking
             if step % self.recipe.val_every == 0 and self.dataset.has_validation:
                 val_batch = self.dataset.get_batch(
-                    self.recipe.batch_size, rng=val_rng, split='val', normalized=True)
+                    self.recipe.batch_size, rng=val_rng, split="val", normalized=True
+                )
                 val_loss = eval_step(self.state, val_batch)
-                self.history['val_loss'].append(float(val_loss))
+                self.history["val_loss"].append(float(val_loss))
                 logger.info(f"       Val Loss: {val_loss:.6f}")
                 self._check_patience_and_update_lr(float(val_loss))
 
@@ -300,13 +308,13 @@ class SIRENTrainer:
     def save_checkpoint(self, step: int):
         """``checkpoint_step_<step>.npz`` (a valid ``init``) and the history so far."""
         self.output_dir.mkdir(exist_ok=True, parents=True)
-        write_weights(self.output_dir / f'checkpoint_step_{step}.npz', self.state.params)
+        write_weights(self.output_dir / f"checkpoint_step_{step}.npz", self.state.params)
         self.save_history(self.output_dir)
         logger.info(f"Saved checkpoint at step {step}")
 
     def save_history(self, output_dir: Path):
         """``training_history.json``: loss, learning rate and step."""
-        (Path(output_dir) / 'training_history.json').write_text(json.dumps(self.history, indent=2))
+        (Path(output_dir) / "training_history.json").write_text(json.dumps(self.history, indent=2))
 
     def predict(self, inputs: np.ndarray) -> np.ndarray:
         """The net's (log-normalised) output on normalised ``inputs``, shape ``(n, 1)``."""
@@ -317,23 +325,26 @@ class SIRENTrainer:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
         # Loss plot
-        ax1.plot(self.history['step'], self.history['train_loss'], label='Train')
-        if self.history['val_loss']:
-            val_steps = self.history['step'][::self.recipe.val_every // self.log_every]
-            ax1.plot(val_steps[:len(self.history['val_loss'])],
-                    self.history['val_loss'], label='Validation')
-        ax1.set_xlabel('Step')
-        ax1.set_ylabel('Loss')
-        ax1.set_yscale('log')
+        ax1.plot(self.history["step"], self.history["train_loss"], label="Train")
+        if self.history["val_loss"]:
+            val_steps = self.history["step"][:: self.recipe.val_every // self.log_every]
+            ax1.plot(
+                val_steps[: len(self.history["val_loss"])],
+                self.history["val_loss"],
+                label="Validation",
+            )
+        ax1.set_xlabel("Step")
+        ax1.set_ylabel("Loss")
+        ax1.set_yscale("log")
         ax1.legend()
-        ax1.set_title('Training Loss')
+        ax1.set_title("Training Loss")
 
         # Learning rate plot
-        ax2.plot(self.history['step'], self.history['learning_rate'])
-        ax2.set_xlabel('Step')
-        ax2.set_ylabel('Learning Rate')
-        ax2.set_yscale('log')
-        ax2.set_title('Learning Rate Schedule')
+        ax2.plot(self.history["step"], self.history["learning_rate"])
+        ax2.set_xlabel("Step")
+        ax2.set_ylabel("Learning Rate")
+        ax2.set_yscale("log")
+        ax2.set_title("Learning Rate Schedule")
 
         plt.tight_layout()
 
@@ -349,33 +360,50 @@ class SIRENTrainer:
         """The ``emitter.json`` content of the trained emitter: a training run's, without the t0
         fit and emission band that ``lucid-siren-promote`` adds when it installs it."""
         from lucid.utils import git_commit
+
         ds, r = self.dataset, self.recipe
-        axis2 = 'angle_rad' if ds.kind == 'cherenkov' else 'dedx_kev_per_mm'
+        axis2 = "angle_rad" if ds.kind == "cherenkov" else "dedx_kev_per_mm"
         (e_lo, e_hi), (a_lo, a_hi), (s_lo, s_hi) = ds.domain
         s_max_mm, n_photons = table_curves(ds.metadata, ds.kind)
-        rec = {'kind': ds.kind,
-               'net': {'hidden_features': r.hidden_features, 'hidden_layers': r.hidden_layers,
-                       'w0': r.w0},
-               'domain': {'energy_mev': [e_lo, e_hi], axis2: [a_lo, a_hi], 's_over_smax': [s_lo, s_hi]},
-               'target': {'log10_min': float(ds.normalized_bounds['target_min']),
-                          'log10_max': float(ds.normalized_bounds['target_max']),
-                          'offset': r.zero_threshold},
-               'grid_bins': GRID_BINS,
-               's_max_mm': s_max_mm}
-        if ds.kind == 'cherenkov':
-            rec['n_photons'] = n_photons
+        rec = {
+            "kind": ds.kind,
+            "net": {
+                "hidden_features": r.hidden_features,
+                "hidden_layers": r.hidden_layers,
+                "w0": r.w0,
+            },
+            "domain": {
+                "energy_mev": [e_lo, e_hi],
+                axis2: [a_lo, a_hi],
+                "s_over_smax": [s_lo, s_hi],
+            },
+            "target": {
+                "log10_min": float(ds.normalized_bounds["target_min"]),
+                "log10_max": float(ds.normalized_bounds["target_max"]),
+                "offset": r.zero_threshold,
+            },
+            "grid_bins": GRID_BINS,
+            "s_max_mm": s_max_mm,
+        }
+        if ds.kind == "cherenkov":
+            rec["n_photons"] = n_photons
         meta = {k: (v.decode() if isinstance(v, bytes) else v) for k, v in ds.metadata.items()}
         h = self.history
-        rec['provenance'] = {
-            'material': meta['material'], 'particle': meta['particle'], 'table': str(ds.data_path),
-            'steps': r.num_steps,
-            'losses': {'final_train': h['train_loss'][-1],
-                       'final_val': h['val_loss'][-1] if h['val_loss'] else None,
-                       'best_val': min(h['val_loss']) if h['val_loss'] else None},
-            'init': str(self.init) if self.init else None,
-            'commit': git_commit(),
-            'trained_at_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
-        rec['training'] = {'recipe': dataclasses.asdict(r)}
+        rec["provenance"] = {
+            "material": meta["material"],
+            "particle": meta["particle"],
+            "table": str(ds.data_path),
+            "steps": r.num_steps,
+            "losses": {
+                "final_train": h["train_loss"][-1],
+                "final_val": h["val_loss"][-1] if h["val_loss"] else None,
+                "best_val": min(h["val_loss"]) if h["val_loss"] else None,
+            },
+            "init": str(self.init) if self.init else None,
+            "commit": git_commit(),
+            "trained_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        rec["training"] = {"recipe": dataclasses.asdict(r)}
         return rec
 
     def save_emitter(self, output_dir: Path):

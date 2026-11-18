@@ -8,50 +8,58 @@
 The per-count geometry configs (analysis/paper/geometries/SK_like_<N>_geom_config.json)
 are generated automatically for whatever sensor counts the run needs — no prerequisite step.
 """
+
 import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from analysis.paper.utils import (  # noqa: E402
-    make_geometries, paths, plotting, provenance, run, studies)
+    make_geometries,
+    paths,
+    plotting,
+    provenance,
+    run,
+    studies,
+)
 
-FIGURE = 'geometry'
+FIGURE = "geometry"
 LOCAL_SENSORS = [4000, 10000, 16000]
 
 
 def generate_data(backend, events, root_base, sensors):
-    sensors = sensors or (studies.SENSORS if backend == 's3df' else LOCAL_SENSORS)
-    n = events or (100 if backend == 's3df' else 20)
-    make_geometries.ensure(sensors)          # idempotent; no manual prerequisite step
+    sensors = sensors or (studies.SENSORS if backend == "s3df" else LOCAL_SENSORS)
+    n = events or (100 if backend == "s3df" else 20)
+    make_geometries.ensure(sensors)  # idempotent; no manual prerequisite step
     ddir = paths.data_dir(FIGURE, backend)
     for cfg in studies.geom_configs(n_events=n, sensors=sensors, root_base=root_base):
-        per = ddir / cfg['name']
-        if backend == 's3df':
-            run.submit_s3df(cfg, per, config_dir=ddir / 'configs', job_name=cfg['name'])
+        per = ddir / cfg["name"]
+        if backend == "s3df":
+            run.submit_s3df(cfg, per, config_dir=ddir / "configs", job_name=cfg["name"])
         else:
             run.run_local(cfg, per, events=list(range(n)))
 
 
 def plot_results(backend, out, sensors):
-    sensors = sensors or (studies.SENSORS if backend == 's3df' else LOCAL_SENSORS)
+    sensors = sensors or (studies.SENSORS if backend == "s3df" else LOCAL_SENSORS)
     ddir = paths.data_dir(FIGURE, backend)
-    pdf = plotting.sensors(base=ddir / 'gscan_', out=out, sensors=sensors)
-    print(f'wrote {pdf}')
+    pdf = plotting.sensors(base=ddir / "gscan_", out=out, sensors=sensors)
+    print(f"wrote {pdf}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--generate-data', action='store_true')
-    ap.add_argument('--plot-results', action='store_true')
-    ap.add_argument('--backend', choices=['local', 's3df'], default='local')
-    ap.add_argument('--events', type=int, default=None)
-    ap.add_argument('--sensors', default=None, help='comma list of sensor counts')
-    ap.add_argument('--root-base', default=None)
-    ap.add_argument('--out', default=None)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--generate-data", action="store_true")
+    ap.add_argument("--plot-results", action="store_true")
+    ap.add_argument("--backend", choices=["local", "s3df"], default="local")
+    ap.add_argument("--events", type=int, default=None)
+    ap.add_argument("--sensors", default=None, help="comma list of sensor counts")
+    ap.add_argument("--root-base", default=None)
+    ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    sensors = [int(x) for x in a.sensors.split(',')] if a.sensors else None
+    sensors = [int(x) for x in a.sensors.split(",")] if a.sensors else None
     both = not (a.generate_data or a.plot_results)
     if a.generate_data or both:
         generate_data(a.backend, a.events, a.root_base, sensors)
@@ -61,5 +69,5 @@ def main():
         provenance.write_run_record(out, __file__, a)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

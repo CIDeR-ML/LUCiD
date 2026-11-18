@@ -13,18 +13,25 @@ The published numbers depend on these being preserved exactly: the keys (the lib
 on ``seed``'s forward, Jacobian and readout streams), the three-stage start perturbation and the
 order of its random draws, and the ``(S, NS)`` row layout.
 """
+
 import time
 
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from analysis.paper.utils import calibration as C
-from lucid.fitting import (CalibrationParams, CalibrationForward, CalibrationProblem, calibrate,
-                           closure_data, gauss_newton_tx)
+from lucid.fitting import (
+    CalibrationForward,
+    CalibrationParams,
+    CalibrationProblem,
+    calibrate,
+    closure_data,
+    gauss_newton_tx,
+)
 from lucid.fitting.calib import ROLE_READOUT
 
-__all__ = ['make_map_fn', 'map_mode', 'build_start', 'run_seed', 'build_shared']
+__all__ = ["make_map_fn", "map_mode", "build_start", "run_seed", "build_shared"]
 
 
 def make_map_fn(n_group=7):
@@ -47,23 +54,36 @@ def make_map_fn(n_group=7):
             # per element and otherwise raises at call time, minutes into a fit. The
             # published layout (seven sources) takes the single-shot path.
             d = len(devices)
-            n = next((int(jax.tree_util.tree_leaves(a)[0].shape[0])
-                      for a, ax in zip(args, in_axes) if ax == 0), 1)
+            n = next(
+                (
+                    int(jax.tree_util.tree_leaves(a)[0].shape[0])
+                    for a, ax in zip(args, in_axes)
+                    if ax == 0
+                ),
+                1,
+            )
             if n <= d:
                 return pm(*args)
-            out = [pm(*[jax.tree_util.tree_map(lambda x: x[i:i + d], a) if ax == 0 else a
-                        for a, ax in zip(args, in_axes)])
-                   for i in range(0, n, d)]
+            out = [
+                pm(
+                    *[
+                        jax.tree_util.tree_map(lambda x: x[i : i + d], a) if ax == 0 else a
+                        for a, ax in zip(args, in_axes)
+                    ]
+                )
+                for i in range(0, n, d)
+            ]
             return jnp.concatenate(out, axis=0)
 
         return mapped
+
     return map_fn
 
 
 def map_mode(n_group=7):
     """Which forward ``make_map_fn`` runs here, for the record: the two are not bit-identical."""
     n = len(jax.devices())
-    return dict(map_mode='pmap' if n >= n_group else 'serial', n_devices=n)
+    return dict(map_mode="pmap" if n >= n_group else "serial", n_devices=n)
 
 
 def build_start(theta_true, params, seed, *, pert=0.4, pert_ls=2.0, pert_refl=1.2):
@@ -89,10 +109,37 @@ def build_start(theta_true, params, seed, *, pert=0.4, pert_ls=2.0, pert_refl=1.
     return start
 
 
-def run_seed(seed, *, steps, n_ph, k, grid, intensity, btruth, n_forward_draws, jacobian_draws,
-             refresh, polyak, lam, mu, max_step, q_floor_frac, gauge, basis, mie_scatter_length,
-             g, pert, pert_ls, pert_refl, truth_seed,
-             sim=None, sources=None, verbose=True, on_step=None, progress_every=0):
+def run_seed(
+    seed,
+    *,
+    steps,
+    n_ph,
+    k,
+    grid,
+    intensity,
+    btruth,
+    n_forward_draws,
+    jacobian_draws,
+    refresh,
+    polyak,
+    lam,
+    mu,
+    max_step,
+    q_floor_frac,
+    gauge,
+    basis,
+    mie_scatter_length,
+    g,
+    pert,
+    pert_ls,
+    pert_refl,
+    truth_seed,
+    sim=None,
+    sources=None,
+    verbose=True,
+    on_step=None,
+    progress_every=0,
+):
     """Fit one seed and return the record the convergence figure reads.
 
     Every recipe value is required: the published values live in ``calibration.CALIB`` and
@@ -108,8 +155,9 @@ def run_seed(seed, *, steps, n_ph, k, grid, intensity, btruth, n_forward_draws, 
     """
     t_start = time.time()
     W, NS = len(C.WAVELENGTHS), C.NS
-    params = CalibrationParams(n_wavelengths=W, basis=basis,
-                               mie_scatter_length=mie_scatter_length, g=g)
+    params = CalibrationParams(
+        n_wavelengths=W, basis=basis, mie_scatter_length=mie_scatter_length, g=g
+    )
     map_fn = make_map_fn()
 
     if sim is None:
@@ -118,8 +166,9 @@ def run_seed(seed, *, steps, n_ph, k, grid, intensity, btruth, n_forward_draws, 
         sources = C._laser_sources(intensity)
 
     truths = [C.effective_truth(w) for w in C.WAVELENGTHS]
-    theta_true = params.theta_from_physical(truths, C.WALL_R_MIX, C.WALL_FSPEC,
-                                            C.SENSOR_R_MIX, C.SENSOR_FSPEC)
+    theta_true = params.theta_from_physical(
+        truths, C.WALL_R_MIX, C.WALL_FSPEC, C.SENSOR_R_MIX, C.SENSOR_FSPEC
+    )
     truth_k = jnp.asarray(C.TRUTH_K)
 
     # Truth: the expected forward at truth with the truth gains baked in, averaged over `btruth`
@@ -129,9 +178,12 @@ def run_seed(seed, *, steps, n_ph, k, grid, intensity, btruth, n_forward_draws, 
     fwd = CalibrationForward(sim, sources, params, map_fn=map_fn)
     data = closure_data(fwd, theta_true, truth_k, n_draws=btruth, seed=truth_seed)
     if verbose:
-        print(f'[cfg] seed{seed} N_PH={n_ph:,} n_forward_draws={n_forward_draws} BTRUTH={btruth} '
-              f'P={params.P}; '
-              f'truth built ({time.time() - t_start:.0f}s)', flush=True)
+        print(
+            f"[cfg] seed{seed} N_PH={n_ph:,} n_forward_draws={n_forward_draws} BTRUTH={btruth} "
+            f"P={params.P}; "
+            f"truth built ({time.time() - t_start:.0f}s)",
+            flush=True,
+        )
 
     start = build_start(theta_true, params, seed, pert=pert, pert_ls=pert_ls, pert_refl=pert_refl)
 
@@ -143,17 +195,35 @@ def run_seed(seed, *, steps, n_ph, k, grid, intensity, btruth, n_forward_draws, 
             if step % _n and step != steps - 1:
                 return
             worst = float(np.abs(params.to_real(theta) / tv - 1).max())
-            print(f'  seed{seed} step{step:4d}  chi2 {float(loss):.6g}  worst {worst:.1%}  '
-                  f'{time.time() - _t0:.0f}s', flush=True)
+            print(
+                f"  seed{seed} step{step:4d}  chi2 {float(loss):.6g}  worst {worst:.1%}  "
+                f"{time.time() - _t0:.0f}s",
+                flush=True,
+            )
             if on_step is not None:
                 on_step(step, theta, g, H, loss)
 
-    problem = CalibrationProblem(fwd, data, seed=seed, q_floor_frac=q_floor_frac, gauge=gauge,
-                                 n_forward_draws=n_forward_draws, jacobian_draws=jacobian_draws)
-    res = calibrate(problem, start, tx=gauss_newton_tx(lam=lam, mu=mu), steps=steps,
-                    refresh=refresh, max_step=max_step, polyak=polyak, on_step=cb)
+    problem = CalibrationProblem(
+        fwd,
+        data,
+        seed=seed,
+        q_floor_frac=q_floor_frac,
+        gauge=gauge,
+        n_forward_draws=n_forward_draws,
+        jacobian_draws=jacobian_draws,
+    )
+    res = calibrate(
+        problem,
+        start,
+        tx=gauss_newton_tx(lam=lam, mu=mu),
+        steps=steps,
+        refresh=refresh,
+        max_step=max_step,
+        polyak=polyak,
+        on_step=cb,
+    )
 
-    theta_fit = np.asarray(res['theta'], dtype=float)
+    theta_fit = np.asarray(res["theta"], dtype=float)
     # Gains at the answer, from a SINGLE forward draw on the seed's readout stream, outside the
     # fit's, so the reported map is not the one the last step happened to be conditioned on.
     #
@@ -163,32 +233,52 @@ def run_seed(seed, *, steps, n_ph, k, grid, intensity, btruth, n_forward_draws, 
     readout_key = jax.random.fold_in(jax.random.PRNGKey(seed), ROLE_READOUT)
     m_final = np.asarray(fwd(jnp.asarray(theta_fit, dtype=jnp.float32), readout_key, jnp.ones(NS)))
     khat = np.clip(np.asarray(data.sum(0)) / (m_final.sum(0) + 1e-12), 1e-6, None)
-    khat = khat / np.mean(khat) if gauge == 'linear' else khat / np.exp(np.mean(np.log(khat)))
+    khat = khat / np.mean(khat) if gauge == "linear" else khat / np.exp(np.mean(np.log(khat)))
     # From C.TRUTH_K directly, NOT from the float32 `truth_k` cast used for the forward: the
     # reported truth map is gauged in float64, and the cast would round it at ~1e-7.
     tk = np.asarray(C.TRUTH_K, dtype=float)
-    tk = tk / np.mean(tk) if gauge == 'linear' else tk / np.exp(np.mean(np.log(tk)))
+    tk = tk / np.mean(tk) if gauge == "linear" else tk / np.exp(np.mean(np.log(tk)))
 
-    hist = np.stack([params.to_real(t) for t in res['history'][1:]])
+    hist = np.stack([params.to_real(t) for t in res["history"][1:]])
     # Truth in reported units, built from the PHYSICAL values rather than by inverting theta_true.
     # `to_real(theta_true)` is the same quantity mathematically but passes through log and logit
     # and back, and the round trip is not exact — it moves the dotted truth lines the figure draws,
     # and the `fit/truth - 1` errors quoted against them.
     tvec_opt = []
     for t in truths:
-        tvec_opt += [t['scatter_length'], t['absorption_length'], t['qe']]
-    tvec = np.array(tvec_opt + [C.WALL_R_MIX * C.WALL_FSPEC, C.WALL_R_MIX * (1 - C.WALL_FSPEC),
-                                C.SENSOR_R_MIX * C.SENSOR_FSPEC,
-                                C.SENSOR_R_MIX * (1 - C.SENSOR_FSPEC)])
+        tvec_opt += [t["scatter_length"], t["absorption_length"], t["qe"]]
+    tvec = np.array(
+        tvec_opt
+        + [
+            C.WALL_R_MIX * C.WALL_FSPEC,
+            C.WALL_R_MIX * (1 - C.WALL_FSPEC),
+            C.SENSOR_R_MIX * C.SENSOR_FSPEC,
+            C.SENSOR_R_MIX * (1 - C.SENSOR_FSPEC),
+        ]
+    )
     if verbose:
-        worst = np.max(np.abs(np.asarray(res['real']) / tvec - 1))
-        print(f'[conv] seed{seed}: worst {worst:.1%}  k_RMS {np.std(khat / tk - 1) * 100:.2f}%  '
-              f'{time.time() - t_start:.0f}s', flush=True)
+        worst = np.max(np.abs(np.asarray(res["real"]) / tvec - 1))
+        print(
+            f"[conv] seed{seed}: worst {worst:.1%}  k_RMS {np.std(khat / tk - 1) * 100:.2f}%  "
+            f"{time.time() - t_start:.0f}s",
+            flush=True,
+        )
 
-    return dict(seed=seed, truth=tvec, theta0=np.asarray(theta_true), hist=hist,
-                fit=np.asarray(res['real']), fit_rlogit=theta_fit, chi2=np.asarray(res['loss']),
-                khat=khat, truth_k=tk, W=W, NG=params.NG, P=params.P,
-                wls=np.asarray(C.WAVELENGTHS))
+    return dict(
+        seed=seed,
+        truth=tvec,
+        theta0=np.asarray(theta_true),
+        hist=hist,
+        fit=np.asarray(res["real"]),
+        fit_rlogit=theta_fit,
+        chi2=np.asarray(res["loss"]),
+        khat=khat,
+        truth_k=tk,
+        W=W,
+        NG=params.NG,
+        P=params.P,
+        wls=np.asarray(C.WAVELENGTHS),
+    )
 
 
 def build_shared(n_ph, k, grid):

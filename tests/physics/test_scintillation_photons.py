@@ -6,20 +6,19 @@ erfc(exp(-z/2)/sqrt 2) and the hypoexponential rise/fall CDF (KS tests), and iso
 E[v v^T] = I/3. The JAX surrogate is tested net-free with a one-bin dE/dx stub, which makes
 its total quenched intensity closed form.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
+from lucid.dataset.schema import EMISSION_PROCESS_SCINTILLATION
 from lucid.sources.scintillation_photons import (
-    _sample_isotropic_np,
     _sample_hypoexp_np,
+    _sample_isotropic_np,
     expand_segments_to_photons,
 )
-from lucid.dataset.schema import EMISSION_PROCESS_SCINTILLATION
-
 from tests.helpers.stats import ks_distance
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -29,25 +28,30 @@ from tests.helpers.stats import ks_distance
 def _make_three_segments():
     """3 segments along the z axis with known lengths / edep / β."""
     return {
-        'start_x_mm': np.array([0.0, 0.0, 0.0]),
-        'start_y_mm': np.array([0.0, 0.0, 0.0]),
-        'start_z_mm': np.array([0.0, 10.0, 20.0]),
-        'end_x_mm':   np.array([0.0, 0.0, 0.0]),
-        'end_y_mm':   np.array([0.0, 0.0, 0.0]),
-        'end_z_mm':   np.array([10.0, 20.0, 22.0]),
-        'edep':       np.array([1.0, 0.5, 2.0]),        # MeV
-        'time':       np.array([100.0, 110.0, 120.0]),  # ns
-        'beta_start': np.array([0.99, 0.95, 0.50]),
+        "start_x_mm": np.array([0.0, 0.0, 0.0]),
+        "start_y_mm": np.array([0.0, 0.0, 0.0]),
+        "start_z_mm": np.array([0.0, 10.0, 20.0]),
+        "end_x_mm": np.array([0.0, 0.0, 0.0]),
+        "end_y_mm": np.array([0.0, 0.0, 0.0]),
+        "end_z_mm": np.array([10.0, 20.0, 22.0]),
+        "edep": np.array([1.0, 0.5, 2.0]),  # MeV
+        "time": np.array([100.0, 110.0, 120.0]),  # ns
+        "beta_start": np.array([0.99, 0.95, 0.50]),
     }
 
 
 def _medium_params(S=10000.0, kB=0.0, C=0.0):
     """WbLS-ish defaults with finite Moyal window and biexp timings."""
     return {
-        'S': S, 'kB': kB, 'C': C,
-        'tau_rise': 1.0, 'tau_fall': 25.0,
-        'moyal_loc': 410.0, 'moyal_scale': 30.0,
-        'lambda_min': 300.0, 'lambda_max': 700.0,
+        "S": S,
+        "kB": kB,
+        "C": C,
+        "tau_rise": 1.0,
+        "tau_fall": 25.0,
+        "moyal_loc": 410.0,
+        "moyal_scale": 30.0,
+        "lambda_min": 300.0,
+        "lambda_max": 700.0,
     }
 
 
@@ -59,18 +63,27 @@ def _medium_params(S=10000.0, kB=0.0, C=0.0):
 def test_empty_segments_returns_empty_arrays():
     out = expand_segments_to_photons(
         {
-            'start_x_mm': np.array([]), 'start_y_mm': np.array([]),
-            'start_z_mm': np.array([]), 'end_x_mm':   np.array([]),
-            'end_y_mm':   np.array([]), 'end_z_mm':   np.array([]),
-            'edep':       np.array([]), 'time':       np.array([]),
-            'beta_start': np.array([]),
+            "start_x_mm": np.array([]),
+            "start_y_mm": np.array([]),
+            "start_z_mm": np.array([]),
+            "end_x_mm": np.array([]),
+            "end_y_mm": np.array([]),
+            "end_z_mm": np.array([]),
+            "edep": np.array([]),
+            "time": np.array([]),
+            "beta_start": np.array([]),
         },
         _medium_params(),
         np.random.default_rng(0),
     )
-    for k in ('photon_origins', 'photon_directions', 'photon_times',
-              'photon_wavelengths', 'photon_segment_index_raw',
-              'photon_emission_process'):
+    for k in (
+        "photon_origins",
+        "photon_directions",
+        "photon_times",
+        "photon_wavelengths",
+        "photon_segment_index_raw",
+        "photon_emission_process",
+    ):
         assert out[k].shape[0] == 0, f"{k} expected empty, got {out[k].shape}"
 
 
@@ -81,18 +94,18 @@ def test_zero_yield_returns_empty_arrays():
         _medium_params(S=0.0),
         np.random.default_rng(1),
     )
-    assert out['photon_origins'].shape == (0, 3)
-    assert out['photon_emission_process'].shape == (0,)
+    assert out["photon_origins"].shape == (0, 3)
+    assert out["photon_emission_process"].shape == (0,)
 
 
 def test_all_outputs_tagged_scintillation():
     out = expand_segments_to_photons(
-        _make_three_segments(), _medium_params(),
+        _make_three_segments(),
+        _medium_params(),
         np.random.default_rng(2),
     )
-    assert out['photon_emission_process'].dtype == np.int8
-    assert np.all(out['photon_emission_process']
-                  == EMISSION_PROCESS_SCINTILLATION)
+    assert out["photon_emission_process"].dtype == np.int8
+    assert np.all(out["photon_emission_process"] == EMISSION_PROCESS_SCINTILLATION)
 
 
 # ---------------------------------------------------------------------------
@@ -103,12 +116,13 @@ def test_all_outputs_tagged_scintillation():
 def test_origins_on_segment_line():
     """Every photon origin lies on its parent segment's [Start, End] (in m)."""
     segs = _make_three_segments()
-    out = expand_segments_to_photons(segs, _medium_params(),
-                                      np.random.default_rng(3))
-    seg_idx = out['photon_segment_index_raw']
+    out = expand_segments_to_photons(segs, _medium_params(), np.random.default_rng(3))
+    seg_idx = out["photon_segment_index_raw"]
     # Convert segment endpoints to m to match output units.
-    start_m = np.stack([segs['start_x_mm'], segs['start_y_mm'], segs['start_z_mm']], axis=1) / 1000.0
-    end_m   = np.stack([segs['end_x_mm'],   segs['end_y_mm'],   segs['end_z_mm']],   axis=1) / 1000.0
+    start_m = (
+        np.stack([segs["start_x_mm"], segs["start_y_mm"], segs["start_z_mm"]], axis=1) / 1000.0
+    )
+    end_m = np.stack([segs["end_x_mm"], segs["end_y_mm"], segs["end_z_mm"]], axis=1) / 1000.0
     s = start_m[seg_idx]
     e = end_m[seg_idx]
     direction = e - s
@@ -116,10 +130,9 @@ def test_origins_on_segment_line():
     # Skip degenerate (zero-length) segments — none in this fixture.
     assert np.all(seg_len_sq > 0)
     # Project (origin - start) onto segment direction; t should be in [0, 1].
-    rel = out['photon_origins'] - s
+    rel = out["photon_origins"] - s
     t = np.sum(rel * direction, axis=1) / seg_len_sq
-    assert np.all((t >= -1e-6) & (t <= 1.0 + 1e-6)), \
-        f"t out of [0, 1]: min={t.min()} max={t.max()}"
+    assert np.all((t >= -1e-6) & (t <= 1.0 + 1e-6)), f"t out of [0, 1]: min={t.min()} max={t.max()}"
     # Perpendicular component (offset off the line) must be ~0.
     perp = rel - t[:, None] * direction
     perp_norm = np.linalg.norm(perp, axis=1)
@@ -130,10 +143,11 @@ def test_directions_are_isotropic_unit_vectors():
     """Expander directions are unit vectors with E[v] = 0 and E[v v^T] = I/3 (isotropy).
     With ~3e4 photons the standard error per entry is <= 1/sqrt(3e4 * 5) ~ 3e-3."""
     out = expand_segments_to_photons(
-        _make_three_segments(), _medium_params(S=10000.0),
+        _make_three_segments(),
+        _medium_params(S=10000.0),
         np.random.default_rng(4),
     )
-    v = out['photon_directions'].astype(np.float64)
+    v = out["photon_directions"].astype(np.float64)
     assert len(v) > 20000
     np.testing.assert_allclose(np.linalg.norm(v, axis=1), 1.0, rtol=0, atol=1e-5)
     np.testing.assert_allclose(v.mean(axis=0), 0.0, atol=0.015)
@@ -148,11 +162,13 @@ def test_directions_are_isotropic_unit_vectors():
 def test_wavelengths_within_window():
     mp = _medium_params()
     out = expand_segments_to_photons(
-        _make_three_segments(), mp, np.random.default_rng(5),
+        _make_three_segments(),
+        mp,
+        np.random.default_rng(5),
     )
-    lam = out['photon_wavelengths']
-    assert lam.min() >= mp['lambda_min'] - 1e-3
-    assert lam.max() <= mp['lambda_max'] + 1e-3
+    lam = out["photon_wavelengths"]
+    assert lam.min() >= mp["lambda_min"] - 1e-3
+    assert lam.max() <= mp["lambda_max"] + 1e-3
 
 
 def _truncated_moyal_cdf(x, loc, scale, lo, hi):
@@ -162,10 +178,11 @@ def _truncated_moyal_cdf(x, loc, scale, lo, hi):
 
     def F(v):
         return erfc(np.exp(-0.5 * (np.asarray(v, np.float64) - loc) / scale) / np.sqrt(2.0))
+
     return (F(x) - F(lo)) / (F(hi) - F(lo))
 
 
-@pytest.mark.parametrize('loc,scale', [(410.0, 30.0), (373.26, 18.0)])
+@pytest.mark.parametrize("loc,scale", [(410.0, 30.0), (373.26, 18.0)])
 def test_wavelength_marginal_matches_the_closed_form_moyal(loc, scale):
     """The data-mode wavelengths follow the truncated Moyal law, by a KS distance against the
     closed-form CDF. The KS 99.9 % critical value at n = 1e5 is 1.95/sqrt(n) = 0.006; the
@@ -173,9 +190,11 @@ def test_wavelength_marginal_matches_the_closed_form_moyal(loc, scale):
     track-mode surrogate's: both modes draw from one inverse CDF."""
     from lucid.sources.scintillation_photons import _sample_moyal_np
     from lucid.sources.siren_rays import _build_moyal_inverse_cdf
+
     lo, hi = 300.0, 700.0
-    lam = np.sort(_sample_moyal_np(np.random.default_rng(42), 100_000, loc, scale, lo, hi)
-                  .astype(np.float64))
+    lam = np.sort(
+        _sample_moyal_np(np.random.default_rng(42), 100_000, loc, scale, lo, hi).astype(np.float64)
+    )
     F = _truncated_moyal_cdf(lam, loc, scale, lo, hi)
     n = len(lam)
     ks = max(np.max(np.arange(1, n + 1) / n - F), np.max(F - np.arange(n) / n))
@@ -196,11 +215,13 @@ def test_times_at_or_after_segment_time():
     """t_i >= Segment_Time[seg_idx[i]] for all rays."""
     segs = _make_three_segments()
     out = expand_segments_to_photons(
-        segs, _medium_params(), np.random.default_rng(6),
+        segs,
+        _medium_params(),
+        np.random.default_rng(6),
     )
-    seg_idx = out['photon_segment_index_raw']
-    seg_t = np.asarray(segs['time'])[seg_idx]
-    assert np.all(out['photon_times'] >= seg_t - 1e-4)
+    seg_idx = out["photon_segment_index_raw"]
+    seg_t = np.asarray(segs["time"])[seg_idx]
+    assert np.all(out["photon_times"] >= seg_t - 1e-4)
 
 
 def test_time_without_emission_delay_is_the_particle_travel_time():
@@ -211,12 +232,14 @@ def test_time_without_emission_delay_is_the_particle_travel_time():
     mp = _medium_params()
     mp.update(tau_rise=0.0, tau_fall=0.0)
     out = expand_segments_to_photons(segs, mp, np.random.default_rng(16))
-    i = out['photon_segment_index_raw']
-    start_m = np.stack([segs['start_x_mm'], segs['start_y_mm'], segs['start_z_mm']], axis=1)[i] / 1e3
-    path_m = np.linalg.norm(out['photon_origins'] - start_m, axis=1)
+    i = out["photon_segment_index_raw"]
+    start_m = (
+        np.stack([segs["start_x_mm"], segs["start_y_mm"], segs["start_z_mm"]], axis=1)[i] / 1e3
+    )
+    path_m = np.linalg.norm(out["photon_origins"] - start_m, axis=1)
     c_m_per_ns = 0.299792458
-    expected = segs['time'][i] + path_m / (segs['beta_start'][i] * c_m_per_ns)
-    np.testing.assert_allclose(out['photon_times'], expected, atol=2e-4)
+    expected = segs["time"][i] + path_m / (segs["beta_start"][i] * c_m_per_ns)
+    np.testing.assert_allclose(out["photon_times"], expected, atol=2e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -233,19 +256,17 @@ def test_mean_count_matches_birks_chou():
     mp = _medium_params(S=1000.0, kB=0.01, C=1e-5)
     # Predict per-segment N̄ analytically.
     delta_mm = np.array([10.0, 10.0, 2.0])
-    edep_MeV = np.array(segs['edep'])
-    dedx_keVmm = edep_MeV / delta_mm * 1000.0   # 100, 50, 1000
-    N_pred = mp['S'] * edep_MeV / (
-        1.0 + mp['kB'] * dedx_keVmm + mp['C'] * dedx_keVmm ** 2)
+    edep_MeV = np.array(segs["edep"])
+    dedx_keVmm = edep_MeV / delta_mm * 1000.0  # 100, 50, 1000
+    N_pred = mp["S"] * edep_MeV / (1.0 + mp["kB"] * dedx_keVmm + mp["C"] * dedx_keVmm**2)
 
     # Run 200 trials, accumulate per-segment Poisson counts.
     n_trials = 200
     counts_per_seg = np.zeros(3, dtype=np.float64)
     for trial in range(n_trials):
-        out = expand_segments_to_photons(
-            segs, mp, np.random.default_rng(1000 + trial))
+        out = expand_segments_to_photons(segs, mp, np.random.default_rng(1000 + trial))
         # Count how many photons each segment got in this trial.
-        seg_idx = out['photon_segment_index_raw']
+        seg_idx = out["photon_segment_index_raw"]
         for s in range(3):
             counts_per_seg[s] += int((seg_idx == s).sum())
     empirical_mean = counts_per_seg / n_trials
@@ -254,8 +275,8 @@ def test_mean_count_matches_birks_chou():
     tol = 3.0 * np.sqrt(N_pred / n_trials)
     diff = np.abs(empirical_mean - N_pred)
     assert np.all(diff < tol), (
-        f"means {empirical_mean} vs predicted {N_pred} differ by {diff}, "
-        f"3σ tolerance {tol}")
+        f"means {empirical_mean} vs predicted {N_pred} differ by {diff}, 3σ tolerance {tol}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -267,32 +288,35 @@ def test_zero_length_segment_contributes_no_photons():
     """A segment with Start == End is masked out (Δs == 0)."""
     segs = _make_three_segments()
     # Force segment 1 to be zero-length
-    segs['end_z_mm'] = np.array([10.0, 10.0, 22.0])   # second segment now Δs=0
+    segs["end_z_mm"] = np.array([10.0, 10.0, 22.0])  # second segment now Δs=0
     out = expand_segments_to_photons(
-        segs, _medium_params(S=5000.0),
+        segs,
+        _medium_params(S=5000.0),
         np.random.default_rng(7),
     )
-    assert np.sum(out['photon_segment_index_raw'] == 1) == 0
+    assert np.sum(out["photon_segment_index_raw"] == 1) == 0
 
 
 def test_zero_edep_segment_contributes_no_photons():
     segs = _make_three_segments()
-    segs['edep'] = np.array([1.0, 0.0, 2.0])
+    segs["edep"] = np.array([1.0, 0.0, 2.0])
     out = expand_segments_to_photons(
-        segs, _medium_params(S=5000.0),
+        segs,
+        _medium_params(S=5000.0),
         np.random.default_rng(8),
     )
-    assert np.sum(out['photon_segment_index_raw'] == 1) == 0
+    assert np.sum(out["photon_segment_index_raw"] == 1) == 0
 
 
 def test_zero_beta_segment_contributes_no_photons():
     segs = _make_three_segments()
-    segs['beta_start'] = np.array([0.99, 0.0, 0.5])
+    segs["beta_start"] = np.array([0.99, 0.0, 0.5])
     out = expand_segments_to_photons(
-        segs, _medium_params(S=5000.0),
+        segs,
+        _medium_params(S=5000.0),
         np.random.default_rng(9),
     )
-    assert np.sum(out['photon_segment_index_raw'] == 1) == 0
+    assert np.sum(out["photon_segment_index_raw"] == 1) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +352,7 @@ def test_hypoexp_moments_and_shape():
     n = 100_000
     t = _sample_hypoexp_np(rng, n, tau_r, tau_f).astype(np.float64)
     assert np.all(t >= 0)
-    var = tau_r ** 2 + tau_f ** 2
+    var = tau_r**2 + tau_f**2
     assert abs(t.mean() - (tau_r + tau_f)) < 5.0 * np.sqrt(var / n)
     # Var of the sample variance of a near-exponential is ~8 tau^4/n -> 0.9 % s.e.; 5 %
     assert abs(t.var() / var - 1.0) < 0.05
@@ -343,7 +367,7 @@ def test_hypoexp_moments_and_shape():
 # (centre D0) at every R, so the surrogate's typical dE/dx is exactly D0 everywhere and the
 # total quenched intensity has the closed form S E / (1 + kB D0 + C D0^2).
 
-D0 = 250.0                          # keV/mm, the centre of bin 2 of 4 on [0, 400]
+D0 = 250.0  # keV/mm, the centre of bin 2 of 4 on [0, 400]
 
 
 class _OneBinModel:
@@ -352,17 +376,31 @@ class _OneBinModel:
 
     def apply(self, params, x):
         import jax.numpy as jnp
-        d_norm = x[:, 1]                                  # D0 normalises to 0.25
+
+        d_norm = x[:, 1]  # D0 normalises to 0.25
         return jnp.where(jnp.abs(d_norm - 0.25) < 0.1, 1.0, 0.0)
 
 
 def _scint_surrogate(lam_lo=300.0, lam_hi=700.0, loc=373.26, scale=18.0):
     from lucid.siren.emitter import Emitter
     from lucid.sources.siren_rays import make_scintillation_surrogate_fn
-    e = Emitter(kind='dedx', net=_OneBinModel(), params=None, lo=(10.0, 0.0, 0.0),
-                hi=(1000.0, 400.0, 1.0), log10_range=(-12.0, -9.0), target_offset=1e-12, grid_bins=4,
-                n_photons=None, t0=None, c_mm_per_ns=None, emission_band=None, meta={},
-                _s_max_mm=lambda E: 4.0 * E)
+
+    e = Emitter(
+        kind="dedx",
+        net=_OneBinModel(),
+        params=None,
+        lo=(10.0, 0.0, 0.0),
+        hi=(1000.0, 400.0, 1.0),
+        log10_range=(-12.0, -9.0),
+        target_offset=1e-12,
+        grid_bins=4,
+        n_photons=None,
+        t0=None,
+        c_mm_per_ns=None,
+        emission_band=None,
+        meta={},
+        _s_max_mm=lambda E: 4.0 * E,
+    )
     return make_scintillation_surrogate_fn(e, lam_lo, lam_hi, loc, scale)
 
 
@@ -373,11 +411,23 @@ _NRAYS = 100_000
 def _scint_rays(fn, energy=500.0, **over):
     import jax
     import jax.numpy as jnp
+
     p = {**_SCINT, **over}
     origin = jnp.array([1.0, -2.0, 0.5])
     direction = jnp.array([1.0, 2.0, -2.0]) / 3.0
-    out = fn(origin, direction, energy, _NRAYS, None, jax.random.PRNGKey(5),
-             p['S'], p['kB'], p['C'], p['tau_rise'], p['tau_fall'])
+    out = fn(
+        origin,
+        direction,
+        energy,
+        _NRAYS,
+        None,
+        jax.random.PRNGKey(5),
+        p["S"],
+        p["kB"],
+        p["C"],
+        p["tau_rise"],
+        p["tau_fall"],
+    )
     return origin, direction, out
 
 
@@ -387,9 +437,9 @@ def test_surrogate_total_intensity_is_the_chou_quenched_yield():
     E = 500.0
     _, _, (_, _, inten, _, _) = _scint_rays(fn, energy=E)
     p = _SCINT
-    expected = p['S'] * E / (1.0 + p['kB'] * D0 + p['C'] * D0 ** 2)
+    expected = p["S"] * E / (1.0 + p["kB"] * D0 + p["C"] * D0**2)
     np.testing.assert_allclose(float(inten.sum()), expected, rtol=1e-4)
-    _, _, (_, _, inten2, _, _) = _scint_rays(fn, energy=E, S=2 * p['S'])
+    _, _, (_, _, inten2, _, _) = _scint_rays(fn, energy=E, S=2 * p["S"])
     np.testing.assert_allclose(float(inten2.sum()), 2 * expected, rtol=1e-5)
 
 
@@ -397,18 +447,30 @@ def test_surrogate_quench_gradients_are_analytic():
     """d/dkB and d/dC of the total are -S E D0^k / (1 + kB D0 + C D0^2)^2 (k = 1, 2)."""
     import jax
     import jax.numpy as jnp
+
     fn = _scint_surrogate()
     E, p = 500.0, _SCINT
 
     def total(kB, C):
-        out = fn(jnp.zeros(3), jnp.array([0.0, 0.0, 1.0]), E, 1000, None,
-                 jax.random.PRNGKey(0), p['S'], kB, C, p['tau_rise'], p['tau_fall'])
+        out = fn(
+            jnp.zeros(3),
+            jnp.array([0.0, 0.0, 1.0]),
+            E,
+            1000,
+            None,
+            jax.random.PRNGKey(0),
+            p["S"],
+            kB,
+            C,
+            p["tau_rise"],
+            p["tau_fall"],
+        )
         return out[2].sum()
 
-    g_kB, g_C = jax.grad(total, argnums=(0, 1))(jnp.asarray(p['kB']), jnp.asarray(p['C']))
-    den = 1.0 + p['kB'] * D0 + p['C'] * D0 ** 2
-    np.testing.assert_allclose(float(g_kB), -p['S'] * E * D0 / den ** 2, rtol=1e-4)
-    np.testing.assert_allclose(float(g_C), -p['S'] * E * D0 ** 2 / den ** 2, rtol=1e-4)
+    g_kB, g_C = jax.grad(total, argnums=(0, 1))(jnp.asarray(p["kB"]), jnp.asarray(p["C"]))
+    den = 1.0 + p["kB"] * D0 + p["C"] * D0**2
+    np.testing.assert_allclose(float(g_kB), -p["S"] * E * D0 / den**2, rtol=1e-4)
+    np.testing.assert_allclose(float(g_C), -p["S"] * E * D0**2 / den**2, rtol=1e-4)
 
 
 def test_surrogate_emission_delay_is_rise_plus_fall():
@@ -416,8 +478,8 @@ def test_surrogate_emission_delay_is_rise_plus_fall():
     fn = _scint_surrogate()
     _, _, (_, _, _, t, _) = _scint_rays(fn)
     t = np.asarray(t, np.float64)
-    tr, tf = _SCINT['tau_rise'], _SCINT['tau_fall']
-    var = tr ** 2 + tf ** 2
+    tr, tf = _SCINT["tau_rise"], _SCINT["tau_fall"]
+    var = tr**2 + tf**2
     assert abs(t.mean() - (tr + tf)) < 5.0 * np.sqrt(var / _NRAYS)
     assert abs(t.var() / var - 1.0) < 0.05
     assert ks_distance(t, lambda x: _biexp_cdf(x, tr, tf)) < 0.006

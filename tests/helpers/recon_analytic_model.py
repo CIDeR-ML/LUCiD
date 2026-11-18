@@ -5,18 +5,20 @@ key-dependent data draw -- enough to exercise the damping, the anneal and the me
 no detector, no SIREN and no Monte Carlo. Shared by the tests that drive fit_track through the
 Gauss-Newton loop.
 """
+
 import numpy as np
 
 # Ill-conditioned on purpose: a flat direction is what the Levenberg floor exists to bound, so a
 # well-conditioned problem would not exercise the damping a refactor is most likely to disturb.
 _SV = np.array([3.0, 1.7, 0.9, 0.45, 0.2, 0.08, 0.03, 0.011, 0.004])
-_THETA_STAR = np.array([1000., 0.5, -0.3, 2.0, 0.1, -0.2, 0.3, 0.15, 5.0])
-_U_START = np.array([1.4, 0.3, 0.2, -0.6, 0.1, 1.3, 0.5, -0.2, 0.35]) * 2.5   # SCALED units
+_THETA_STAR = np.array([1000.0, 0.5, -0.3, 2.0, 0.1, -0.2, 0.3, 0.15, 5.0])
+_U_START = np.array([1.4, 0.3, 0.2, -0.6, 0.1, 1.3, 0.5, -0.2, 0.35]) * 2.5  # SCALED units
 _NONLIN = 0.12
 
 
 def _scale9():
     from lucid.fitting import SCALE9
+
     return np.asarray(SCALE9, float)
 
 
@@ -43,6 +45,7 @@ class AnalyticModel:
 
     def _eps(self, key):
         import jax
+
         return np.asarray(jax.random.normal(key, (self.A.shape[0],)), float) * 0.05
 
     def _r_and_J(self, th, key):
@@ -64,7 +67,6 @@ class AnalyticModel:
         return acc / len(keys)
 
 
-
 def least_squares_minimum(model, keys):
     """The minimiser of the key-averaged objective, by scipy, independently of the GN loop.
 
@@ -72,9 +74,15 @@ def least_squares_minimum(model, keys):
     ``|| mean_k r_k ||^2``; ``scipy.optimize.least_squares`` solves that from the truth.
     """
     from scipy.optimize import least_squares
+
     eps = np.mean([model._eps(k) for k in keys], axis=0)
     A, c = model.A, model.c
-    sol = least_squares(lambda u: A @ u + c * (A @ (u * u)) + eps, np.zeros(9),
-                        jac=lambda u: A + 2.0 * c * (A * u[None, :]), xtol=1e-15, ftol=1e-15,
-                        gtol=1e-15)
+    sol = least_squares(
+        lambda u: A @ u + c * (A @ (u * u)) + eps,
+        np.zeros(9),
+        jac=lambda u: A + 2.0 * c * (A * u[None, :]),
+        xtol=1e-15,
+        ftol=1e-15,
+        gtol=1e-15,
+    )
     return _THETA_STAR + model.S * sol.x

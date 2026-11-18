@@ -47,13 +47,17 @@ CELL_DIR_RE = re.compile(r"^(\d+)MeV$")
 
 # Columns that every row has (in addition to form-specific params).
 _SMAX_SHARED_COLS = (
-    "fit_min_mev", "fit_max_mev",
-    "quantile", "quantile_multiplier", "generated_at_utc",
+    "fit_min_mev",
+    "fit_max_mev",
+    "quantile",
+    "quantile_multiplier",
+    "generated_at_utc",
 )
 
 
-def _fit_n_photons(energy_values: np.ndarray, per_event_total: np.ndarray,
-                   degree: int = 7) -> Dict[str, Any]:
+def _fit_n_photons(
+    energy_values: np.ndarray, per_event_total: np.ndarray, degree: int = 7
+) -> Dict[str, Any]:
     """Fit the per-energy photons/event to ``N(E) = exp(sum_k c_k t^k)``, ``t = (ln E - u0)/du``.
 
     ``per_event_total`` is the photon table summed over (angle, s/s_max). Least squares in ln N,
@@ -65,16 +69,25 @@ def _fit_n_photons(energy_values: np.ndarray, per_event_total: np.ndarray,
     E = np.asarray(energy_values, dtype=np.float64)
     N = np.asarray(per_event_total, dtype=np.float64)
     if np.any(N <= 0):
-        raise ValueError(f"N_photons(E) fit: no photons at E = {E[N <= 0].tolist()} MeV; "
-                         f"drop those cells (below the Cherenkov threshold) and rebuild")
+        raise ValueError(
+            f"N_photons(E) fit: no photons at E = {E[N <= 0].tolist()} MeV; "
+            f"drop those cells (below the Cherenkov threshold) and rebuild"
+        )
     lnE = np.log(E)
     u0, du = 0.5 * (lnE.min() + lnE.max()), 0.5 * (lnE.max() - lnE.min())
     t = (lnE - u0) / du
     coeffs = np.polynomial.polynomial.polyfit(t, np.log(N), degree)
     frac = np.exp(np.polynomial.polynomial.polyval(t, coeffs)) / N - 1.0
-    return {"form": "logpoly", "coeffs": coeffs.tolist(), "u0": float(u0), "du": float(du),
-            "fit_min_mev": int(E.min()), "fit_max_mev": int(E.max()),
-            "rms_frac": float(np.sqrt(np.mean(frac ** 2))), "max_frac": float(np.max(np.abs(frac)))}
+    return {
+        "form": "logpoly",
+        "coeffs": coeffs.tolist(),
+        "u0": float(u0),
+        "du": float(du),
+        "fit_min_mev": int(E.min()),
+        "fit_max_mev": int(E.max()),
+        "rms_frac": float(np.sqrt(np.mean(frac**2))),
+        "max_frac": float(np.max(np.abs(frac))),
+    }
 
 
 _NPHOT_KEYS = ("form", "coeffs", "u0", "du", "fit_min_mev", "fit_max_mev", "rms_frac", "max_frac")
@@ -107,8 +120,7 @@ def _find_photonsim_dir(*, override: Optional[Path], data_dir: Path) -> Path:
     )
 
 
-def _read_smax_fit_csv(photonsim_dir: Path, material: str,
-                       particle: str) -> Dict[str, Any]:
+def _read_smax_fit_csv(photonsim_dir: Path, material: str, particle: str) -> Dict[str, Any]:
     """:func:`read_smax_csv` of `<photonsim_dir>/data/<material>/<particle>/smax_fit.csv`."""
     path = photonsim_dir / "data" / material / particle / "smax_fit.csv"
     if not path.is_file():
@@ -138,16 +150,17 @@ def read_smax_csv(path: Path) -> Dict[str, Any]:
     if form not in SMAX_PARAMS:
         raise ValueError(
             f"s_max fit at {path} declares unknown form {form!r}. "
-            f"Known forms: {sorted(SMAX_PARAMS)}.")
+            f"Known forms: {sorted(SMAX_PARAMS)}."
+        )
     try:
         out: Dict[str, Any] = {"form": form}
         for p in SMAX_PARAMS[form]:
             out[p] = float(row[p])
-        out["fit_min_mev"]         = int(row["fit_min_mev"])
-        out["fit_max_mev"]         = int(row["fit_max_mev"])
-        out["quantile"]            = float(row["quantile"])
+        out["fit_min_mev"] = int(row["fit_min_mev"])
+        out["fit_max_mev"] = int(row["fit_max_mev"])
+        out["quantile"] = float(row["quantile"])
         out["quantile_multiplier"] = float(row["quantile_multiplier"])
-        out["generated_at_utc"]    = str(row["generated_at_utc"])
+        out["generated_at_utc"] = str(row["generated_at_utc"])
         return out
     except (KeyError, ValueError) as exc:
         raise ValueError(f"s_max fit at {path} is incomplete: {exc}") from exc
@@ -165,21 +178,27 @@ class LookupTableBuilder(ABC):
     """
 
     # ---- subclass contract -------------------------------------------------
-    HIST_NAME: str         # ROOT TKey of the 2D histogram to read
-    TABLE_KEY: str         # base name for h5 datasets (e.g. "photon_table")
-    X_AXIS_NAME: str       # "angle" or "dedx"
-    X_AXIS_BINS: int       # 500 for both current variants
-    X_RANGE: Tuple[float, float]      # (0, π) or (0, 1000)
-    AVERAGE_UNITS: str     # "photons/event" or "entries/event"
-    TOTAL_KEY: str         # "total_photons" or "total_edep"
-    DEFAULT_OUTPUT_NAME: str   # filename if --output is a directory
+    HIST_NAME: str  # ROOT TKey of the 2D histogram to read
+    TABLE_KEY: str  # base name for h5 datasets (e.g. "photon_table")
+    X_AXIS_NAME: str  # "angle" or "dedx"
+    X_AXIS_BINS: int  # 500 for both current variants
+    X_RANGE: Tuple[float, float]  # (0, π) or (0, 1000)
+    AVERAGE_UNITS: str  # "photons/event" or "entries/event"
+    TOTAL_KEY: str  # "total_photons" or "total_edep"
+    DEFAULT_OUTPUT_NAME: str  # filename if --output is a directory
 
     DISTANCE_BINS = 500
     DISTANCE_RANGE = (0.0, 1.0)
 
-    def __init__(self, *, data_dir: Path, material: str, particle: str,
-                 photonsim_dir: Optional[Path] = None,
-                 require_list: Optional[List[int]] = None):
+    def __init__(
+        self,
+        *,
+        data_dir: Path,
+        material: str,
+        particle: str,
+        photonsim_dir: Optional[Path] = None,
+        require_list: Optional[List[int]] = None,
+    ):
         self.data_dir = Path(data_dir)
         self.material = material
         self.particle = particle
@@ -188,13 +207,12 @@ class LookupTableBuilder(ABC):
             raise FileNotFoundError(f"No data at {self.cell_root}")
 
         self.photonsim_dir = _find_photonsim_dir(
-            override=photonsim_dir, data_dir=self.data_dir,
+            override=photonsim_dir,
+            data_dir=self.data_dir,
         )
         self.smax = _read_smax_fit_csv(self.photonsim_dir, material, particle)
 
-        self.require_list = (
-            sorted(set(int(e) for e in require_list)) if require_list else None
-        )
+        self.require_list = sorted(set(int(e) for e in require_list)) if require_list else None
 
         # Filled by build():
         self.energy_values: List[int] = []
@@ -230,16 +248,15 @@ class LookupTableBuilder(ABC):
                 )
             if extra:
                 logger.warning(
-                    "--require-list: %d on-disk cells not in config list "
-                    "(will be ignored): %s",
-                    len(extra), extra[:8],
+                    "--require-list: %d on-disk cells not in config list (will be ignored): %s",
+                    len(extra),
+                    extra[:8],
                 )
                 for e in extra:
                     found.pop(e, None)
         return sorted(found.keys())
 
-    def _read_cell(self, energy_mev: int) -> Tuple[np.ndarray, np.ndarray,
-                                                   np.ndarray, int]:
+    def _read_cell(self, energy_mev: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """Open one cell's photonsim.root and return (counts, x_edges,
         distance_edges, n_events). Raises on missing hist or tree."""
         path = self.cell_root / f"{energy_mev}MeV" / "photonsim.root"
@@ -267,13 +284,17 @@ class LookupTableBuilder(ABC):
 
         n_e = len(self.energy_values)
         self.raw_table = np.zeros(
-            (n_e, self.X_AXIS_BINS, self.DISTANCE_BINS), dtype=np.float64,
+            (n_e, self.X_AXIS_BINS, self.DISTANCE_BINS),
+            dtype=np.float64,
         )
         self.average_table = np.zeros_like(self.raw_table)
 
         logger.info(
             "Building %s table: %d cells, %d..%d MeV",
-            self.TABLE_KEY, n_e, self.energy_values[0], self.energy_values[-1],
+            self.TABLE_KEY,
+            n_e,
+            self.energy_values[0],
+            self.energy_values[-1],
         )
 
         for idx, energy in enumerate(tqdm(self.energy_values, desc="cells")):
@@ -282,8 +303,7 @@ class LookupTableBuilder(ABC):
                 self.x_edges = xedges
                 self.distance_edges = yedges
                 # Hard checks — fail fast if PhotonSim wasn't in /output/smax mode.
-                if not (abs(yedges[0] - 0.0) < 1e-12 and
-                        abs(yedges[-1] - 1.0) < 1e-12):
+                if not (abs(yedges[0] - 0.0) < 1e-12 and abs(yedges[-1] - 1.0) < 1e-12):
                     raise ValueError(
                         f"distance edges are not [0, 1] in {energy} MeV "
                         f"({yedges[0]}..{yedges[-1]}). This is the absolute-s "
@@ -291,17 +311,16 @@ class LookupTableBuilder(ABC):
                         f"/output/smax baked into the macro."
                     )
             else:
-                if not (np.allclose(xedges, self.x_edges, atol=1e-12) and
-                        np.allclose(yedges, self.distance_edges, atol=1e-12)):
-                    raise ValueError(
-                        f"Axis edges drift between cells at E={energy} MeV"
-                    )
+                if not (
+                    np.allclose(xedges, self.x_edges, atol=1e-12)
+                    and np.allclose(yedges, self.distance_edges, atol=1e-12)
+                ):
+                    raise ValueError(f"Axis edges drift between cells at E={energy} MeV")
 
             self.raw_table[idx] = counts
             self.events_per_file[energy] = n_events
             if n_events > 0:
                 self.average_table[idx] = counts / n_events
-
 
     # ---- h5 write ----------------------------------------------------------
 
@@ -330,12 +349,16 @@ class LookupTableBuilder(ABC):
         with h5py.File(h5_path, "w") as f:
             data = f.create_group("data")
             data.create_dataset(
-                f"{self.TABLE_KEY}_raw", data=self.raw_table,
-                compression="gzip", compression_opts=4,
+                f"{self.TABLE_KEY}_raw",
+                data=self.raw_table,
+                compression="gzip",
+                compression_opts=4,
             )
             data.create_dataset(
-                f"{self.TABLE_KEY}_average", data=self.average_table,
-                compression="gzip", compression_opts=4,
+                f"{self.TABLE_KEY}_average",
+                data=self.average_table,
+                compression="gzip",
+                compression_opts=4,
             )
 
             coords = f.create_group("coordinates")
@@ -402,7 +425,8 @@ class LookupTableBuilder(ABC):
             if smax_form not in SMAX_PARAMS:
                 raise AssertionError(
                     f"smax_form attr is missing or unknown ({smax_form!r}); "
-                    f"known: {sorted(SMAX_PARAMS)}")
+                    f"known: {sorted(SMAX_PARAMS)}"
+                )
             required_attrs = {"smax_form"}
             required_attrs |= {f"smax_{c}" for c in _SMAX_SHARED_COLS}
             required_attrs |= {f"smax_{p}" for p in SMAX_PARAMS[smax_form]}
@@ -411,22 +435,22 @@ class LookupTableBuilder(ABC):
             for k in required_attrs:
                 if k not in attrs:
                     raise AssertionError(f"missing metadata attr: {k}")
-            if attrs.get("distance_axis") != b"s_over_smax" and \
-               attrs.get("distance_axis") != "s_over_smax":
+            if (
+                attrs.get("distance_axis") != b"s_over_smax"
+                and attrs.get("distance_axis") != "s_over_smax"
+            ):
                 raise AssertionError(
                     f"distance_axis != 's_over_smax' ({attrs.get('distance_axis')!r})"
                 )
             if str(attrs.get("format_version", "")).strip("b'\"") != FORMAT_VERSION:
                 raise AssertionError(
-                    f"format_version != {FORMAT_VERSION} "
-                    f"({attrs.get('format_version')!r})"
+                    f"format_version != {FORMAT_VERSION} ({attrs.get('format_version')!r})"
                 )
 
             d_edges = f["coordinates/distance_edges"][:]
             if not (d_edges[0] == 0.0 and d_edges[-1] == 1.0):
                 raise AssertionError(
-                    f"distance_edges endpoints are not [0, 1]: "
-                    f"{d_edges[0]}..{d_edges[-1]}"
+                    f"distance_edges endpoints are not [0, 1]: {d_edges[0]}..{d_edges[-1]}"
                 )
 
             energy_values = f["coordinates/energy_values"][:]
@@ -434,15 +458,11 @@ class LookupTableBuilder(ABC):
             raw = f[f"data/{self.TABLE_KEY}_raw"]
             expected = (len(energy_values), self.X_AXIS_BINS, self.DISTANCE_BINS)
             if avg.shape != expected:
-                raise AssertionError(
-                    f"table shape {avg.shape} != expected {expected}"
-                )
+                raise AssertionError(f"table shape {avg.shape} != expected {expected}")
 
-            events = {int(r["energy"]): int(r["events"])
-                      for r in f["metadata/events_per_file"][:]}
+            events = {int(r["energy"]): int(r["events"]) for r in f["metadata/events_per_file"][:]}
             rng = np.random.default_rng(0)
-            valid_idx = [i for i, e in enumerate(energy_values)
-                         if events.get(int(e), 0) > 0]
+            valid_idx = [i for i, e in enumerate(energy_values) if events.get(int(e), 0) > 0]
             if not valid_idx:
                 raise AssertionError("no cell has events > 0")
             i = int(rng.choice(valid_idx))
@@ -452,36 +472,32 @@ class LookupTableBuilder(ABC):
             expect = raw_sum / events[E]
             if not np.isclose(avg_sum, expect, rtol=1e-9, atol=1e-12):
                 raise AssertionError(
-                    f"round-trip mismatch at E={E} MeV: "
-                    f"avg.sum={avg_sum}, raw.sum/events={expect}"
+                    f"round-trip mismatch at E={E} MeV: avg.sum={avg_sum}, raw.sum/events={expect}"
                 )
 
             # Source spot-check — element-wise equality against the .root file.
             src = self.cell_root / f"{E}MeV" / "photonsim.root"
             with uproot.open(src) as g:
-                src_counts = np.asarray(g[self.HIST_NAME].values(),
-                                        dtype=np.float64)
+                src_counts = np.asarray(g[self.HIST_NAME].values(), dtype=np.float64)
             if not np.array_equal(raw[i], src_counts):
-                raise AssertionError(
-                    f"raw[{i}] does not match source {src}:{self.HIST_NAME}"
-                )
+                raise AssertionError(f"raw[{i}] does not match source {src}:{self.HIST_NAME}")
 
-            params = {p: float(attrs[f"smax_{p}"])
-                      for p in SMAX_PARAMS[smax_form]}
-            param_str = ", ".join(f"{p}={params[p]:.6f}"
-                                  for p in SMAX_PARAMS[smax_form])
+            params = {p: float(attrs[f"smax_{p}"]) for p in SMAX_PARAMS[smax_form]}
+            param_str = ", ".join(f"{p}={params[p]:.6f}" for p in SMAX_PARAMS[smax_form])
             logger.info(
-                "validate(): OK. smax form=%s  %s  fit_min=%s  fit_max=%s  "
-                "s_max@1GeV = %.1f mm",
-                smax_form, param_str,
-                attrs["smax_fit_min_mev"], attrs["smax_fit_max_mev"],
+                "validate(): OK. smax form=%s  %s  fit_min=%s  fit_max=%s  s_max@1GeV = %.1f mm",
+                smax_form,
+                param_str,
+                attrs["smax_fit_min_mev"],
+                attrs["smax_fit_max_mev"],
                 make_smax_fn({"form": smax_form, "params": params}, np)(1000.0),
             )
 
-
             # Cross-check the same smax row against the on-disk CSV.
             csv_smax = _read_smax_fit_csv(
-                self.photonsim_dir, self.material, self.particle,
+                self.photonsim_dir,
+                self.material,
+                self.particle,
             )
             for k, v in csv_smax.items():
                 got = attrs[f"smax_{k}"]
@@ -491,9 +507,7 @@ class LookupTableBuilder(ABC):
                 else:
                     ok = str(got_norm) == str(v)
                 if not ok:
-                    raise AssertionError(
-                        f"smax_{k} drift: h5={got!r}  csv={v!r}"
-                    )
+                    raise AssertionError(f"smax_{k} drift: h5={got!r}  csv={v!r}")
 
 
 # --- Concrete subclasses ----------------------------------------------------
@@ -512,8 +526,13 @@ class PhotonLookupBuilder(LookupTableBuilder):
     def _write_extra_attrs(self, meta_group: h5py.Group) -> None:
         # N_photons(E), the Cherenkov emitter's absolute scale (the net supplies only the shape).
         fit = _fit_n_photons(self.energy_values, self.average_table.sum(axis=(1, 2)))
-        logger.info("N_photons(E) logpoly fit: %s..%s MeV, rms %.2g, max %.2g (fractional)",
-                    fit["fit_min_mev"], fit["fit_max_mev"], fit["rms_frac"], fit["max_frac"])
+        logger.info(
+            "N_photons(E) logpoly fit: %s..%s MeV, rms %.2g, max %.2g (fractional)",
+            fit["fit_min_mev"],
+            fit["fit_max_mev"],
+            fit["rms_frac"],
+            fit["max_frac"],
+        )
         for k, v in fit.items():
             meta_group.attrs[f"nphot_{k}"] = v
 
@@ -575,40 +594,51 @@ def _build_parser(prog: str, what: str) -> argparse.ArgumentParser:
         prog=prog,
         description=f"Build the {what} SIREN training-input .h5 lookup table.",
     )
-    p.add_argument("--data-dir", required=True, type=Path,
-                   help="Root containing <material>/<particle>/<E>MeV/photonsim.root")
-    p.add_argument("--material", required=True,
-                   help="e.g. water")
-    p.add_argument("--particle", required=True,
-                   help="e.g. mu-, e-")
-    p.add_argument("--output", required=True, type=Path,
-                   help="Output .h5 file path (or a directory).")
-    p.add_argument("--photonsim-dir", type=Path, default=None,
-                   help="PhotonSim checkout that holds data/<m>/<p>/smax_fit.csv. "
-                        "Defaults to $PHOTONSIM_DEV_PATH or a sibling of --data-dir.")
-    p.add_argument("--require-list", type=Path, default=None,
-                   help="siren_inputs config JSON; assert its energy_list_MeV "
-                        "is a subset of the on-disk cells.")
-    p.add_argument("--no-validate", action="store_true",
-                   help="Skip the post-write self-check.")
+    p.add_argument(
+        "--data-dir",
+        required=True,
+        type=Path,
+        help="Root containing <material>/<particle>/<E>MeV/photonsim.root",
+    )
+    p.add_argument("--material", required=True, help="e.g. water")
+    p.add_argument("--particle", required=True, help="e.g. mu-, e-")
+    p.add_argument(
+        "--output", required=True, type=Path, help="Output .h5 file path (or a directory)."
+    )
+    p.add_argument(
+        "--photonsim-dir",
+        type=Path,
+        default=None,
+        help="PhotonSim checkout that holds data/<m>/<p>/smax_fit.csv. "
+        "Defaults to $PHOTONSIM_DEV_PATH or a sibling of --data-dir.",
+    )
+    p.add_argument(
+        "--require-list",
+        type=Path,
+        default=None,
+        help="siren_inputs config JSON; assert its energy_list_MeV "
+        "is a subset of the on-disk cells.",
+    )
+    p.add_argument("--no-validate", action="store_true", help="Skip the post-write self-check.")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
 
-def _run(builder_cls, prog: str, what: str,
-         argv: Optional[List[str]] = None) -> int:
+def _run(builder_cls, prog: str, what: str, argv: Optional[List[str]] = None) -> int:
     args = _build_parser(prog, what).parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    require_list = (_load_require_list(args.require_list)
-                    if args.require_list else None)
+    require_list = _load_require_list(args.require_list) if args.require_list else None
 
     builder = builder_cls(
-        data_dir=args.data_dir, material=args.material, particle=args.particle,
-        photonsim_dir=args.photonsim_dir, require_list=require_list,
+        data_dir=args.data_dir,
+        material=args.material,
+        particle=args.particle,
+        photonsim_dir=args.photonsim_dir,
+        require_list=require_list,
     )
     builder.build()
     h5_path = builder.save(args.output)
@@ -623,21 +653,22 @@ def _run(builder_cls, prog: str, what: str,
 
 
 def main_photon(argv: Optional[List[str]] = None) -> int:
-    return _run(PhotonLookupBuilder, "lucid-build-photon-table",
-                "photon angle vs s/s_max", argv)
+    return _run(PhotonLookupBuilder, "lucid-build-photon-table", "photon angle vs s/s_max", argv)
 
 
 def main_dedx(argv: Optional[List[str]] = None) -> int:
-    return _run(DedxLookupBuilder, "lucid-build-dedx-table",
-                "dE/dx vs s/s_max", argv)
+    return _run(DedxLookupBuilder, "lucid-build-dedx-table", "dE/dx vs s/s_max", argv)
 
 
 if __name__ == "__main__":
     # `python -m lucid.siren.training.photonsim_data.build_tables photon|dedx <flags>`: the
     # same as the two console scripts, for an image whose scripts are older than the checkout.
     import sys
+
     kinds = {"photon": main_photon, "dedx": main_dedx}
     if len(sys.argv) < 2 or sys.argv[1] not in kinds:
-        raise SystemExit("usage: python -m lucid.siren.training.photonsim_data.build_tables "
-                         "photon|dedx <flags>  (or lucid-build-photon-table / lucid-build-dedx-table)")
+        raise SystemExit(
+            "usage: python -m lucid.siren.training.photonsim_data.build_tables "
+            "photon|dedx <flags>  (or lucid-build-photon-table / lucid-build-dedx-table)"
+        )
     raise SystemExit(kinds[sys.argv[1]](sys.argv[2:]))

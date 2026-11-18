@@ -2,50 +2,62 @@
 
 Marked slow: requires building a detector + propagator + running JAX sim.
 """
+
 import os
+
 from tests.helpers.paths import REPO
+
 os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
 
 import jax
 import numpy as np
 import pytest
 
-from lucid.sources import shotgun_source, stack_shotgun_sources
 from lucid.simulation.shotgun import setup_shotgun_simulator
+from lucid.sources import shotgun_source, stack_shotgun_sources
 
 # These tests hit the full propagation pipeline and are slow; treat like the
 # other integration tests in the repo.
 pytestmark = pytest.mark.slow
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def wcte_paths():
     base = str(REPO)
-    return (os.path.join(base, 'config', 'WCTE_like_geom_config.json'),
-            os.path.join(base, 'config', 'WCTE_like_physics_config.json'))
-
-
-@pytest.fixture(scope='module')
-def sim_waveform(wcte_paths):
-    geom, phys = wcte_paths
-    return setup_shotgun_simulator(
-        geom, physics_config=phys, n_photons=64,
-        hits='waveform', K=3,
+    return (
+        os.path.join(base, "config", "WCTE_like_geom_config.json"),
+        os.path.join(base, "config", "WCTE_like_physics_config.json"),
     )
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
+def sim_waveform(wcte_paths):
+    geom, phys = wcte_paths
+    return setup_shotgun_simulator(
+        geom,
+        physics_config=phys,
+        n_photons=64,
+        hits="waveform",
+        K=3,
+    )
+
+
+@pytest.fixture(scope="module")
 def sim_per_photon(wcte_paths):
     geom, phys = wcte_paths
     return setup_shotgun_simulator(
-        geom, physics_config=phys, n_photons=64,
-        hits='photon_hits', K=3,
+        geom,
+        physics_config=phys,
+        n_photons=64,
+        hits="photon_hits",
+        K=3,
     )
 
 
 def _source(n=64):
-    return shotgun_source([0.0, 0.0, 0.0], [0.0, 0.0, 1.0],
-                          n_photons=n, wavelength=400.0, intensity=1.0)
+    return shotgun_source(
+        [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], n_photons=n, wavelength=400.0, intensity=1.0
+    )
 
 
 def test_waveform_determinism(sim_waveform):
@@ -96,12 +108,17 @@ def test_batch_produces_consistent_totals(sim_waveform):
 
 # ── Expected-value waveform mode ───────────────────────────────────────────
 
-@pytest.fixture(scope='module')
+
+@pytest.fixture(scope="module")
 def sim_waveform_expected(wcte_paths):
     geom, phys = wcte_paths
     return setup_shotgun_simulator(
-        geom, physics_config=phys, n_photons=64,
-        transport='expected', detection='expected', K=3,
+        geom,
+        physics_config=phys,
+        n_photons=64,
+        transport="expected",
+        detection="expected",
+        K=3,
     )
 
 
@@ -139,22 +156,27 @@ def test_expected_waveform_plus_cherenkov_qe(wcte_paths):
     Needs a physics config that provides a QE curve (SK's does; WCTE's doesn't)."""
     geom, _ = wcte_paths
     base = str(REPO)
-    sk_phys = os.path.join(base, 'config', 'SK_physics_config.json')
+    sk_phys = os.path.join(base, "config", "SK_physics_config.json")
     sim = setup_shotgun_simulator(
-        geom, physics_config=sk_phys, n_photons=64,
-        transport='expected', detection='expected', K=3,
-        wavelength_sampling='cherenkov_qe',
+        geom,
+        physics_config=sk_phys,
+        n_photons=64,
+        transport="expected",
+        detection="expected",
+        K=3,
+        wavelength_sampling="cherenkov_qe",
     )
     # Force Cherenkov sampling by leaving source.wavelength=None.
-    src = shotgun_source([0.0, 0.0, 0.0], [0.0, 0.0, 1.0],
-                         n_photons=64, wavelength=None, intensity=1.0)
+    src = shotgun_source(
+        [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], n_photons=64, wavelength=None, intensity=1.0
+    )
     wf, _, _ = sim(src, jax.random.PRNGKey(0))
     wf_np = np.asarray(wf)
     assert np.isfinite(wf_np).all()
     assert float(wf_np.sum()) > 0
 
 
-@pytest.mark.parametrize('mode', ['bernoulli', 'expected'])
+@pytest.mark.parametrize("mode", ["bernoulli", "expected"])
 def test_waveform_layout_and_integral(mode, sim_waveform, sim_waveform_expected):
     """Both waveform modes: (num_sensors, window / bin) = (N, 500), nothing dropped (the 500 ns
     window is far past the ~43 ns latest hit here), and the integral is the detected light.
@@ -163,33 +185,42 @@ def test_waveform_layout_and_integral(mode, sim_waveform, sim_waveform_expected)
     (sigma about 1 %), so the integral is n_detected to 5 %. Expected value: ``n_detected`` is
     the integral itself. (This replaces two identical shape-only tests, one per mode.)
     """
-    sim = sim_waveform if mode == 'bernoulli' else sim_waveform_expected
+    sim = sim_waveform if mode == "bernoulli" else sim_waveform_expected
     wf, nd, ndet = sim(_source(), jax.random.PRNGKey(0))
     wf = np.asarray(wf)
     assert wf.shape == (sim.num_sensors, 500)
     assert np.isfinite(wf).all()
     assert int(nd) == 0
     assert float(ndet) > 0
-    if mode == 'bernoulli':
+    if mode == "bernoulli":
         assert abs(float(wf.sum()) - int(ndet)) / int(ndet) < 0.05
     else:
         assert abs(float(wf.sum()) - float(ndet)) < 1e-4
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def sim_aggregated_expected(wcte_paths):
     """The same expected-value propagation as ``sim_waveform_expected``, read out per sensor."""
     from lucid.simulation import setup_event_simulator
+
     geom, phys = wcte_paths
     return setup_event_simulator(
-        geom, n_photons=64, source='light_source', temperature=None, K=3,
-        physics_config=phys, default_detector_params=True, wavelength_mode=True,
-        wavelength_sampling='cherenkov')
+        geom,
+        n_photons=64,
+        source="light_source",
+        temperature=None,
+        K=3,
+        physics_config=phys,
+        default_detector_params=True,
+        wavelength_mode=True,
+        wavelength_sampling="cherenkov",
+    )
 
 
-@pytest.mark.parametrize('seed', [0, 1])
+@pytest.mark.parametrize("seed", [0, 1])
 def test_expected_waveform_rows_are_the_aggregated_charge_and_peak_at_the_direct_time(
-        seed, sim_waveform_expected, sim_aggregated_expected):
+    seed, sim_waveform_expected, sim_aggregated_expected
+):
     """Row s of the expected-value waveform integrates to sensor s's charge in the aggregated
     readout of the same propagation (same key), and the direct light peaks in the bin of the
     straight-line arrival.
@@ -215,6 +246,11 @@ def test_expected_value_rejects_per_photon(wcte_paths):
     geom, phys = wcte_paths
     with pytest.raises(ValueError, match="'photon_hits' with detection='expected' is not"):
         setup_shotgun_simulator(
-            geom, physics_config=phys, n_photons=64,
-            hits='photon_hits', transport='expected', detection='expected', K=3,
+            geom,
+            physics_config=phys,
+            n_photons=64,
+            hits="photon_hits",
+            transport="expected",
+            detection="expected",
+            K=3,
         )

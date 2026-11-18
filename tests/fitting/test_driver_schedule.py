@@ -8,12 +8,13 @@ same iteration twice and the anneal runs slow. `scale_by_driver_schedule` avoids
 falls back to its own counter when no index is supplied. The tests also pin the endpoint and
 clamping of `annealed_learning_rate`.
 """
-import numpy as np
+
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
 
-from lucid.fitting.transforms import scale_by_driver_schedule, annealed_learning_rate
+from lucid.fitting.transforms import annealed_learning_rate, scale_by_driver_schedule
 
 
 def test_it_follows_the_iteration_it_is_given():
@@ -57,6 +58,7 @@ def test_it_falls_back_to_counting_when_no_driver_supplies_an_index():
 
 
 # --------------------------------------------------------------- the anneal itself
+
 
 def test_the_anneal_ends_exactly_on_lr_final():
     """`transition_steps` must be steps-1, and this is where that bites.

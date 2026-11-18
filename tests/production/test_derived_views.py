@@ -5,20 +5,24 @@ after the first kept its old labels; relabel_cone also overwrote the dark-noise 
 runs here as a command on a two-batch dataset of one muon + Michel event per batch (the muon is
 particle 0, its decay electron particle 1).
 """
+
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 import h5py
-import numpy as np
 
 from lucid.dataset.layout import batch_paths
 from lucid.dataset.schema import EMISSION_PROCESS_DARK
 from lucid.production.dataprod import drivers
 from lucid.simulation.readout import Readout
 from tests.production.test_event_generation import (  # noqa: F401 (fixtures)
-    SKI_NO_DARK, _StubSimulator, _muon_michel_event, detector, fake_root,
+    SKI_NO_DARK,
+    _muon_michel_event,
+    _StubSimulator,
+    detector,
+    fake_root,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -30,10 +34,19 @@ def _two_batches(tmp_path, fake_root, detector):
     for k in (0, 1):
         path = fake_root(tmp_path / f"ps{k}.root", [_muon_michel_event()])
         drivers.run_particles(
-            _StubSimulator(detector), path, output_dir=str(src), file_index=k, n_events=1,
-            master_seed=7, job_id=k + 1, readout=Readout.from_blocks(SKI_NO_DARK),
-            dataset_name="t", apply_smearing=False, apply_translation=False,
-            pad_size_buckets=(64,))
+            _StubSimulator(detector),
+            path,
+            output_dir=str(src),
+            file_index=k,
+            n_events=1,
+            master_seed=7,
+            job_id=k + 1,
+            readout=Readout.from_blocks(SKI_NO_DARK),
+            dataset_name="t",
+            apply_smearing=False,
+            apply_translation=False,
+            pad_size_buckets=(64,),
+        )
     for k in (0, 1):
         with h5py.File(batch_paths(src, k)["labl"], "r") as f:
             assert sorted(set(f["event_000/per_track/particle_idx"][()])) == [0, 1]
@@ -41,9 +54,15 @@ def _two_batches(tmp_path, fake_root, detector):
 
 
 def _run(script, src, dst, param):
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO), os.environ.get("PYTHONPATH", "")]))
-    subprocess.run([sys.executable, str(VIEWS / script), str(src), str(dst), str(param)],
-                   check=True, env=env, capture_output=True)
+    env = dict(
+        os.environ, PYTHONPATH=os.pathsep.join([str(REPO), os.environ.get("PYTHONPATH", "")])
+    )
+    subprocess.run(
+        [sys.executable, str(VIEWS / script), str(src), str(dst), str(param)],
+        check=True,
+        env=env,
+        capture_output=True,
+    )
 
 
 def _read(dst, k, sub, name):
@@ -70,7 +89,7 @@ def test_segments_rebuild_the_particles_of_every_batch(tmp_path, fake_root, dete
 
 def test_cone_labels_every_batch_and_keeps_dark_noise(tmp_path, fake_root, detector):
     src = _two_batches(tmp_path, fake_root, detector)
-    with h5py.File(batch_paths(src, 1)["hits"], "r+") as f:     # one hit made dark noise
+    with h5py.File(batch_paths(src, 1)["hits"], "r+") as f:  # one hit made dark noise
         f["event_000/emission_process"][0] = EMISSION_PROCESS_DARK
         f["event_000/particle_idx"][0] = -1
     # a 180-degree cone holds every PMT: all light is relabelled 1 (it was 0, Cherenkov)

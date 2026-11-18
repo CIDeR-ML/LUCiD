@@ -1,13 +1,14 @@
 """The SIREN network (sinusoidal representation network) every emitter evaluates."""
+
 from __future__ import annotations
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
-
 import numpy as np
 
-__all__ = ['SineLayer', 'SIREN']
+__all__ = ["SineLayer", "SIREN"]
+
 
 def _sym_uniform(scale):
     """Symmetric uniform initializer U(-scale, scale) — the SIREN-paper init.
@@ -18,7 +19,9 @@ def _sym_uniform(scale):
     Trained Cherenkov/dedx models load every weight and bias, so this only affects (and fixed)
     from-scratch JAX initialisation.
     """
-    return lambda key, shape, dtype=jnp.float32: jax.random.uniform(key, shape, dtype, -scale, scale)
+    return lambda key, shape, dtype=jnp.float32: jax.random.uniform(
+        key, shape, dtype, -scale, scale
+    )
 
 
 class SineLayer(nn.Module):
@@ -32,18 +35,17 @@ class SineLayer(nn.Module):
 
         # Initialize weights following the SIREN paper (symmetric U(-b, b); see _sym_uniform).
         if self.is_first:
-            weight_init = _sym_uniform(1/input_dim)
+            weight_init = _sym_uniform(1 / input_dim)
         else:
-            scale = np.sqrt(6/input_dim) / self.omega_0
+            scale = np.sqrt(6 / input_dim) / self.omega_0
             weight_init = _sym_uniform(scale)
 
         x = nn.Dense(
-            features=self.features,
-            kernel_init=weight_init,
-            bias_init=_sym_uniform(np.pi)
+            features=self.features, kernel_init=weight_init, bias_init=_sym_uniform(np.pi)
         )(inputs)
 
         return jnp.sin(self.omega_0 * x)
+
 
 class SIREN(nn.Module):
     hidden_features: int
@@ -62,10 +64,7 @@ class SIREN(nn.Module):
         hidden_omega = self.w0 if self.w0 != 30.0 else self.hidden_omega_0
 
         x = SineLayer(
-            features=self.hidden_features,
-            is_first=True,
-            omega_0=first_omega,
-            name='SineLayer_0'
+            features=self.hidden_features, is_first=True, omega_0=first_omega, name="SineLayer_0"
         )(inputs)
 
         for i in range(self.hidden_layers):
@@ -73,24 +72,24 @@ class SIREN(nn.Module):
                 features=self.hidden_features,
                 is_first=False,
                 omega_0=hidden_omega,
-                name=f'SineLayer_{i+1}'
+                name=f"SineLayer_{i + 1}",
             )(x)
 
         if self.outermost_linear:
-            scale = np.sqrt(6/self.hidden_features) / hidden_omega
+            scale = np.sqrt(6 / self.hidden_features) / hidden_omega
             init = _sym_uniform(scale)
             x = nn.Dense(
                 features=self.out_features,
                 kernel_init=init,
                 bias_init=_sym_uniform(np.pi),
-                name='Dense_0'
+                name="Dense_0",
             )(x)
         else:
             x = SineLayer(
                 features=self.out_features,
                 is_first=False,
                 omega_0=hidden_omega,
-                name='SineLayer_final'
+                name="SineLayer_final",
             )(x)
 
         # Square the output to enforce NON-NEGATIVITY for the Cherenkov/dedx photon-density

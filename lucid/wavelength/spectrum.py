@@ -10,8 +10,7 @@ import jax
 import jax.numpy as jnp
 
 
-def sample_cherenkov_wavelengths(key, n_photons,
-                                 lambda_min=300.0, lambda_max=700.0):
+def sample_cherenkov_wavelengths(key, n_photons, lambda_min=300.0, lambda_max=700.0):
     """Sample wavelengths from the Cherenkov spectrum dN/dlambda ~ 1/lambda^2.
 
     Uses exact inverse-CDF sampling (no rejection step needed).
@@ -40,8 +39,7 @@ def sample_cherenkov_wavelengths(key, n_photons,
     return 1.0 / (inv_min - u * (inv_min - inv_max))
 
 
-def build_qe_weighted_cherenkov_sampler(qe_fn, lambda_min, lambda_max,
-                                        n_grid=500):
+def build_qe_weighted_cherenkov_sampler(qe_fn, lambda_min, lambda_max, n_grid=500):
     """Build an inverse-CDF sampler for QE(λ) · 1/λ² and the scalar
     ``<QE>_C = ∫QE(λ)/λ² dλ / ∫1/λ² dλ`` over ``[lambda_min, lambda_max]``.
 
@@ -72,17 +70,20 @@ def build_qe_weighted_cherenkov_sampler(qe_fn, lambda_min, lambda_max,
         weight that replaces the λ-dependent curve.
     """
     lam = jnp.linspace(lambda_min, lambda_max, n_grid)
-    pdf_qc = qe_fn(lam) / (lam ** 2)
+    pdf_qc = qe_fn(lam) / (lam**2)
     z_qc = jnp.trapezoid(pdf_qc, lam)
-    z_c = jnp.trapezoid(1.0 / (lam ** 2), lam)
+    z_c = jnp.trapezoid(1.0 / (lam**2), lam)
     if float(z_qc) <= 0.0:
         raise ValueError(
             "QE curve is zero everywhere on the sampling range "
             f"[{lambda_min}, {lambda_max}] nm — cannot build QE-weighted "
-            "Cherenkov sampler. Check the QE curve overlaps this range.")
+            "Cherenkov sampler. Check the QE curve overlaps this range."
+        )
     # Cumulative trapezoid, the same rule as z_qc: cdf starts at 0 at lambda_min (a cumsum would
     # start at pdf[0] / sum and put a point mass there).
-    cdf_qc = jnp.concatenate([jnp.zeros(1), jnp.cumsum(0.5 * (pdf_qc[1:] + pdf_qc[:-1]) * jnp.diff(lam))])
+    cdf_qc = jnp.concatenate(
+        [jnp.zeros(1), jnp.cumsum(0.5 * (pdf_qc[1:] + pdf_qc[:-1]) * jnp.diff(lam))]
+    )
     cdf_qc = cdf_qc / cdf_qc[-1]
     mean_qe = float(z_qc / z_c)
 

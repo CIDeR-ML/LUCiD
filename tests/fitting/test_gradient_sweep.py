@@ -1,5 +1,6 @@
 """``lucid.gradient_analysis`` sweeps on the tiny detector: the analytic gradient of a calibration
 loss vanishes at the truth, and a non-finite point raises instead of becoming a gap."""
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -21,13 +22,14 @@ def _loss_and_grad(sim):
     @jax.jit
     def loss_and_grad(dp):
         return jax.value_and_grad(lambda p: jnp.sum((sim(source, p, key)[0] - q_true) ** 2))(dp)
+
     return truth, loss_and_grad
 
 
 def test_the_loss_gradient_crosses_zero_at_the_true_absorption_length(tiny_sim):
     truth, loss_and_grad = _loss_and_grad(tiny_sim)
-    sp = SweepParam('Absorption Length', 'absorption_length', half_width=4.0, num_points=5)
-    r = sweep_1d(loss_and_grad, truth, [sp])['Absorption Length']
+    sp = SweepParam("Absorption Length", "absorption_length", half_width=4.0, num_points=5)
+    r = sweep_1d(loss_and_grad, truth, [sp])["Absorption Length"]
 
     np.testing.assert_allclose(r.values, [6.0, 8.0, 10.0, 12.0, 14.0])
     assert np.argmin(r.losses) == 2 and r.losses[2] == pytest.approx(0.0, abs=1e-6 * r.losses.max())
@@ -41,8 +43,10 @@ def test_a_non_finite_point_raises(tiny_sim):
 
     def nan_at_the_truth(dp):
         loss, grads = loss_and_grad(dp)
-        return jnp.where(jnp.isclose(dp.absorption.absorption_length, ABSORPTION_M), jnp.nan, loss), grads
+        return jnp.where(
+            jnp.isclose(dp.absorption.absorption_length, ABSORPTION_M), jnp.nan, loss
+        ), grads
 
-    sp = SweepParam('Absorption Length', 'absorption_length', half_width=4.0, num_points=3)
+    sp = SweepParam("Absorption Length", "absorption_length", half_width=4.0, num_points=3)
     with pytest.raises(FloatingPointError, match="'Absorption Length' = 10.0"):
         sweep_1d(nan_at_the_truth, truth, [sp])

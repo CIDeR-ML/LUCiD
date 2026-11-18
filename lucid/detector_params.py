@@ -19,9 +19,9 @@ Helpers:
     load_detector_params
 """
 
-from typing import NamedTuple
 import json
 import os
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -30,10 +30,10 @@ import numpy as np
 from lucid.utils import cartesian_to_spherical, spherical_to_cartesian
 from lucid.wavelength.optical_model import N_CONTROL as _N_CTRL
 
-
 # ---------------------------------------------------------------------------
 # DetectorParams
 # ---------------------------------------------------------------------------
+
 
 class ScatteringParams(NamedTuple):
     """Scattering optical properties (JAX pytree sub-tuple).
@@ -52,6 +52,7 @@ class ScatteringParams(NamedTuple):
     An all-ones curve reproduces the pure medium reference (byte-identical). They are
     ignored in monochromatic mode.
     """
+
     scatter_length: jnp.ndarray
     mie_scatter_length: jnp.ndarray
     g: jnp.ndarray
@@ -69,6 +70,7 @@ class AbsorptionParams(NamedTuple):
 
     ``abs_dev`` is the fittable wavelength-deviation curve; see ``ScatteringParams``.
     """
+
     absorption_length: jnp.ndarray
     abs_dev: jnp.ndarray
 
@@ -93,6 +95,7 @@ class ReflectionParams(NamedTuple):
     blacksheet + multilayer-Fresnel cathode) and are inert unless ``reflection_model=
     'angular'``. Only the two rates matter for the legacy ``scalar`` model.
     """
+
     wall_reflection_rate: jnp.ndarray
     sensor_reflection_rate: jnp.ndarray
     wall_R0: jnp.ndarray
@@ -123,6 +126,7 @@ class ResponseParams(NamedTuple):
     QE / (1 - R0), R0 the sensor reflectance at normal incidence; ``qe * qe_corrections``
     must therefore not exceed ``1 - R0``.
     """
+
     qe: jnp.ndarray
     tts: jnp.ndarray
     qe_dev: jnp.ndarray
@@ -139,6 +143,7 @@ class PerPmtParams(NamedTuple):
     ``t0`` is a per-PMT first-arrival offset (the TQ-map constant), not yet applied by the
     hits; its default is zero.
     """
+
     qe_corrections: jnp.ndarray
     t0: jnp.ndarray
 
@@ -162,6 +167,7 @@ class ScintillationParams(NamedTuple):
     ``emission_processes``. Excluded from optimization by default (not in any default
     trainable-field set).
     """
+
     S: jnp.ndarray = np.float32(0.0)
     kB: jnp.ndarray = np.float32(0.0)
     C: jnp.ndarray = np.float32(0.0)
@@ -181,6 +187,7 @@ class DetectorParams(NamedTuple):
     per_pmt      : PerPmtParams        qe_corrections, t0
     scintillation: ScintillationParams S, kB, C, tau_* (neutral=0 for non-scint media)
     """
+
     scattering: ScatteringParams
     absorption: AbsorptionParams
     reflection: ReflectionParams
@@ -207,7 +214,7 @@ class DetectorParams(NamedTuple):
             ns = 1
         defaults = dict(
             scatter_length=50.0,
-            mie_scatter_length=1.0e9,       # no Mie channel, which makes g immaterial
+            mie_scatter_length=1.0e9,  # no Mie channel, which makes g immaterial
             g=0.0,
             rayleigh_dev=jnp.ones(_N_CTRL),
             mie_dev=jnp.ones(_N_CTRL),
@@ -215,7 +222,7 @@ class DetectorParams(NamedTuple):
             abs_dev=jnp.ones(_N_CTRL),
             wall_reflection_rate=0.0,
             sensor_reflection_rate=0.0,
-            wall_fspec=0.55,                # the SK-lit specular fractions
+            wall_fspec=0.55,  # the SK-lit specular fractions
             sensor_fspec=0.90,
             **_ANGULAR_REFERENCE,
             qe=0.2,
@@ -223,7 +230,11 @@ class DetectorParams(NamedTuple):
             qe_dev=jnp.ones(_N_CTRL),
             qe_corrections=jnp.ones(ns),
             t0=jnp.zeros(ns),
-            S=0.0, kB=0.0, C=0.0, tau_rise=0.0, tau_fall=0.0,    # scintillation: neutral (S=0 → no scint light)
+            S=0.0,
+            kB=0.0,
+            C=0.0,
+            tau_rise=0.0,
+            tau_fall=0.0,  # scintillation: neutral (S=0 → no scint light)
         )
         defaults.update(flat)
         merged = {k: jnp.asarray(v) for k, v in defaults.items()}
@@ -233,6 +244,7 @@ class DetectorParams(NamedTuple):
 # ---------------------------------------------------------------------------
 # ParticleParams
 # ---------------------------------------------------------------------------
+
 
 class ParticleParams(NamedTuple):
     """Particle track parameters (JAX pytree).
@@ -246,6 +258,7 @@ class ParticleParams(NamedTuple):
     t0 : jnp.ndarray        scalar, the track's start time (ns): the track forward offsets
                             every photon's emission time by it
     """
+
     energy: jnp.ndarray
     position: jnp.ndarray
     theta: jnp.ndarray
@@ -279,6 +292,7 @@ class JointParams(NamedTuple):
     future sibling forward (e.g. DTRAX track params) extends this by adding a field — nothing
     else changes. Optimizing ``(detector, particle)`` jointly is self-calibration.
     """
+
     detector: DetectorParams
     particle: ParticleParams
 
@@ -288,10 +302,11 @@ class JointParams(NamedTuple):
 # Re-exported here for backwards compatibility.
 # ---------------------------------------------------------------------------
 from lucid.sources.calibration_sources import (  # noqa: F401, E402
-    IsotropicSource, LaserSource,
-    isotropic_source, laser_source,
+    IsotropicSource,
+    LaserSource,
+    isotropic_source,
+    laser_source,
 )
-
 
 # ---------------------------------------------------------------------------
 # Flat <-> nested mapping.
@@ -308,13 +323,11 @@ _SUBTUPLES = (
     ("reflection", ReflectionParams),
     ("response", ResponseParams),
     ("per_pmt", PerPmtParams),
-    ("scintillation", ScintillationParams),     # appended LAST — preserves the existing leaf order
+    ("scintillation", ScintillationParams),  # appended LAST — preserves the existing leaf order
 )
 
 # Ordered list of every leaf (flat) field name across all sub-tuples.
-_FLAT_FIELDS = tuple(
-    field for _, cls in _SUBTUPLES for field in cls._fields
-)
+_FLAT_FIELDS = tuple(field for _, cls in _SUBTUPLES for field in cls._fields)
 
 
 def _nest_flat_kwargs(flat: dict) -> DetectorParams:
@@ -347,16 +360,27 @@ def _flatten_detector_params(params: DetectorParams) -> dict:
 
 # Keys a physics config may carry besides the leaf fields (and ``_``-prefixed comments).
 # ``digitizer`` and ``trigger`` are production's readout blocks (lucid.production.dataprod.run_job).
-_CONFIG_KEYS = ("medium_model", "qe_curve", "scalar_mode", "angular_reflection", "digitizer",
-                "trigger")
+_CONFIG_KEYS = (
+    "medium_model",
+    "qe_curve",
+    "scalar_mode",
+    "angular_reflection",
+    "digitizer",
+    "trigger",
+)
 
 # The optical lengths only scalar mode (wavelength_mode=False) reads: wavelength mode takes
 # them from the medium's curves. A config states them under "scalar_mode", which says so.
 _SCALAR_MODE_FIELDS = ("scatter_length", "absorption_length", "mie_scatter_length")
 
 # Leaves every config states: nothing to project them from and no neutral value.
-_REQUIRED_FIELDS = ("wall_reflection_rate", "sensor_reflection_rate",
-                    "wall_fspec", "sensor_fspec", "qe_corrections")
+_REQUIRED_FIELDS = (
+    "wall_reflection_rate",
+    "sensor_reflection_rate",
+    "wall_fspec",
+    "sensor_fspec",
+    "qe_corrections",
+)
 
 # Leaves projected from the medium at the scalar reference wavelength when a config gives a
 # medium_model and omits them; required otherwise. ``qe`` likewise from the qe_curve.
@@ -371,14 +395,14 @@ _ANGULAR_REFERENCE = {"wall_R0": 0.05, "wall_p": 1.0, "cathode_nr": 2.8, "cathod
 
 # Identity values: the forward is unchanged by them (no TTS smearing, no per-PMT offset, no λ
 # deviation, no scintillation light).
-_IDENTITY = {"tts": 0.0, "t0": 0.0,
-             "S": 0.0, "kB": 0.0, "C": 0.0, "tau_rise": 0.0, "tau_fall": 0.0}
+_IDENTITY = {"tts": 0.0, "t0": 0.0, "S": 0.0, "kB": 0.0, "C": 0.0, "tau_rise": 0.0, "tau_fall": 0.0}
 _DEV_CURVE_FIELDS = ("rayleigh_dev", "mie_dev", "abs_dev", "qe_dev")
 
 
 def _check_keys(keys, allowed, where):
     """Raise on a key outside ``allowed`` (``_``-prefixed comments pass), naming the closest one."""
     import difflib
+
     for key in keys:
         if key.startswith("_") or key in allowed:
             continue
@@ -421,8 +445,11 @@ def _scintillation_defaults_from_medium(medium):
     tm = scint.get("timing", {})
     pick = lambda d, k: d[k] if k in d else None
     out = {
-        "S": pick(ly, "S"), "kB": pick(ly, "kB"), "C": pick(ly, "C"),
-        "tau_rise": pick(tm, "tau_rise"), "tau_fall": pick(tm, "tau_fall"),
+        "S": pick(ly, "S"),
+        "kB": pick(ly, "kB"),
+        "C": pick(ly, "C"),
+        "tau_rise": pick(tm, "tau_rise"),
+        "tau_fall": pick(tm, "tau_fall"),
     }
     return {k: v for k, v in out.items() if v is not None}
 
@@ -435,19 +462,25 @@ def _project_missing_scalars(kwargs, medium, qe_curve, source_filepath):
     grid ``[λ_ref]``.
     """
     from lucid.wavelength import DEFAULT_WAVELENGTH_NM as ref_wl
+
     if "qe" not in kwargs:
         if qe_curve is None:
-            raise ValueError(f"Physics config {source_filepath!r} has no scalar 'qe' and no "
-                             f"'qe_curve' to project from at λ={ref_wl}nm.")
+            raise ValueError(
+                f"Physics config {source_filepath!r} has no scalar 'qe' and no "
+                f"'qe_curve' to project from at λ={ref_wl}nm."
+            )
         kwargs["qe"] = jnp.asarray(float(qe_curve(ref_wl)), dtype=jnp.float32)
 
     missing = [f for f in _MEDIUM_FIELDS if f not in kwargs]
     if not missing:
         return
     if medium is None:
-        raise ValueError(f"Physics config {source_filepath!r} has no {missing} and no "
-                         f"'medium_model' to project from at λ={ref_wl}nm.")
+        raise ValueError(
+            f"Physics config {source_filepath!r} has no {missing} and no "
+            f"'medium_model' to project from at λ={ref_wl}nm."
+        )
     from lucid.wavelength.medium import medium_on_grid
+
     m = medium_on_grid(medium, jnp.array([ref_wl], dtype=jnp.float32))
     projected = {
         "scatter_length": lambda: float(1.0 / (m.scatter_coeff[0] + 1e-30)),
@@ -503,42 +536,52 @@ def load_physics_config(filepath: str, num_sensors: int = None, reflection_model
     config_dir = os.path.dirname(filepath) or "."
     with open(filepath) as f:
         data = json.load(f)
-    leaf_keys = tuple(f for f in _FLAT_FIELDS
-                      if f not in _SCALAR_MODE_FIELDS and f not in _ANGULAR_REFERENCE)
+    leaf_keys = tuple(
+        f for f in _FLAT_FIELDS if f not in _SCALAR_MODE_FIELDS and f not in _ANGULAR_REFERENCE
+    )
     for key in _SCALAR_MODE_FIELDS:
         if key in data:
             raise ValueError(
                 f"physics config {filepath!r}: {key!r} is read only in scalar mode "
                 "(wavelength_mode=False); wavelength mode takes it from the medium. State it "
-                'under "scalar_mode".')
+                'under "scalar_mode".'
+            )
     for key in _ANGULAR_REFERENCE:
         if key in data:
             raise ValueError(
                 f"physics config {filepath!r}: {key!r} is read only by "
-                "reflection_model='angular'. State it under \"angular_reflection\".")
+                "reflection_model='angular'. State it under \"angular_reflection\"."
+            )
     _check_keys(data, leaf_keys + _CONFIG_KEYS, f"physics config {filepath!r}")
     scalar_mode = data.get("scalar_mode", {})
     _check_keys(scalar_mode, _SCALAR_MODE_FIELDS, f"physics config {filepath!r} 'scalar_mode'")
     angular = data.get("angular_reflection")
     if angular is not None:
-        _check_keys(angular, tuple(_ANGULAR_REFERENCE),
-                    f"physics config {filepath!r} 'angular_reflection'")
+        _check_keys(
+            angular, tuple(_ANGULAR_REFERENCE), f"physics config {filepath!r} 'angular_reflection'"
+        )
         missing = [f for f in _ANGULAR_REFERENCE if f not in angular]
         if missing:
-            raise ValueError(f"physics config {filepath!r} 'angular_reflection' does not state "
-                             f"{missing}")
-    elif reflection_model == 'angular':
+            raise ValueError(
+                f"physics config {filepath!r} 'angular_reflection' does not state {missing}"
+            )
+    elif reflection_model == "angular":
         raise ValueError(
             f"reflection_model='angular' reads {list(_ANGULAR_REFERENCE)}; physics config "
-            f"{filepath!r} has no \"angular_reflection\" block stating them.")
+            f'{filepath!r} has no "angular_reflection" block stating them.'
+        )
     missing = [f for f in _REQUIRED_FIELDS if f not in data]
     if missing:
         raise ValueError(f"physics config {filepath!r} does not state {missing}")
 
     from lucid.wavelength.medium import load_medium, load_qe_curve
+
     medium_model, qe_curve = data.get("medium_model"), data.get("qe_curve")
-    medium = (load_medium(medium_model_path=os.path.join(config_dir, medium_model))
-              if medium_model is not None else None)
+    medium = (
+        load_medium(medium_model_path=os.path.join(config_dir, medium_model))
+        if medium_model is not None
+        else None
+    )
     qe_curve = load_qe_curve(os.path.join(config_dir, qe_curve)) if qe_curve is not None else None
 
     given = {k: v for k, v in data.items() if k in leaf_keys}
@@ -562,14 +605,16 @@ def load_physics_config(filepath: str, num_sensors: int = None, reflection_model
         kwargs.setdefault(field, jnp.ones(_N_CTRL, dtype=jnp.float32))
 
     if num_sensors is not None:
-        qe_corr = kwargs['qe_corrections']
+        qe_corr = kwargs["qe_corrections"]
         if qe_corr.ndim == 0:
-            kwargs['qe_corrections'] = jnp.ones(num_sensors) * qe_corr
+            kwargs["qe_corrections"] = jnp.ones(num_sensors) * qe_corr
         elif qe_corr.shape[0] != num_sensors:
-            raise ValueError(f"qe_corrections has {qe_corr.shape[0]} entries for {num_sensors} "
-                             f"sensors ({filepath})")
-        if kwargs['t0'].ndim == 0:
-            kwargs['t0'] = jnp.full(num_sensors, kwargs['t0'], dtype=jnp.float32)
+            raise ValueError(
+                f"qe_corrections has {qe_corr.shape[0]} entries for {num_sensors} "
+                f"sensors ({filepath})"
+            )
+        if kwargs["t0"].ndim == 0:
+            kwargs["t0"] = jnp.full(num_sensors, kwargs["t0"], dtype=jnp.float32)
 
     return _nest_flat_kwargs(kwargs), medium, qe_curve
 
@@ -578,11 +623,14 @@ def load_physics_config(filepath: str, num_sensors: int = None, reflection_model
 # Optimization helpers
 # ---------------------------------------------------------------------------
 
+
 def normalize_params(params, bounds_min, bounds_max):
     """Map a pytree from physical units to [0, 1] using element-wise bounds."""
     return jax.tree.map(
         lambda v, lo, hi: (v - lo) / (hi - lo + 1e-8),
-        params, bounds_min, bounds_max,
+        params,
+        bounds_min,
+        bounds_max,
     )
 
 
@@ -590,7 +638,9 @@ def denormalize_params(normalized, bounds_min, bounds_max):
     """Map a pytree from [0, 1] back to physical units."""
     return jax.tree.map(
         lambda v, lo, hi: v * (hi - lo) + lo,
-        normalized, bounds_min, bounds_max,
+        normalized,
+        bounds_min,
+        bounds_max,
     )
 
 
@@ -601,51 +651,68 @@ def default_bounds(num_sensors: int):
     -------
     bounds_min, bounds_max : DetectorParams
     """
-    bounds_min = _nest_flat_kwargs(dict(
-        scatter_length=jnp.array(0.0),
-        mie_scatter_length=jnp.array(0.0),
-        g=jnp.array(0.0),
-        rayleigh_dev=jnp.full(_N_CTRL, 0.1),
-        mie_dev=jnp.full(_N_CTRL, 0.1),
-        absorption_length=jnp.array(0.0),
-        abs_dev=jnp.full(_N_CTRL, 0.1),
-        wall_reflection_rate=jnp.array(0.0),
-        sensor_reflection_rate=jnp.array(0.0),
-        wall_R0=jnp.array(0.0), wall_p=jnp.array(0.5), wall_fspec=jnp.array(0.0),
-        cathode_nr=jnp.array(1.5), cathode_nk=jnp.array(0.0), sensor_fspec=jnp.array(0.0),
-        qe=jnp.array(0.0),
-        tts=jnp.array(0.0),
-        qe_dev=jnp.full(_N_CTRL, 0.1),
-        qe_corrections=jnp.zeros(num_sensors),
-        t0=jnp.full(num_sensors, -10.0),
-        S=jnp.array(0.0), kB=jnp.array(0.0), C=jnp.array(0.0),       # scintillation (inert unless fit)
-        tau_rise=jnp.array(0.0), tau_fall=jnp.array(0.0),
-    ))
-    bounds_max = _nest_flat_kwargs(dict(
-        scatter_length=jnp.array(100.0),
-        mie_scatter_length=jnp.array(100.0),
-        g=jnp.array(1.0),
-        rayleigh_dev=jnp.full(_N_CTRL, 10.0),
-        mie_dev=jnp.full(_N_CTRL, 10.0),
-        absorption_length=jnp.array(500.0),
-        abs_dev=jnp.full(_N_CTRL, 10.0),
-        wall_reflection_rate=jnp.array(0.5),
-        sensor_reflection_rate=jnp.array(0.4),
-        wall_R0=jnp.array(0.5), wall_p=jnp.array(12.0), wall_fspec=jnp.array(1.0),
-        cathode_nr=jnp.array(4.0), cathode_nk=jnp.array(4.0), sensor_fspec=jnp.array(1.0),
-        qe=jnp.array(1.0),
-        tts=jnp.array(5.0),
-        qe_dev=jnp.full(_N_CTRL, 10.0),
-        qe_corrections=jnp.full(num_sensors, 2.0),
-        t0=jnp.full(num_sensors, 10.0),
-        S=jnp.array(5000.0), kB=jnp.array(1e-3), C=jnp.array(1e-6), # scintillation physical ranges
-        tau_rise=jnp.array(10.0), tau_fall=jnp.array(50.0),
-    ))
+    bounds_min = _nest_flat_kwargs(
+        dict(
+            scatter_length=jnp.array(0.0),
+            mie_scatter_length=jnp.array(0.0),
+            g=jnp.array(0.0),
+            rayleigh_dev=jnp.full(_N_CTRL, 0.1),
+            mie_dev=jnp.full(_N_CTRL, 0.1),
+            absorption_length=jnp.array(0.0),
+            abs_dev=jnp.full(_N_CTRL, 0.1),
+            wall_reflection_rate=jnp.array(0.0),
+            sensor_reflection_rate=jnp.array(0.0),
+            wall_R0=jnp.array(0.0),
+            wall_p=jnp.array(0.5),
+            wall_fspec=jnp.array(0.0),
+            cathode_nr=jnp.array(1.5),
+            cathode_nk=jnp.array(0.0),
+            sensor_fspec=jnp.array(0.0),
+            qe=jnp.array(0.0),
+            tts=jnp.array(0.0),
+            qe_dev=jnp.full(_N_CTRL, 0.1),
+            qe_corrections=jnp.zeros(num_sensors),
+            t0=jnp.full(num_sensors, -10.0),
+            S=jnp.array(0.0),
+            kB=jnp.array(0.0),
+            C=jnp.array(0.0),  # scintillation (inert unless fit)
+            tau_rise=jnp.array(0.0),
+            tau_fall=jnp.array(0.0),
+        )
+    )
+    bounds_max = _nest_flat_kwargs(
+        dict(
+            scatter_length=jnp.array(100.0),
+            mie_scatter_length=jnp.array(100.0),
+            g=jnp.array(1.0),
+            rayleigh_dev=jnp.full(_N_CTRL, 10.0),
+            mie_dev=jnp.full(_N_CTRL, 10.0),
+            absorption_length=jnp.array(500.0),
+            abs_dev=jnp.full(_N_CTRL, 10.0),
+            wall_reflection_rate=jnp.array(0.5),
+            sensor_reflection_rate=jnp.array(0.4),
+            wall_R0=jnp.array(0.5),
+            wall_p=jnp.array(12.0),
+            wall_fspec=jnp.array(1.0),
+            cathode_nr=jnp.array(4.0),
+            cathode_nk=jnp.array(4.0),
+            sensor_fspec=jnp.array(1.0),
+            qe=jnp.array(1.0),
+            tts=jnp.array(5.0),
+            qe_dev=jnp.full(_N_CTRL, 10.0),
+            qe_corrections=jnp.full(num_sensors, 2.0),
+            t0=jnp.full(num_sensors, 10.0),
+            S=jnp.array(5000.0),
+            kB=jnp.array(1e-3),
+            C=jnp.array(1e-6),  # scintillation physical ranges
+            tau_rise=jnp.array(10.0),
+            tau_fall=jnp.array(50.0),
+        )
+    )
     return bounds_min, bounds_max
 
 
-def particle_bounds(detector_r, detector_h, *, energy_min=0.0, energy_max=5000.0,
-                    t0_range=50.0):
+def particle_bounds(detector_r, detector_h, *, energy_min=0.0, energy_max=5000.0, t0_range=50.0):
     """Return ``(bounds_min, bounds_max)`` :class:`ParticleParams` with physical ranges.
 
     Position is bounded by the cylinder (``±r`` in x/y, ``±h/2`` in z); ``theta∈[0,π]``,
@@ -653,11 +720,23 @@ def particle_bounds(detector_r, detector_h, *, energy_min=0.0, energy_max=5000.0
     :func:`default_bounds` for the particle pytree so the same normalize/denormalize helpers
     apply (and :func:`joint_bounds` stacks the two for a self-calibration fit).
     """
-    r = float(detector_r); h2 = float(detector_h) / 2.0; pi = float(jnp.pi)
-    bmin = ParticleParams(energy=jnp.asarray(energy_min), position=jnp.array([-r, -r, -h2]),
-                          theta=jnp.asarray(0.0), phi=jnp.asarray(-pi), t0=jnp.asarray(-t0_range))
-    bmax = ParticleParams(energy=jnp.asarray(energy_max), position=jnp.array([r, r, h2]),
-                          theta=jnp.asarray(pi), phi=jnp.asarray(pi), t0=jnp.asarray(t0_range))
+    r = float(detector_r)
+    h2 = float(detector_h) / 2.0
+    pi = float(jnp.pi)
+    bmin = ParticleParams(
+        energy=jnp.asarray(energy_min),
+        position=jnp.array([-r, -r, -h2]),
+        theta=jnp.asarray(0.0),
+        phi=jnp.asarray(-pi),
+        t0=jnp.asarray(-t0_range),
+    )
+    bmax = ParticleParams(
+        energy=jnp.asarray(energy_max),
+        position=jnp.array([r, r, h2]),
+        theta=jnp.asarray(pi),
+        phi=jnp.asarray(pi),
+        t0=jnp.asarray(t0_range),
+    )
     return bmin, bmax
 
 
@@ -685,6 +764,7 @@ def make_optimization_mask(params, trainable_fields):
         Leaves are ``True`` (scalar or array-shaped) where the field is
         trainable, ``False`` otherwise.  Suitable for ``optax.masked``.
     """
+
     def build(node):
         # Recurse into nested NamedTuples, keying the decision on the LEAF field
         # name. For DetectorParams this descends scattering/absorption/... into
@@ -710,22 +790,24 @@ def make_optimization_mask(params, trainable_fields):
 
 def create_default_detector_params(num_sensors: int) -> DetectorParams:
     """Sensible initialization defaults for calibration optimization."""
-    return _nest_flat_kwargs(dict(
-        scatter_length=jnp.array(50.0),
-        mie_scatter_length=jnp.array(50.0),
-        g=jnp.array(0.85),
-        rayleigh_dev=jnp.ones(_N_CTRL),
-        mie_dev=jnp.ones(_N_CTRL),
-        absorption_length=jnp.array(150.0),
-        abs_dev=jnp.ones(_N_CTRL),
-        wall_reflection_rate=jnp.array(0.2),
-        sensor_reflection_rate=jnp.array(0.2),
-        wall_fspec=jnp.array(0.55),
-        sensor_fspec=jnp.array(0.90),
-        **{k: jnp.array(v) for k, v in _ANGULAR_REFERENCE.items()},
-        qe=jnp.array(0.2),
-        tts=jnp.array(0.0),
-        qe_dev=jnp.ones(_N_CTRL),
-        qe_corrections=jnp.ones(num_sensors),
-        t0=jnp.zeros(num_sensors),
-    ))
+    return _nest_flat_kwargs(
+        dict(
+            scatter_length=jnp.array(50.0),
+            mie_scatter_length=jnp.array(50.0),
+            g=jnp.array(0.85),
+            rayleigh_dev=jnp.ones(_N_CTRL),
+            mie_dev=jnp.ones(_N_CTRL),
+            absorption_length=jnp.array(150.0),
+            abs_dev=jnp.ones(_N_CTRL),
+            wall_reflection_rate=jnp.array(0.2),
+            sensor_reflection_rate=jnp.array(0.2),
+            wall_fspec=jnp.array(0.55),
+            sensor_fspec=jnp.array(0.90),
+            **{k: jnp.array(v) for k, v in _ANGULAR_REFERENCE.items()},
+            qe=jnp.array(0.2),
+            tts=jnp.array(0.0),
+            qe_dev=jnp.ones(_N_CTRL),
+            qe_corrections=jnp.ones(num_sensors),
+            t0=jnp.zeros(num_sensors),
+        )
+    )

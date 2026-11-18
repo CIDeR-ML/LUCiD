@@ -6,6 +6,7 @@ so the expected value is ``float32(float64(x_mm) / 1000)``. IEEE division of a f
 in float32) is correctly rounded too, so the reader must agree bit for bit; a cm or mm slip, or an
 extra rounding through another unit, fails it.
 """
+
 import numpy as np
 
 from lucid.sources.root_reader import _read_photons_for_event
@@ -23,10 +24,10 @@ class _RawTree:
     """OpticalPhotonsRaw with two chunks of event 0 stored out of order, and one chunk of event 1."""
 
     def __init__(self, chunks):
-        self.chunks = chunks          # list of (event_id, chunk_start, {branch: array})
+        self.chunks = chunks  # list of (event_id, chunk_start, {branch: array})
 
     def __getitem__(self, name):
-        key = {'EventID': 0, 'ChunkStartID': 1}[name]
+        key = {"EventID": 0, "ChunkStartID": 1}[name]
         return _Branch(np.array([c[key] for c in self.chunks]))
 
     def arrays(self, names, entry_start, entry_stop, library):
@@ -35,9 +36,9 @@ class _RawTree:
 
 
 def _chunk(rng, n):
-    pos = rng.uniform(-20_000, 20_000, (3, n)).astype(np.float32)        # mm, a 40 m detector
-    d = {f'PhotonPos{c}': pos[i] for i, c in enumerate('XYZ')}
-    d.update({f'PhotonDir{c}': np.zeros(n, np.float32) for c in 'XYZ'})
+    pos = rng.uniform(-20_000, 20_000, (3, n)).astype(np.float32)  # mm, a 40 m detector
+    d = {f"PhotonPos{c}": pos[i] for i, c in enumerate("XYZ")}
+    d.update({f"PhotonDir{c}": np.zeros(n, np.float32) for c in "XYZ"})
     d.update(PhotonTime=np.zeros(n, np.float32), PhotonWavelength=np.full(n, 400, np.float32))
     return d
 
@@ -49,6 +50,8 @@ def test_positions_are_the_correctly_rounded_metres_in_chunk_order():
 
     pos, _, _, _ = _read_photons_for_event(tree, 0)
 
-    mm = np.stack([np.concatenate([early[f'PhotonPos{c}'], late[f'PhotonPos{c}']]) for c in 'XYZ'], 1)
+    mm = np.stack(
+        [np.concatenate([early[f"PhotonPos{c}"], late[f"PhotonPos{c}"]]) for c in "XYZ"], 1
+    )
     assert pos.dtype == np.float32 and pos.shape == (12, 3)
     np.testing.assert_array_equal(pos, (mm.astype(np.float64) / 1000.0).astype(np.float32))

@@ -1,6 +1,9 @@
 """Shared fixtures for the LUCiD test suite."""
+
 import os
+
 from tests.helpers.paths import REPO
+
 # Force CPU-only BEFORE importing jax. JAX_PLATFORM_NAME alone does NOT stop
 # jaxlib's CUDA plugin from probing the GPU at import: on a node whose NVIDIA
 # UVM driver is wedged or heavily contended (e.g. concurrent GPU jobs), that
@@ -13,12 +16,17 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ["JAX_PLATFORMS"] = "cpu"
 os.environ["JAX_PLATFORM_NAME"] = "cpu"  # back-compat with older jaxlib
 
-import pytest
 import jax
+import pytest
+
 
 def pytest_addoption(parser):
-    parser.addoption("--slow", action="store_true", default=False,
-                     help="Run the slow tests too (detector builds, propagator compiles, simulations)")
+    parser.addoption(
+        "--slow",
+        action="store_true",
+        default=False,
+        help="Run the slow tests too (detector builds, propagator compiles, simulations)",
+    )
 
 
 def pytest_configure(config):
@@ -55,12 +63,12 @@ def pytest_collection_modifyitems(config, items):
     process is pinned to the CPU above, so a ``--slow`` run on a CPU host must not start them.
     ``LUCID_GATE_GPU=1`` is also what unpins their subprocess.
     """
-    if os.environ.get('LUCID_GATE_GPU') == '1':
+    if os.environ.get("LUCID_GATE_GPU") == "1":
         return
-    gpu = [item for item in items if item.get_closest_marker('gpu')]
+    gpu = [item for item in items if item.get_closest_marker("gpu")]
     if gpu:
         config.hook.pytest_deselected(items=gpu)
-        items[:] = [item for item in items if not item.get_closest_marker('gpu')]
+        items[:] = [item for item in items if not item.get_closest_marker("gpu")]
 
 
 # --------------------------------------------------------------------------------------------
@@ -83,29 +91,34 @@ def pytest_collection_modifyitems(config, items):
 def _missing_emitter_files(particle, material, dedx=False):
     from lucid.siren.emitter import emitter_dir
     from lucid.wavelength.medium import load_medium
-    siren_set = load_medium(material).model['siren']
-    files = [emitter_dir(particle, siren_set, kind) / name
-             for kind in (('cherenkov', 'dedx') if dedx else ('cherenkov',))
-             for name in ('emitter.json', 'weights.npz')]
+
+    siren_set = load_medium(material).model["siren"]
+    files = [
+        emitter_dir(particle, siren_set, kind) / name
+        for kind in (("cherenkov", "dedx") if dedx else ("cherenkov",))
+        for name in ("emitter.json", "weights.npz")
+    ]
     return [f for f in files if not f.is_file()]
 
 
 def _missing_data(item):
     """What ``item``'s requires_data / requires_emitter markers name and data/ lacks."""
     from tests.helpers.paths import DATA, REPO
+
     missing = []
-    for mark in item.iter_markers('requires_data'):
+    for mark in item.iter_markers("requires_data"):
         for need in mark.args:
             options = need if isinstance(need, tuple) else (need,)
             if not any((DATA / p).is_file() for p in options):
-                missing.append(' or '.join(f'data/{p}' for p in options))
-    for mark in item.iter_markers('requires_emitter'):
-        missing += [os.path.relpath(f, REPO) for f in _missing_emitter_files(*mark.args,
-                                                                            **mark.kwargs)]
+                missing.append(" or ".join(f"data/{p}" for p in options))
+    for mark in item.iter_markers("requires_emitter"):
+        missing += [
+            os.path.relpath(f, REPO) for f in _missing_emitter_files(*mark.args, **mark.kwargs)
+        ]
     return missing
 
 
-_DATA_SKIPS = {}       # reason -> node ids
+_DATA_SKIPS = {}  # reason -> node ids
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -113,9 +126,9 @@ def pytest_runtest_setup(item):
     missing = _missing_data(item)
     if not missing:
         return
-    reason = f'needs {", ".join(missing)} (python scripts/download_data.py)'
-    if os.environ.get('LUCID_REQUIRE_DATA') == '1':
-        pytest.fail(f'LUCID_REQUIRE_DATA=1 and this test {reason}', pytrace=False)
+    reason = f"needs {', '.join(missing)} (python scripts/download_data.py)"
+    if os.environ.get("LUCID_REQUIRE_DATA") == "1":
+        pytest.fail(f"LUCID_REQUIRE_DATA=1 and this test {reason}", pytrace=False)
     _DATA_SKIPS.setdefault(reason, []).append(item.nodeid)
     pytest.skip(reason)
 
@@ -125,24 +138,29 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     # Reported first and unconditionally: a green count is misleading in proportion to what it
     # left out.
     if _DESELECTED:
-        w.write_sep('=', f'{len(_DESELECTED)} test(s) DESELECTED — --slow adds the slow ones, '
-                         'LUCID_GATE_GPU=1 the gpu ones', yellow=True, bold=True)
+        w.write_sep(
+            "=",
+            f"{len(_DESELECTED)} test(s) DESELECTED — --slow adds the slow ones, "
+            "LUCID_GATE_GPU=1 the gpu ones",
+            yellow=True,
+            bold=True,
+        )
         for name in sorted({item.location[0] for item in _DESELECTED}):
-            w.write_line(f'  {name}')
-        w.write_line('  These did NOT run. A green suite here does not cover them.')
+            w.write_line(f"  {name}")
+        w.write_line("  These did NOT run. A green suite here does not cover them.")
     if not _DATA_SKIPS:
         return
     n = sum(len(v) for v in _DATA_SKIPS.values())
-    w.write_sep('=', f'{n} test(s) SKIPPED because data is missing', red=True, bold=True)
+    w.write_sep("=", f"{n} test(s) SKIPPED because data is missing", red=True, bold=True)
     for reason, nodes in sorted(_DATA_SKIPS.items()):
-        w.write_line(f'  {len(nodes)} test(s): {reason}')
+        w.write_line(f"  {len(nodes)} test(s): {reason}")
         for nid in nodes[:3]:
-            w.write_line(f'      {nid}')
+            w.write_line(f"      {nid}")
         if len(nodes) > 3:
-            w.write_line(f'      ... and {len(nodes) - 3} more')
-    w.write_line('')
-    w.write_line('  These did NOT run. A green suite here does not cover them.')
-    w.write_line('  Set LUCID_REQUIRE_DATA=1 to make missing data a FAILURE instead.')
+            w.write_line(f"      ... and {len(nodes) - 3} more")
+    w.write_line("")
+    w.write_line("  These did NOT run. A green suite here does not cover them.")
+    w.write_line("  Set LUCID_REQUIRE_DATA=1 to make missing data a FAILURE instead.")
 
 
 @pytest.fixture(scope="session")
@@ -157,8 +175,7 @@ def small_cylinder_config():
     algorithmic placement). The real-WCTE config (``WCTE_geom_config``)
     loads measured PMT positions from a separate npz file and is not
     suitable as a generic cylinder fixture."""
-    return os.path.join(str(REPO),
-                        "config", "WCTE_like_geom_config.json")
+    return os.path.join(str(REPO), "config", "WCTE_like_geom_config.json")
 
 
 # --------------------------------------------------------------------------------------------
@@ -170,4 +187,5 @@ def small_cylinder_config():
 def tiny_sim():
     """Calibration source, expected-value transport, one step."""
     from tests.helpers import tiny
+
     return tiny.simulator()

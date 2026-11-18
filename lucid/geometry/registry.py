@@ -27,7 +27,8 @@ def register_detector(name):
         if key in _REGISTRY:
             raise ValueError(
                 f"Detector '{key}' already registered as {_REGISTRY[key].__name__}, "
-                f"cannot re-register as {cls.__name__}")
+                f"cannot re-register as {cls.__name__}"
+            )
         _REGISTRY[key] = cls
         return cls
 
@@ -55,8 +56,5 @@ def get_detector_class(name):
     key = name.lower()
     if key not in _REGISTRY:
         available = ", ".join(sorted(_REGISTRY.keys()))
-        raise ValueError(
-            f"Unknown detector type '{name}'. Available: {available}")
+        raise ValueError(f"Unknown detector type '{name}'. Available: {available}")
     return _REGISTRY[key]
-
-

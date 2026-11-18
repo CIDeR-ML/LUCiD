@@ -12,6 +12,7 @@ References for the absolute values pinned here:
 - Henyey-Greenstein: p(mu) = (1-g^2) / (2 (1+g^2-2g mu)^{3/2}), CDF
   F(mu) = (1-g^2)/(2g) [(1+g^2-2g mu)^{-1/2} - (1+g)^{-1}], E[mu] = g, E[mu^2] = (1+2g^2)/3.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -20,16 +21,18 @@ import pytest
 
 from lucid.wavelength.medium import make_medium
 from lucid.wavelength.optical_model import evaluate_optical_model
-from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
 from lucid.wavelength.scattering import (
-    hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf, compute_mie_scatter_direction,
+    compute_mie_scatter_direction,
+    hg_logpdf,
+    hg_sample_cos_theta,
+    rayleigh_logpdf,
 )
-
+from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
 from tests.helpers.params import lab_dp
 from tests.helpers.stats import ks_distance
 
-SK_P4, SK_P5 = 8.51e7, 1.14e5          # SK paper Table 3 (symmetric scattering)
-SK_P0, SK_P1, SK_P2, SK_P3 = 0.624, 2.96e7, 3.24e-2, 10.9   # SK paper Table 3 (absorption)
+SK_P4, SK_P5 = 8.51e7, 1.14e5  # SK paper Table 3 (symmetric scattering)
+SK_P0, SK_P1, SK_P2, SK_P3 = 0.624, 2.96e7, 3.24e-2, 10.9  # SK paper Table 3 (absorption)
 # Pope & Fry (1997) Table 3, pure-water absorption coefficient a(lambda), 1/m.
 POPE_FRY_M_INV = {500.0: 0.0204, 550.0: 0.0565, 600.0: 0.2224, 650.0: 0.3400, 700.0: 0.6240}
 
@@ -146,6 +149,7 @@ class TestHGPhaseFunctionPhysics:
 
         def F(m):
             return (1 - g * g) / (2 * g) * ((1 + g * g - 2 * g * m) ** -0.5 - 1 / (1 + g))
+
         assert ks_distance(mu, F) < 0.0044
 
     def test_near_isotropic_at_small_g(self):
@@ -161,6 +165,7 @@ class TestHGPhaseFunctionPhysics:
         """exp(hg_logpdf) integrates to 1 over mu in [-1, 1] and equals dF/dmu of the
         closed-form CDF, so the DiCE score is the density the sampler draws from."""
         from scipy.integrate import trapezoid
+
         mu = np.linspace(-1.0, 1.0, 200001)
         p = np.exp(np.asarray(hg_logpdf(jnp.asarray(mu), g), np.float64))
         npt.assert_allclose(trapezoid(p, mu), 1.0, rtol=1e-4)
@@ -169,9 +174,11 @@ class TestHGPhaseFunctionPhysics:
 
     def test_rayleigh_logpdf_is_normalised(self):
         from scipy.integrate import trapezoid
+
         mu = np.linspace(-1.0, 1.0, 20001)
-        npt.assert_allclose(trapezoid(np.exp(np.asarray(rayleigh_logpdf(jnp.asarray(mu)))), mu),
-                            1.0, rtol=1e-5)
+        npt.assert_allclose(
+            trapezoid(np.exp(np.asarray(rayleigh_logpdf(jnp.asarray(mu)))), mu), 1.0, rtol=1e-5
+        )
 
     def test_differentiable_wrt_g(self):
         """d E[mu]/dg = 1 (E[mu] = g), through the reparameterised sampler."""
@@ -179,6 +186,7 @@ class TestHGPhaseFunctionPhysics:
 
         def mean_cos(g):
             return jnp.mean(jax.vmap(hg_sample_cos_theta, in_axes=(0, None))(u, g))
+
         npt.assert_allclose(float(jax.grad(mean_cos)(0.5)), 1.0, atol=5e-3)
 
 
@@ -190,11 +198,17 @@ class TestMieScatterDirection:
         g = 0.8
         inc = np.array([1.0, 2.0, -2.0]) / 3.0
         keys = jax.random.split(jax.random.PRNGKey(0), 200_000)
-        d = np.asarray(jax.jit(jax.vmap(
-            lambda k: compute_mie_scatter_direction(jnp.asarray(inc), k, g)))(keys), np.float64)
+        d = np.asarray(
+            jax.jit(jax.vmap(lambda k: compute_mie_scatter_direction(jnp.asarray(inc), k, g)))(
+                keys
+            ),
+            np.float64,
+        )
         npt.assert_allclose(np.linalg.norm(d, axis=1), 1.0, atol=1e-5)
         npt.assert_allclose(d.mean(axis=0), g * inc, atol=6e-3)
         m2 = (1 + 2 * g * g) / 3
-        npt.assert_allclose(d.T @ d / len(d),
-                            (1 - m2) / 2 * np.eye(3) + (3 * m2 - 1) / 2 * np.outer(inc, inc),
-                            atol=6e-3)
+        npt.assert_allclose(
+            d.T @ d / len(d),
+            (1 - m2) / 2 * np.eye(3) + (3 * m2 - 1) / 2 * np.outer(inc, inc),
+            atol=6e-3,
+        )

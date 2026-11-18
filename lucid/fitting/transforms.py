@@ -29,13 +29,19 @@ perturbs it by ~1e-2 by construction. Gated by ``tests/fitting/test_float32_is_a
 
 This module does not carry the iterate; the loop does (see ``minimize.py``).
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 
-__all__ = ['damped_matrix', 'scale_by_damped_gauss_newton', 'damped_gauss_newton',
-           'scale_by_driver_schedule', 'annealed_learning_rate']
+__all__ = [
+    "damped_matrix",
+    "scale_by_damped_gauss_newton",
+    "damped_gauss_newton",
+    "scale_by_driver_schedule",
+    "annealed_learning_rate",
+]
 
 
 def damped_matrix(H, *, lam, mu, jitter=0.0, rel_cutoff=1e-12):
@@ -79,6 +85,7 @@ def scale_by_damped_gauss_newton(lam, mu, jitter=0.0, rel_cutoff=1e-12):
     metric, so there is no moment buffer to corrupt — which is also why it needs no equivalent of
     the state save/restore that a momentum method requires when the driver rejects a step.
     """
+
     def init_fn(params):
         del params
         return optax.EmptyState()
@@ -87,16 +94,14 @@ def scale_by_damped_gauss_newton(lam, mu, jitter=0.0, rel_cutoff=1e-12):
         del params, extra
         if metric is None:
             raise ValueError(
-                'scale_by_damped_gauss_newton needs the metric: call '
-                'opt.update(g, state, params, metric=H). It is passed per step rather than '
-                'held in state because its refresh cadence is the problem\'s policy.')
-        A = damped_matrix(jnp.asarray(metric), lam=lam, mu=mu,
-                          jitter=jitter, rel_cutoff=rel_cutoff)
+                "scale_by_damped_gauss_newton needs the metric: call "
+                "opt.update(g, state, params, metric=H). It is passed per step rather than "
+                "held in state because its refresh cadence is the problem's policy."
+            )
+        A = damped_matrix(jnp.asarray(metric), lam=lam, mu=mu, jitter=jitter, rel_cutoff=rel_cutoff)
         return jnp.linalg.solve(A, jnp.asarray(updates)), state
 
     return optax.GradientTransformationExtraArgs(init_fn, update_fn)
-
-
 
 
 def damped_gauss_newton(lam, mu, learning_rate=1.0, jitter=0.0, rel_cutoff=1e-12):
@@ -142,15 +147,16 @@ def scale_by_driver_schedule(schedule):
     Falls back to an internal counter when no ``iteration`` is supplied, so it still composes with
     a plain optax driver that knows nothing about this convention.
     """
+
     def init_fn(params):
         del params
-        return {'count': np.zeros((), dtype=np.int64)}
+        return {"count": np.zeros((), dtype=np.int64)}
 
     def update_fn(updates, state, params=None, *, iteration=None, **extra):
         del params, extra
-        step = int(state['count']) if iteration is None else int(iteration)
+        step = int(state["count"]) if iteration is None else int(iteration)
         s = float(schedule(step))
-        return jax.tree_util.tree_map(lambda u: u * s, updates), {'count': state['count'] + 1}
+        return jax.tree_util.tree_map(lambda u: u * s, updates), {"count": state["count"] + 1}
 
     return optax.GradientTransformationExtraArgs(init_fn, update_fn)
 
@@ -170,5 +176,6 @@ def annealed_learning_rate(lr, lr_final, steps):
     """
     if lr_final is None:
         return lambda _step: lr
-    return optax.linear_schedule(init_value=lr, end_value=lr_final,
-                                 transition_steps=max(1, steps - 1))
+    return optax.linear_schedule(
+        init_value=lr, end_value=lr_final, transition_steps=max(1, steps - 1)
+    )

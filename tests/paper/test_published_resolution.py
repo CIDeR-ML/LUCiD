@@ -31,6 +31,7 @@ it sees the GPU (and the CPU backend the sensor map is built on). Without ``LUCI
 the ``gpu`` marker deselects this file (``tests/conftest.py``). Needs the trained SIREN emitter
 and the 100-event ROOT under the gitignored `data/`; skips without them.
 """
+
 import json
 import os
 import subprocess
@@ -43,22 +44,26 @@ from lucid.fitting import bootstrap
 from tests.helpers.paths import DATA, REPO
 
 # 20 events: the lucid-data 5-event slice does not serve it, only the 100-event file.
-_ROOT_REL = 'water/muon/1000MeV_100events.root'
+_ROOT_REL = "water/muon/1000MeV_100events.root"
 _ROOT = DATA / _ROOT_REL
 
-pytestmark = [pytest.mark.slow, pytest.mark.gpu, pytest.mark.requires_emitter('muon', 'water'),
-              pytest.mark.requires_data(_ROOT_REL)]
-N_EVENTS = int(os.environ.get('LUCID_GATE_EVENTS', '20'))
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.gpu,
+    pytest.mark.requires_emitter("muon", "water"),
+    pytest.mark.requires_data(_ROOT_REL),
+]
+N_EVENTS = int(os.environ.get("LUCID_GATE_EVENTS", "20"))
 
 # (name, reference value, reference error or None, statistic of the per-event errors)
 REFERENCE = {
-    'vertex_median_cm': (13.8, 0.9),
-    'vertex_p68_cm': (17.4, 1.3),
-    'direction_median_deg': (0.80, None),
-    'abs_dE_median_MeV': (10.7, None),
-    'abs_dt0_median_ns': (0.28, None),
+    "vertex_median_cm": (13.8, 0.9),
+    "vertex_p68_cm": (17.4, 1.3),
+    "direction_median_deg": (0.80, None),
+    "abs_dE_median_MeV": (10.7, None),
+    "abs_dt0_median_ns": (0.28, None),
 }
-_REL_ERR_UNQUOTED = 0.9 / 13.8          # the vertex median's relative error at 100 events
+_REL_ERR_UNQUOTED = 0.9 / 13.8  # the vertex median's relative error at 100 events
 
 _RUNNER = """
 import json, sys
@@ -70,46 +75,52 @@ run_local(cfg, sys.argv[2], events=json.loads(sys.argv[3]), verbose=True)
 
 def published_config(n_events):
     from analysis.paper.utils import studies
-    cfg = studies.named_config('nrays_mu_250k', n_events)
-    cfg['root_file'] = str(_ROOT)
-    cfg['name'] = 'recon_resolution_gate'
+
+    cfg = studies.named_config("nrays_mu_250k", n_events)
+    cfg["root_file"] = str(_ROOT)
+    cfg["name"] = "recon_resolution_gate"
     return cfg
 
 
 def _stats(fe):
     """The five gate statistics from the (N, 4) fit_err array [vtx cm, dir deg, dE MeV, dt0 ns]."""
     return {
-        'vertex_median_cm': np.median(fe[:, 0]),
-        'vertex_p68_cm': np.percentile(fe[:, 0], 68),
-        'direction_median_deg': np.median(fe[:, 1]),
-        'abs_dE_median_MeV': np.median(np.abs(fe[:, 2])),
-        'abs_dt0_median_ns': np.median(np.abs(fe[:, 3])),
+        "vertex_median_cm": np.median(fe[:, 0]),
+        "vertex_p68_cm": np.percentile(fe[:, 0], 68),
+        "direction_median_deg": np.median(fe[:, 1]),
+        "abs_dE_median_MeV": np.median(np.abs(fe[:, 2])),
+        "abs_dt0_median_ns": np.median(np.abs(fe[:, 3])),
     }
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def fit_errors(tmp_path_factory):
     import h5py
-    out = tmp_path_factory.mktemp('recon_gate')
-    cfg_path = out / 'cfg.json'
+
+    out = tmp_path_factory.mktemp("recon_gate")
+    cfg_path = out / "cfg.json"
     cfg_path.write_text(json.dumps(published_config(N_EVENTS)))
     env = dict(os.environ, PYTHONPATH=str(REPO))
-    if os.environ.get('LUCID_GATE_GPU') == '1':
+    if os.environ.get("LUCID_GATE_GPU") == "1":
         # Unpin rather than pin to cuda: the sensor map is built on the CPU backend
         # (propagation/cylinder.py), so the subprocess needs both, as in a production run.
-        env.pop('JAX_PLATFORMS', None)
-        env.pop('JAX_PLATFORM_NAME', None)
-        if env.get('CUDA_VISIBLE_DEVICES', '') == '':
-            env.pop('CUDA_VISIBLE_DEVICES', None)
-    subprocess.run([sys.executable, '-c', _RUNNER, str(cfg_path), str(out),
-                    json.dumps(list(range(N_EVENTS)))], cwd=REPO, env=env, check=True)
-    with h5py.File(out / 'recon_resolution_gate.h5', 'r') as h5:
-        fe = np.stack([np.asarray(h5['events'][k]['fit_err']) for k in sorted(h5['events'])])
+        env.pop("JAX_PLATFORMS", None)
+        env.pop("JAX_PLATFORM_NAME", None)
+        if env.get("CUDA_VISIBLE_DEVICES", "") == "":
+            env.pop("CUDA_VISIBLE_DEVICES", None)
+    subprocess.run(
+        [sys.executable, "-c", _RUNNER, str(cfg_path), str(out), json.dumps(list(range(N_EVENTS)))],
+        cwd=REPO,
+        env=env,
+        check=True,
+    )
+    with h5py.File(out / "recon_resolution_gate.h5", "r") as h5:
+        fe = np.stack([np.asarray(h5["events"][k]["fit_err"]) for k in sorted(h5["events"])])
     assert fe.shape == (N_EVENTS, 4) and np.isfinite(fe).all()
     return fe
 
 
-@pytest.mark.parametrize('name', list(REFERENCE))
+@pytest.mark.parametrize("name", list(REFERENCE))
 def test_resolution_matches_the_published_measurement(fit_errors, name):
     ref, ref_err = REFERENCE[name]
     if ref_err is None:
@@ -118,5 +129,6 @@ def test_resolution_matches_the_published_measurement(fit_errors, name):
     s_n = float(bootstrap(fit_errors, lambda fe: _stats(fe)[name], n_boot=2000, seed=0).std())
     band = 3.0 * np.hypot(s_n, ref_err)
     assert abs(got - ref) < band, (
-        f'{name}: {got:.3g} over {len(fit_errors)} events vs the published {ref:.3g} '
-        f'(band +-{band:.3g}: gate bootstrap {s_n:.3g}, reference {ref_err:.3g})')
+        f"{name}: {got:.3g} over {len(fit_errors)} events vs the published {ref:.3g} "
+        f"(band +-{band:.3g}: gate bootstrap {s_n:.3g}, reference {ref_err:.3g})"
+    )

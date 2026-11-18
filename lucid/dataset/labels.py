@@ -17,6 +17,7 @@ owns what, and what is contained.
 
 The viewer and ``lucid.production.derived_views`` read the ``CAT_*`` codes back.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -27,7 +28,11 @@ import numpy as np
 from lucid.pdg import PDG_MASS_MEV
 
 __all__ = [
-    "CAT_NONE", "CAT_PRIMARY", "CAT_DECAY_ELECTRON", "CAT_SECONDARY_PION", "CAT_GAMMA",
+    "CAT_NONE",
+    "CAT_PRIMARY",
+    "CAT_DECAY_ELECTRON",
+    "CAT_SECONDARY_PION",
+    "CAT_GAMMA",
     "TrackEntry",
     "CategorizationResult",
     "categorize_event",
@@ -44,11 +49,11 @@ __all__ = [
 
 # ---- Decision-tree constants (exact mirror of SteppingAction.cc) ----
 
-CAT_NONE = -1            # not yet categorized / never categorized
-CAT_PRIMARY = 0          # kPrimary
-CAT_DECAY_ELECTRON = 1   # kDecayElectron
-CAT_SECONDARY_PION = 2   # kSecondaryPion
-CAT_GAMMA = 3            # kGamma
+CAT_NONE = -1  # not yet categorized / never categorized
+CAT_PRIMARY = 0  # kPrimary
+CAT_DECAY_ELECTRON = 1  # kDecayElectron
+CAT_SECONDARY_PION = 2  # kSecondaryPion
+CAT_GAMMA = 3  # kGamma
 
 DECAY_PROCESSES = ("Decay", "muMinusCaptureAtRest")
 INELASTIC_KEY = "Inelastic"
@@ -69,10 +74,14 @@ M_PI_CHARGED_MEV = PDG_MASS_MEV[211]
 # branches on G4 particle names, so we recover them from PDG codes
 # for the species that matter to the categorizer.
 _PDG_TO_NAME = {
-    11: "e-", -11: "e+",
-    13: "mu-", -13: "mu+",
+    11: "e-",
+    -11: "e+",
+    13: "mu-",
+    -13: "mu+",
     22: "gamma",
-    111: "pi0", 211: "pi+", -211: "pi-",
+    111: "pi0",
+    211: "pi+",
+    -211: "pi-",
 }
 
 
@@ -91,11 +100,12 @@ class TrackEntry:
     preserved verbatim downstream by the existing reader and are not
     needed here.
     """
+
     track_id: int
     parent_id: int
     pdg: int
-    ke_mev: float                 # TrackInfo_Energy
-    creator_process: str          # TrackInfo_CreatorProcess (Stage 1)
+    ke_mev: float  # TrackInfo_Energy
+    creator_process: str  # TrackInfo_CreatorProcess (Stage 1)
     # filled by the categorizer
     category: int = CAT_NONE
     sub_id: int = -1
@@ -105,6 +115,7 @@ class TrackEntry:
 class CategorizationResult:
     """Output of ``categorize_event`` — covers everything the legacy
     ROOT branches expressed."""
+
     # category per track_id (in arbitrary order). The legacy
     # ``TrackInfo_Category`` array has the same values keyed by the
     # tracksToStore set (categorized + their direct parents), which is
@@ -243,9 +254,11 @@ def categorize_event(
             # apply below MUST use this same overridden chain.
             cat_parent = t.parent_id
             cat_parent_info = by_id.get(cat_parent)
-            while (cat_parent_info is not None
-                   and cat_parent_info.category < 0
-                   and cat_parent_info.parent_id > 0):
+            while (
+                cat_parent_info is not None
+                and cat_parent_info.category < 0
+                and cat_parent_info.parent_id > 0
+            ):
                 cat_parent = cat_parent_info.parent_id
                 cat_parent_info = by_id.get(cat_parent)
             t.parent_id = cat_parent  # overwrite (mirrors C++ UpdateTrackCategory)
@@ -329,7 +342,9 @@ def categorize_event(
     rows.sort(key=lambda r: r[0])
     sorted_lookup = {row[0]: new_idx for new_idx, row in enumerate(rows)}
     particle_idx_by_mtrack = {
-        mt_id: (sorted_lookup[_walk_compressed(mt_id)] if particle_idx_by_mtrack[mt_id] >= 0 else -1)
+        mt_id: (
+            sorted_lookup[_walk_compressed(mt_id)] if particle_idx_by_mtrack[mt_id] >= 0 else -1
+        )
         for mt_id in particle_idx_by_mtrack
     }
 
@@ -396,8 +411,7 @@ def derive_meaningful_tracks(
     # with ``first_idx`` already in monotonic order — exactly the group
     # boundaries ``np.add.reduceat`` consumes. One vectorized pass over
     # ``seg_nch`` instead of one (n_seg,) bool-mask + sum per unique id.
-    unique_tids, first_idx, counts = np.unique(
-        seg_tid, return_index=True, return_counts=True)
+    unique_tids, first_idx, counts = np.unique(seg_tid, return_index=True, return_counts=True)
     cher_sums = np.add.reduceat(seg_nch, first_idx)
     cher_sum_per_track: Dict[int, int] = {
         int(tid): int(s) for tid, s in zip(unique_tids.tolist(), cher_sums.tolist())
@@ -417,7 +431,7 @@ def derive_meaningful_tracks(
             ti = track_info.get(cur)
             if ti is None:
                 break
-            par = int(ti.get('parent_id', 0))
+            par = int(ti.get("parent_id", 0))
             if par <= 0:
                 break
             if par in meaningful_ids:
@@ -440,13 +454,13 @@ def derive_meaningful_tracks(
             continue
         ti = track_info.get(tid_int, {})
         result[tid_int] = {
-            'track_id': tid_int,
-            'parent_id': int(ti.get('parent_id', 0)),
-            'pdg': int(ti.get('pdg', 0)),
-            'initial_energy': float(ti.get('energy', 0.0)),
-            'n_cherenkov': cher_sum_per_track[tid_int],
-            'segment_offset': cumulative_offset,
-            'n_segments': n_seg,
+            "track_id": tid_int,
+            "parent_id": int(ti.get("parent_id", 0)),
+            "pdg": int(ti.get("pdg", 0)),
+            "initial_energy": float(ti.get("energy", 0.0)),
+            "n_cherenkov": cher_sum_per_track[tid_int],
+            "segment_offset": cumulative_offset,
+            "n_segments": n_seg,
         }
         cumulative_offset += n_seg
     return result
@@ -487,8 +501,10 @@ def filter_segments_to_meaningful(
     """
     seg_tid = np.asarray(segment_track_id, dtype=np.int64)
     if seg_tid.size == 0:
-        return (np.array([], dtype=bool),
-                None if photon_segment_index is None else np.array([], dtype=np.int32))
+        return (
+            np.array([], dtype=bool),
+            None if photon_segment_index is None else np.array([], dtype=np.int32),
+        )
 
     keep_mask = np.zeros(seg_tid.size, dtype=bool)
     if meaningful_tracks:
@@ -557,10 +573,10 @@ def bucket_photons_by_segment(
 # ---- Segment grouping ----
 
 # Mirror of DataManager.cc:444-447. Names match the C++ locals.
-MIN_SEGMENT_LENGTH_MM = 10.0           # save when running merged length ≥ this
-MAX_ANGLE_FOR_MERGE_RAD = 2.0 * np.pi / 180.0   # 2 degrees, save when angle > this
-LOW_ENERGY_THRESHOLD_MEV = 10.0        # tracks below this use edep-based merging
-MIN_EDEP_FOR_LOW_ENERGY_MEV = 1.0      # save once accumulated edep ≥ this
+MIN_SEGMENT_LENGTH_MM = 10.0  # save when running merged length ≥ this
+MAX_ANGLE_FOR_MERGE_RAD = 2.0 * np.pi / 180.0  # 2 degrees, save when angle > this
+LOW_ENERGY_THRESHOLD_MEV = 10.0  # tracks below this use edep-based merging
+MIN_EDEP_FOR_LOW_ENERGY_MEV = 1.0  # save once accumulated edep ≥ this
 
 
 def assign_group_ids(
@@ -622,13 +638,13 @@ def assign_group_ids(
     next_group = 0
 
     for t_info in meaningful_tracks.values():
-        offset = int(t_info['segment_offset'])
-        n_seg = int(t_info['n_segments'])
+        offset = int(t_info["segment_offset"])
+        n_seg = int(t_info["n_segments"])
         if n_seg <= 0:
             continue
 
-        pdg = int(t_info['pdg'])
-        initial_energy_mev = float(t_info['initial_energy'])
+        pdg = int(t_info["pdg"])
+        initial_energy_mev = float(t_info["initial_energy"])
         is_low_energy = initial_energy_mev < LOW_ENERGY_THRESHOLD_MEV
         is_electron = abs(pdg) == 11
         use_edep_merging = is_low_energy or is_electron
@@ -715,6 +731,7 @@ def assign_group_ids(
 
 # ---- Ownership ----
 
+
 def derive_particle_idx_per_track(event_dict):
     """Map each meaningful track to the local index of its owning particle.
 
@@ -726,18 +743,18 @@ def derive_particle_idx_per_track(event_dict):
     -------
     np.ndarray (int32) shape (n_tracks,)
     """
-    tracks = event_dict.get('meaningful_tracks', {})
-    particles = event_dict.get('particles', [])
+    tracks = event_dict.get("meaningful_tracks", {})
+    particles = event_dict.get("particles", [])
 
     id_to_idx = {}
     for i, particle in enumerate(particles):
-        gen = particle.get('genealogy') or []
+        gen = particle.get("genealogy") or []
         if gen:
             id_to_idx[int(gen[-1])] = i
 
     out = np.full(len(tracks), -1, dtype=np.int32)
     for row, tinfo in enumerate(tracks.values()):
-        cur = int(tinfo['track_id'])
+        cur = int(tinfo["track_id"])
         visited = set()
         while cur > 0 and cur not in visited:
             visited.add(cur)
@@ -747,7 +764,7 @@ def derive_particle_idx_per_track(event_dict):
             parent = tracks.get(cur)
             if parent is None:
                 break
-            cur = int(parent['parent_id'])
+            cur = int(parent["parent_id"])
     return out
 
 
@@ -773,12 +790,12 @@ def derive_track_ancestor_and_interaction(event_dict):
     (ancestor, interaction) : tuple of np.ndarray (int32, int32)
         Both shape ``(n_tracks,)``.
     """
-    tracks = event_dict.get('meaningful_tracks', {})
+    tracks = event_dict.get("meaningful_tracks", {})
     if not tracks:
         empty = np.array([], dtype=np.int32)
         return empty, empty.copy()
 
-    parent_of = {int(tid): int(t['parent_id']) for tid, t in tracks.items()}
+    parent_of = {int(tid): int(t["parent_id"]) for tid, t in tracks.items()}
 
     def walk_to_root(tid):
         cur = tid
@@ -792,12 +809,11 @@ def derive_track_ancestor_and_interaction(event_dict):
         return cur
 
     ancestors = np.array(
-        [walk_to_root(int(t['track_id'])) for t in tracks.values()],
-        dtype=np.int32)
+        [walk_to_root(int(t["track_id"])) for t in tracks.values()], dtype=np.int32
+    )
 
-    primary_to_interaction = event_dict['primary_to_interaction']
-    interaction = np.array([int(primary_to_interaction[int(a)]) for a in ancestors],
-                           dtype=np.int32)
+    primary_to_interaction = event_dict["primary_to_interaction"]
+    interaction = np.array([int(primary_to_interaction[int(a)]) for a in ancestors], dtype=np.int32)
     return ancestors, interaction
 
 
@@ -817,8 +833,8 @@ def derive_particle_interaction_idx(event_dict, track_interaction=None):
         Cached output of ``derive_track_ancestor_and_interaction``; if
         None, recomputed.
     """
-    tracks = event_dict.get('meaningful_tracks', {})
-    particles = event_dict.get('particles', [])
+    tracks = event_dict.get("meaningful_tracks", {})
+    particles = event_dict.get("particles", [])
     if not particles:
         return np.array([], dtype=np.int32)
     if not tracks:
@@ -826,18 +842,18 @@ def derive_particle_interaction_idx(event_dict, track_interaction=None):
     if track_interaction is None:
         _, track_interaction = derive_track_ancestor_and_interaction(event_dict)
     tid_to_interaction = {
-        int(tid): int(track_interaction[i])
-        for i, tid in enumerate(tracks.keys())
+        int(tid): int(track_interaction[i]) for i, tid in enumerate(tracks.keys())
     }
     out = np.full(len(particles), -1, dtype=np.int32)
     for i, particle in enumerate(particles):
-        gen = particle.get('genealogy') or []
+        gen = particle.get("genealogy") or []
         if gen:
             out[i] = tid_to_interaction.get(int(gen[-1]), -1)
     return out
 
 
 # ---- Containment ----
+
 
 def compute_containment(event_dict, detector_bounds):
     """Geometric containment flags at per-segment / particle / interaction / event level.
@@ -877,13 +893,13 @@ def compute_containment(event_dict, detector_bounds):
         'per_interaction' : bool (n_interactions,)
         'overall'         : bool scalar
     """
-    particles = event_dict.get('particles') or []
-    meaningful_tracks = event_dict.get('meaningful_tracks') or {}
-    segments = event_dict.get('segments') or {}
-    interactions = event_dict.get('interaction_metadata') or []
+    particles = event_dict.get("particles") or []
+    meaningful_tracks = event_dict.get("meaningful_tracks") or {}
+    segments = event_dict.get("segments") or {}
+    interactions = event_dict.get("interaction_metadata") or []
     n_particles = len(particles)
     n_interactions = len(interactions)
-    n_segments = int(segments.get('n_segments', 0))
+    n_segments = int(segments.get("n_segments", 0))
 
     per_segment_arr = np.zeros(n_segments, dtype=bool)
     per_particle_arr = np.zeros(n_particles, dtype=bool)
@@ -891,35 +907,37 @@ def compute_containment(event_dict, detector_bounds):
     overall = np.bool_(False)
 
     if detector_bounds is None:
-        return {'per_segment':     per_segment_arr,
-                'per_particle':    per_particle_arr,
-                'per_interaction': per_interaction_arr,
-                'overall':         overall}
+        return {
+            "per_segment": per_segment_arr,
+            "per_particle": per_particle_arr,
+            "per_interaction": per_interaction_arr,
+            "overall": overall,
+        }
 
     # Inside test on both endpoints. AND over (start_inside, end_inside).
     if n_segments > 0:
-        sx = np.asarray(segments['start_x'], dtype=np.float64)
-        sy = np.asarray(segments['start_y'], dtype=np.float64)
-        sz = np.asarray(segments['start_z'], dtype=np.float64)
-        ex = np.asarray(segments['end_x'], dtype=np.float64)
-        ey = np.asarray(segments['end_y'], dtype=np.float64)
-        ez = np.asarray(segments['end_z'], dtype=np.float64)
-        kind = detector_bounds['type']
-        if kind == 'cylinder':
-            R = float(detector_bounds['radius'])
-            HZ = float(detector_bounds['height']) / 2.0
+        sx = np.asarray(segments["start_x"], dtype=np.float64)
+        sy = np.asarray(segments["start_y"], dtype=np.float64)
+        sz = np.asarray(segments["start_z"], dtype=np.float64)
+        ex = np.asarray(segments["end_x"], dtype=np.float64)
+        ey = np.asarray(segments["end_y"], dtype=np.float64)
+        ez = np.asarray(segments["end_z"], dtype=np.float64)
+        kind = detector_bounds["type"]
+        if kind == "cylinder":
+            R = float(detector_bounds["radius"])
+            HZ = float(detector_bounds["height"]) / 2.0
             start_in = (np.sqrt(sx * sx + sy * sy) <= R) & (np.abs(sz) <= HZ)
-            end_in   = (np.sqrt(ex * ex + ey * ey) <= R) & (np.abs(ez) <= HZ)
-        elif kind == 'sphere':
-            R = float(detector_bounds['radius'])
+            end_in = (np.sqrt(ex * ex + ey * ey) <= R) & (np.abs(ez) <= HZ)
+        elif kind == "sphere":
+            R = float(detector_bounds["radius"])
             start_in = np.sqrt(sx * sx + sy * sy + sz * sz) <= R
-            end_in   = np.sqrt(ex * ex + ey * ey + ez * ez) <= R
-        elif kind == 'box':
-            HL = float(detector_bounds['length']) / 2.0
-            HW = float(detector_bounds['width'])  / 2.0
-            HH = float(detector_bounds['height']) / 2.0
+            end_in = np.sqrt(ex * ex + ey * ey + ez * ez) <= R
+        elif kind == "box":
+            HL = float(detector_bounds["length"]) / 2.0
+            HW = float(detector_bounds["width"]) / 2.0
+            HH = float(detector_bounds["height"]) / 2.0
             start_in = (np.abs(sx) <= HL) & (np.abs(sy) <= HW) & (np.abs(sz) <= HH)
-            end_in   = (np.abs(ex) <= HL) & (np.abs(ey) <= HW) & (np.abs(ez) <= HH)
+            end_in = (np.abs(ex) <= HL) & (np.abs(ey) <= HW) & (np.abs(ez) <= HH)
         else:
             raise ValueError(f"Unknown detector_bounds type: {kind!r}")
         per_segment_arr = (start_in & end_in).astype(bool)
@@ -934,15 +952,19 @@ def compute_containment(event_dict, detector_bounds):
     if n_tracks == 0:
         per_particle_arr = np.zeros(n_particles, dtype=bool)
     else:
-        track_ids_np   = np.fromiter(
-            (int(tid) for tid in meaningful_tracks.keys()),
-            dtype=np.int64, count=n_tracks)
+        track_ids_np = np.fromiter(
+            (int(tid) for tid in meaningful_tracks.keys()), dtype=np.int64, count=n_tracks
+        )
         n_seg_per_track = np.fromiter(
-            (int(t.get('n_segments', 0)) for t in meaningful_tracks.values()),
-            dtype=np.int64, count=n_tracks)
+            (int(t.get("n_segments", 0)) for t in meaningful_tracks.values()),
+            dtype=np.int64,
+            count=n_tracks,
+        )
         parent_per_track = np.fromiter(
-            (int(t['parent_id']) for t in meaningful_tracks.values()),
-            dtype=np.int64, count=n_tracks)
+            (int(t["parent_id"]) for t in meaningful_tracks.values()),
+            dtype=np.int64,
+            count=n_tracks,
+        )
 
         # Reverse map track_id -> local idx in O(n).
         tid_to_local = {int(tid): i for i, tid in enumerate(track_ids_np.tolist())}
@@ -960,7 +982,7 @@ def compute_containment(event_dict, detector_bounds):
         # segment positions is order-independent (idempotent).
         seg_contained_per_track_np = np.ones(n_tracks, dtype=bool)
         if seg_idx_per_seg.size > 0:
-            false_segs = ~per_segment_arr[:seg_idx_per_seg.size]
+            false_segs = ~per_segment_arr[: seg_idx_per_seg.size]
             seg_contained_per_track_np[seg_idx_per_seg[false_segs]] = False
         # Tracks with zero segments stay True (already initialized).
 
@@ -974,7 +996,7 @@ def compute_containment(event_dict, detector_bounds):
         # last entry of any particle's genealogy).
         owner_of_local = np.full(n_tracks, -1, dtype=np.int64)
         for i, particle in enumerate(particles):
-            gen = particle.get('genealogy') or []
+            gen = particle.get("genealogy") or []
             if not gen:
                 continue
             last_tid = int(gen[-1])
@@ -1037,7 +1059,7 @@ def compute_containment(event_dict, detector_bounds):
         valid = (ii >= 0) & (ii < n_interactions)
         if valid.any():
             valid_inter = ii[valid]
-            valid_part  = per_particle_arr[:m][valid]
+            valid_part = per_particle_arr[:m][valid]
             interaction_has_particle[valid_inter] = True
             not_contained = ~valid_part
             if not_contained.any():
@@ -1047,7 +1069,9 @@ def compute_containment(event_dict, detector_bounds):
     # Event: AND over interactions. Empty event -> False.
     overall = np.bool_(n_interactions > 0 and bool(per_interaction_arr.all()))
 
-    return {'per_segment':     per_segment_arr,
-            'per_particle':    per_particle_arr,
-            'per_interaction': per_interaction_arr,
-            'overall':         overall}
+    return {
+        "per_segment": per_segment_arr,
+        "per_particle": per_particle_arr,
+        "per_interaction": per_interaction_arr,
+        "overall": overall,
+    }

@@ -11,6 +11,7 @@ neither is dead, and nothing said so.
 The pair is loaded here the way production loads it --- both halves of one
 detector, through the same template --- and not as two independent files.
 """
+
 import json
 import os
 
@@ -19,8 +20,7 @@ import pytest
 from lucid.detector_params import load_physics_config
 from tests.helpers.paths import REPO
 
-CONFIG_DIR = os.path.join(
-    str(REPO), "config")
+CONFIG_DIR = os.path.join(str(REPO), "config")
 
 # The production detectors: the only ones whose physics config carries a
 # readout, so the only ones a config with no "detector" key can run on.
@@ -29,8 +29,10 @@ WAND_DETECTORS = ("SK_WAND", "HK_WAND")
 
 def _template(detector):
     """The pair of paths run_job.py:277-278 builds from one --detector string."""
-    return (os.path.join(CONFIG_DIR, f"{detector}_geom_config.json"),
-            os.path.join(CONFIG_DIR, f"{detector}_physics_config.json"))
+    return (
+        os.path.join(CONFIG_DIR, f"{detector}_geom_config.json"),
+        os.path.join(CONFIG_DIR, f"{detector}_physics_config.json"),
+    )
 
 
 @pytest.mark.parametrize("detector", WAND_DETECTORS)
@@ -57,6 +59,7 @@ def test_wand_physics_carries_the_readout_the_fanout_relies_on(detector):
     # ... and both blocks parse the way run_job parses them: a windowed model
     # (not the 'basic' fallback) and a trigger with no key TriggerConfig drops
     from lucid.simulation.readout import Readout
+
     readout = Readout.from_blocks(raw["digitizer"], raw["trigger"])
     model = readout.digitizer
     assert model["model"] != "basic" and model["integration_window_ns"], model["model"]
@@ -84,7 +87,8 @@ def test_wand_pair_loads_as_one_detector(detector):
     assert qe_c.ndim in (0, 1)
     if qe_c.ndim == 1:
         assert qe_c.shape == (n_sensors,), (
-            f"{detector}: qe_corrections is {qe_c.shape}, geometry has {n_sensors} sensors")
+            f"{detector}: qe_corrections is {qe_c.shape}, geometry has {n_sensors} sensors"
+        )
 
 
 def test_the_two_wand_detectors_share_the_measured_surface_optics():
@@ -97,8 +101,7 @@ def test_the_two_wand_detectors_share_the_measured_surface_optics():
     for detector in WAND_DETECTORS:
         with open(_template(detector)[1]) as f:
             raw = json.load(f)
-        values[detector] = (raw.get("wall_reflection_rate"),
-                            raw.get("sensor_reflection_rate"))
+        values[detector] = (raw.get("wall_reflection_rate"), raw.get("sensor_reflection_rate"))
     assert values["SK_WAND"] == (0.05, 0.25), values["SK_WAND"]
     assert values["HK_WAND"] == (0.05, 0.25), values["HK_WAND"]
 
@@ -107,7 +110,9 @@ def test_shipped_dataset_configs_name_only_frozen_detectors():
     """A shipped dataset config names a WAND detector or none (the fan-out's -D then picks
     one): a generic physics config can change under a dataset without production noticing."""
     root = os.path.join(str(REPO), "lucid", "production", "dataprod", "configs")
-    configs = sorted(os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs if f.endswith(".json"))
+    configs = sorted(
+        os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs if f.endswith(".json")
+    )
     assert configs
     for path in configs:
         with open(path) as f:

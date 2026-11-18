@@ -1,25 +1,44 @@
 """Photon iteration functions (sample, update_factors, custom VJP)."""
+
 import jax
 import jax.numpy as jnp
+
 from lucid.simulation.optics import (
+    compute_scatter_direction,
+    create_local_frame,
     normalize,
-    sample_scatter_distance, compute_scatter_direction,
-    create_local_frame, solve_rayleigh_inverse_cdf,
-)
-from lucid.wavelength.scattering import (
-    compute_mie_scatter_direction, hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf,
+    sample_scatter_distance,
+    solve_rayleigh_inverse_cdf,
 )
 from lucid.simulation.reflection import scalar_reflection
+from lucid.wavelength.scattering import (
+    compute_mie_scatter_direction,
+    hg_logpdf,
+    hg_sample_cos_theta,
+    rayleigh_logpdf,
+)
 
 # Photon iteration functions (12-arg signatures: dual reflection, no tau_gs)
 # ===================================================================
 
+
 def photon_iteration_sample(
-        position, direction, time, surface_distance,
-        normal, scatter_length, mie_scatter_length, g, refl_params,
-        absorption_length,
-        hit_sensor, lam, rng_key, speed_of_light,
-        reflection_fn=scalar_reflection):
+    position,
+    direction,
+    time,
+    surface_distance,
+    normal,
+    scatter_length,
+    mie_scatter_length,
+    g,
+    refl_params,
+    absorption_length,
+    hit_sensor,
+    lam,
+    rng_key,
+    speed_of_light,
+    reflection_fn=scalar_reflection,
+):
     """
     Sampling version of photon iteration that makes binary decisions.
 
@@ -81,12 +100,13 @@ def photon_iteration_sample(
     # k4 (the legacy inline-diffuse key) is passed in, so the default 'scalar' model reproduces
     # the previous hard-coded walls-diffuse/sensors-specular behavior BIT-FOR-BIT.
     reflection_rate, reflection_dir, _lr_unused = reflection_fn(
-        direction, normal, hit_sensor, refl_params, lam, k4)
+        direction, normal, hit_sensor, refl_params, lam, k4
+    )
     # Combine Rayleigh + Mie by RATES (NOT min): total scatter coeff = 1/L_R + 1/L_M.
     mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
     inv_total = 1.0 / scatter_length + 1.0 / mie_safe
-    scatter_length = 1.0 / inv_total                 # effective combined scatter length
-    p_mie = (1.0 / mie_safe) / inv_total             # P(a scatter is Mie) = (1/L_M)/(1/L_R+1/L_M)
+    scatter_length = 1.0 / inv_total  # effective combined scatter length
+    p_mie = (1.0 / mie_safe) / inv_total  # P(a scatter is Mie) = (1/L_M)/(1/L_R+1/L_M)
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
 
     reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
@@ -116,7 +136,9 @@ def photon_iteration_sample(
 
     rayleigh_dir = compute_scatter_direction(direction, k3)
     mie_dir = compute_mie_scatter_direction(direction, k3, g)
-    is_mie = jax.random.uniform(k5) < p_mie          # choose Mie vs Rayleigh per scatter (~5% Mie at physical L)
+    is_mie = (
+        jax.random.uniform(k5) < p_mie
+    )  # choose Mie vs Rayleigh per scatter (~5% Mie at physical L)
     chosen_scatter_dir = jnp.where(is_mie, mie_dir, rayleigh_dir)
 
     new_dir = jnp.where(
@@ -150,16 +172,35 @@ def photon_iteration_sample(
     # reduction can split direct from indirect light per photon.
     indirect = scatters | reflects
 
-    return (new_pos, new_dir, new_time, detect_prob, reflection_attenuation,
-            continuing_factor, logp_increment, indirect)
+    return (
+        new_pos,
+        new_dir,
+        new_time,
+        detect_prob,
+        reflection_attenuation,
+        continuing_factor,
+        logp_increment,
+        indirect,
+    )
 
 
 def photon_iteration_update_factors(
-        position, direction, time, surface_distance,
-        normal, scatter_length, mie_scatter_length, g, refl_params,
-        absorption_length,
-        hit_sensor, lam, rng_key, speed_of_light,
-        reflection_fn=scalar_reflection):
+    position,
+    direction,
+    time,
+    surface_distance,
+    normal,
+    scatter_length,
+    mie_scatter_length,
+    g,
+    refl_params,
+    absorption_length,
+    hit_sensor,
+    lam,
+    rng_key,
+    speed_of_light,
+    reflection_fn=scalar_reflection,
+):
     """
     Expected-value ("implicit capture") photon update with DiCE score-function gradients.
 
@@ -226,19 +267,19 @@ def photon_iteration_update_factors(
     sg = jax.lax.stop_gradient
 
     mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
-    mu_tot = 1.0 / scatter_length + 1.0 / mie_safe                 # full two-channel scatter rate
-    p_mie = scatter_length / (scatter_length + mie_safe)           # P(a scatter is Mie)
+    mu_tot = 1.0 / scatter_length + 1.0 / mie_safe  # full two-channel scatter rate
+    p_mie = scatter_length / (scatter_length + mie_safe)  # P(a scatter is Mie)
 
     # Analog free path. d_live LIVE in mu_tot (reparam → optical gradient into TIME);
     # d detached for the hard decision, trajectory and scores (charge ≡ validated engine).
     u0 = jax.random.uniform(k[0])
     d_live = -jnp.log1p(-sg(u0)) / mu_tot
     d = sg(d_live)
-    Dd = surface_distance                                         # LIVE → pathwise track gradient
+    Dd = surface_distance  # LIVE → pathwise track gradient
     is_scat = d < Dd
 
     dist = jnp.where(is_scat, d, Dd)
-    atten = jnp.exp(-dist / absorption_length)                    # absorption survival to event
+    atten = jnp.exp(-dist / absorption_length)  # absorption survival to event
 
     # Mie/Rayleigh Bernoulli + the matching angle samplers
     is_mie = jax.random.uniform(k[2]) < sg(p_mie)
@@ -260,7 +301,8 @@ def photon_iteration_update_factors(
     epsilon = 1e-4
     inward_normal = -sg(normal)
     refl_prob, reflection_dir, lr = reflection_fn(
-        direction, normal, hit_sensor, refl_params, lam, k[5])
+        direction, normal, hit_sensor, refl_params, lam, k[5]
+    )
     new_dir = jnp.where(is_scat, scat_dir, reflection_dir)
 
     # Positions (hard, detached free path d): scatter point vs surface point.
@@ -273,11 +315,15 @@ def photon_iteration_update_factors(
     # gradients only (via live mu_tot, p_mie, g coefficients), never a track gradient. lr carries
     # the reflection spec/diff-mix gradient for angular models (0 for scalar).
     lf = jnp.where(is_scat, jnp.log(mu_tot) - mu_tot * sg(d), -mu_tot * sg(Dd))
-    la = jnp.where(is_scat,
-                   jnp.where(is_mie,
-                             jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
-                             jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray))),
-                   0.0)
+    la = jnp.where(
+        is_scat,
+        jnp.where(
+            is_mie,
+            jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
+            jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray)),
+        ),
+        0.0,
+    )
     logp_increment = lf + la + lr
 
     # Implicit-capture deposit factor (expected detected charge, Rao-Blackwellised over the
@@ -290,10 +336,11 @@ def photon_iteration_update_factors(
     # hit flag says. Under a soft overlap a ray passing just outside a sensor deposits on it too;
     # charged the wall's reflectance, that halo inflated the charge by its share times
     # (R_sensor - R_wall): +2.1% at softness 0.1 in SK_like, so the charge depended on the softness.
-    refl_sensor = jnp.where(hit_sensor, refl_prob,
-                            reflection_fn(direction, normal, True, refl_params, lam, k[5])[0])
+    refl_sensor = jnp.where(
+        hit_sensor, refl_prob, reflection_fn(direction, normal, True, refl_params, lam, k[5])[0]
+    )
     detect_prob = reach * (1.0 - refl_sensor) * atten_surf
-    reflection_attenuation = jnp.ones_like(detect_prob)           # folded into detect_prob
+    reflection_attenuation = jnp.ones_like(detect_prob)  # folded into detect_prob
     continuing_factor = jnp.where(is_scat, atten, refl_prob * atten)
 
     # Arrival-time path uses the LIVE free path d_live (Option C reparam → optical L_M
@@ -306,8 +353,16 @@ def photon_iteration_update_factors(
     # is_scat is the step's scatter decision; it carries no gradient either way.
     indirect = is_scat
 
-    return (new_pos, new_dir, new_time, detect_prob, reflection_attenuation,
-            continuing_factor, logp_increment, indirect)
+    return (
+        new_pos,
+        new_dir,
+        new_time,
+        detect_prob,
+        reflection_attenuation,
+        continuing_factor,
+        logp_increment,
+        indirect,
+    )
 
 
 # ===================================================================
@@ -317,6 +372,7 @@ def photon_iteration_update_factors(
 # Factory: the reflection model is captured STATICALLY in the closure, so the
 # custom_vjp signature stays fixed (refl_params is a single packed pytree arg) —
 # a new reflection model never reshapes _fwd/_bwd residuals or cotangents.
+
 
 def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
     """Build the expected-value step closed over ``reflection_fn`` (a static model choice).
@@ -334,13 +390,38 @@ def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
     stress geometries.
     """
 
-    def _step(position, direction, time, surface_distance,
-              normal, scatter_length, mie_scatter_length, g, refl_params,
-              absorption_length, hit_sensor, lam, rng_key, speed_of_light):
+    def _step(
+        position,
+        direction,
+        time,
+        surface_distance,
+        normal,
+        scatter_length,
+        mie_scatter_length,
+        g,
+        refl_params,
+        absorption_length,
+        hit_sensor,
+        lam,
+        rng_key,
+        speed_of_light,
+    ):
         return photon_iteration_update_factors(
-            position, direction, time, surface_distance,
-            normal, scatter_length, mie_scatter_length, g, refl_params,
-            absorption_length, hit_sensor, lam, rng_key, speed_of_light,
-            reflection_fn=reflection_fn)
+            position,
+            direction,
+            time,
+            surface_distance,
+            normal,
+            scatter_length,
+            mie_scatter_length,
+            g,
+            refl_params,
+            absorption_length,
+            hit_sensor,
+            lam,
+            rng_key,
+            speed_of_light,
+            reflection_fn=reflection_fn,
+        )
 
     return _step

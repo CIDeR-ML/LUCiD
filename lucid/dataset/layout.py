@@ -3,6 +3,7 @@
 Batch ``k`` of a dataset rooted at ``root`` is ``<root>/<sub>/wc_<sub>_<k:04d>.h5`` for each
 ``sub`` in :data:`lucid.dataset.schema.SUBDIRS`.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,7 +26,9 @@ def batch_paths(root: os.PathLike, file_index: int) -> dict[str, Path]:
 
 def list_batches(root: os.PathLike) -> list[int]:
     """The batch indices with a ``sensor`` file under ``root``, in numeric order."""
-    found = (re.fullmatch(r"wc_sensor_(\d+)\.h5", p.name) for p in (Path(root) / "sensor").iterdir())
+    found = (
+        re.fullmatch(r"wc_sensor_(\d+)\.h5", p.name) for p in (Path(root) / "sensor").iterdir()
+    )
     return sorted(int(m.group(1)) for m in found if m)
 
 
@@ -54,28 +57,39 @@ def _check_digit_invariants(paths, modalities, n_sample: int = 3) -> tuple[bool,
                 nd = si.shape[0]
                 if "hits" in files:
                     hd = files["hits"][e]["digit_idx"][:]
-                    if hd.size and not (hd.min() >= 0 and hd.max() < nd
-                                        and (files["hits"][e]["sensor_idx"][:] == si[hd]).all()):
-                        msgs.append(f"BAD_DIGIT_FK(hits): {e}"); ok = False
+                    if hd.size and not (
+                        hd.min() >= 0
+                        and hd.max() < nd
+                        and (files["hits"][e]["sensor_idx"][:] == si[hd]).all()
+                    ):
+                        msgs.append(f"BAD_DIGIT_FK(hits): {e}")
+                        ok = False
                 sh = files["step"][e].get("sensor_hits") if "step" in files else None
                 if sh is not None and "digit_idx" in sh:
                     sd = sh["digit_idx"][:]
-                    if sd.size and not (sd.min() >= 0 and sd.max() < nd
-                                        and (sh["sensor_idx"][:] == si[sd]).all()):
-                        msgs.append(f"BAD_DIGIT_FK(step): {e}"); ok = False
+                    if sd.size and not (
+                        sd.min() >= 0 and sd.max() < nd and (sh["sensor_idx"][:] == si[sd]).all()
+                    ):
+                        msgs.append(f"BAD_DIGIT_FK(step): {e}")
+                        ok = False
                 pw = files["labl"][e].get("per_window") if "labl" in files else None
                 if pw is not None:
                     off = pw["digit_offsets"][:]
                     if not (off[0] == 0 and off[-1] == nd and (np.diff(off) >= 0).all()):
-                        msgs.append(f"BAD_PER_WINDOW_CSR: {e} (offsets end {int(off[-1])} != n_digits {nd})")
+                        msgs.append(
+                            f"BAD_PER_WINDOW_CSR: {e} (offsets end {int(off[-1])} != n_digits {nd})"
+                        )
                         ok = False
         finally:
             for f in files.values():
                 f.close()
         if ok:
-            msgs.append(f"OK invariants (digit_idx FK, per_window CSR) on {len(evs)} sampled events")
+            msgs.append(
+                f"OK invariants (digit_idx FK, per_window CSR) on {len(evs)} sampled events"
+            )
     except Exception as exc:
-        msgs.append(f"INVARIANT_CHECK_ERROR: {exc!r}"); ok = False
+        msgs.append(f"INVARIANT_CHECK_ERROR: {exc!r}")
+        ok = False
     return ok, msgs
 
 
@@ -143,18 +157,24 @@ def check_batch(
             expected = {f"event_{i:03d}" for i in range(n_events)}
             if groups != expected:
                 missing, extra = sorted(expected - groups), sorted(groups - expected)
-                messages.append(f"BAD_EVENTS: {path} has n_events={n_events} but event groups "
-                                f"missing {missing[:5]} unexpected {extra[:5]}")
+                messages.append(
+                    f"BAD_EVENTS: {path} has n_events={n_events} but event groups "
+                    f"missing {missing[:5]} unexpected {extra[:5]}"
+                )
                 ok = False
             elif n_events == 0:
                 # Not fatal: a selection may legitimately drop every event. Complete + empty.
                 messages.append(f"EMPTY_KEPT: {path} kept 0/{n_req} events (selection dropped all)")
         if expected_dataset_name is not None and name != expected_dataset_name:
-            messages.append(f"BAD_DATASET_NAME: {path} has {name!r}, expected {expected_dataset_name!r}")
+            messages.append(
+                f"BAD_DATASET_NAME: {path} has {name!r}, expected {expected_dataset_name!r}"
+            )
             ok = False
         drop = f" (kept {n_events}/{n_req})" if n_req != n_events else ""
-        messages.append(f"OK {sub:<6} size={size:>10} dataset_name={name!r} file_index={fi} "
-                        f"n_events={n_events}{drop} complete={complete}")
+        messages.append(
+            f"OK {sub:<6} size={size:>10} dataset_name={name!r} file_index={fi} "
+            f"n_events={n_events}{drop} complete={complete}"
+        )
 
     if len(set(n_by_sub.values())) > 1:
         messages.append(f"N_EVENTS_MISMATCH: {n_by_sub}")

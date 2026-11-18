@@ -48,12 +48,14 @@ def _f(rho, r):
 def _f_slope(rho, r):
     s = TEMPERATURE * r
     x, lam = (r / s) ** 2, (rho / s) ** 2
-    return -(rho / s ** 2) * (ncx2.cdf(x, 2, lam) - ncx2.cdf(x, 4, lam))
+    return -(rho / s**2) * (ncx2.cdf(x, 2, lam) - ncx2.cdf(x, 4, lam))
 
 
 def _dom(det, string, k):
     """Index and centre of DOM k on a string, located by position (not by the id tables)."""
-    c = np.asarray(det.string_anchors[string]) + np.array([0, 0, float(det.dom_s_offsets[string, k])])
+    c = np.asarray(det.string_anchors[string]) + np.array(
+        [0, 0, float(det.dom_s_offsets[string, k])]
+    )
     idx = int(np.argmin(np.linalg.norm(np.asarray(det.all_points) - c, axis=1)))
     assert np.linalg.norm(np.asarray(det.all_points)[idx] - c) < 1e-6
     return idx, c
@@ -66,20 +68,29 @@ def test_output_contract(built):
     o = jnp.tile(jnp.array([0.0, 0.1, -1950.0]), (n, 1))
     d = jnp.tile(jnp.array([1.0, 0.0, 0.0]), (n, 1))
     r = prop(o, d)
-    expected = {'sensor_weights', 'sensor_indices', 'sensor_distances',
-                'positions', 'normals', 'inside_sensor',
-                'per_sensor_positions', 'sensor_normals',
-                'envelope_exit_t'}
+    expected = {
+        "sensor_weights",
+        "sensor_indices",
+        "sensor_distances",
+        "positions",
+        "normals",
+        "inside_sensor",
+        "per_sensor_positions",
+        "sensor_normals",
+        "envelope_exit_t",
+    }
     assert set(r.keys()) == expected, f"missing keys: {expected - set(r.keys())}"
-    assert r['sensor_weights'].shape == (n_cand, n), f"weights: {r['sensor_weights'].shape}"
-    assert r['sensor_indices'].shape == (n_cand, n), f"indices: {r['sensor_indices'].shape}"
-    assert r['sensor_distances'].shape == (n_cand, n, 1), f"distances: {r['sensor_distances'].shape}"
-    assert r['positions'].shape == (n, 3)
-    assert r['normals'].shape == (n, 3)
-    assert r['inside_sensor'].shape == (n_cand, n)
-    assert r['per_sensor_positions'].shape == (n_cand, n, 3)
-    assert r['sensor_normals'].shape == (n_cand, n, 3)
-    assert r['envelope_exit_t'].shape == (n,)
+    assert r["sensor_weights"].shape == (n_cand, n), f"weights: {r['sensor_weights'].shape}"
+    assert r["sensor_indices"].shape == (n_cand, n), f"indices: {r['sensor_indices'].shape}"
+    assert r["sensor_distances"].shape == (n_cand, n, 1), (
+        f"distances: {r['sensor_distances'].shape}"
+    )
+    assert r["positions"].shape == (n, 3)
+    assert r["normals"].shape == (n, 3)
+    assert r["inside_sensor"].shape == (n_cand, n)
+    assert r["per_sensor_positions"].shape == (n_cand, n, 3)
+    assert r["sensor_normals"].shape == (n_cand, n, 3)
+    assert r["envelope_exit_t"].shape == (n,)
 
 
 def test_near_dom_hits(built):
@@ -94,12 +105,12 @@ def test_near_dom_hits(built):
         return prop(jnp.array([[c[0] - 5.0, y, c[2]]]), d)
 
     out = run(c[1] + 0.1)
-    w = np.asarray(out['sensor_weights'])[:, 0]
-    ids = np.asarray(out['sensor_indices'])[:, 0]
+    w = np.asarray(out["sensor_weights"])[:, 0]
+    ids = np.asarray(out["sensor_indices"])[:, 0]
     slot = int(np.argmax(w))
     assert ids[slot] == idx, (ids, w)
     np.testing.assert_allclose(w[slot], _f(0.1, r_s), atol=1e-4)
-    np.testing.assert_allclose(float(out['sensor_distances'][slot, 0, 0]), 5.0, atol=1e-4)
+    np.testing.assert_allclose(float(out["sensor_distances"][slot, 0, 0]), 5.0, atol=1e-4)
     # Every candidate, not only the target, carries f of its own closest approach (this ray
     # also passes DOM 30 of string 1, 125 m on, at the same 0.1 m).
     S = np.asarray(det.all_points, np.float64)
@@ -109,7 +120,7 @@ def test_near_dom_hits(built):
     rho = np.linalg.norm(v - tc[:, None] * np.array([1.0, 0, 0]), axis=1)
     np.testing.assert_allclose(w, _f(rho, r_s), atol=1e-4)
 
-    g = float(jax.grad(lambda y: run(y)['sensor_weights'][slot, 0])(jnp.float32(c[1] + 0.1)))
+    g = float(jax.grad(lambda y: run(y)["sensor_weights"][slot, 0])(jnp.float32(c[1] + 0.1)))
     np.testing.assert_allclose(g, _f_slope(0.1, r_s), rtol=3e-2)
 
 
@@ -124,18 +135,18 @@ def test_aimed_rays_find_their_dom(built):
     rng = np.random.default_rng(0)
     k = rng.choice(len(S), size=400, replace=False)
     u = rng.normal(size=(400, 3))
-    u[:, 2] *= 0.5                                           # keep away from the string axis
+    u[:, 2] *= 0.5  # keep away from the string axis
     u /= np.linalg.norm(u, axis=1, keepdims=True)
     e = np.cross(u, rng.normal(size=(400, 3)))
     e /= np.linalg.norm(e, axis=1, keepdims=True)
     rho = 0.8 * r_s * np.sqrt(rng.uniform(size=400))
     o = S[k] + rho[:, None] * e - 20.0 * u
     out = prop(jnp.asarray(o, jnp.float32), jnp.asarray(u, jnp.float32))
-    ids = np.asarray(out['sensor_indices'])
+    ids = np.asarray(out["sensor_indices"])
     hit = ids == k[None, :]
     assert hit.any(axis=0).all(), f"{(~hit.any(axis=0)).sum()}/400 rays miss their DOM"
-    w = np.sum(np.where(hit, np.asarray(out['sensor_weights']), 0), axis=0)
-    t = np.sum(np.where(hit, np.asarray(out['sensor_distances'])[..., 0], 0), axis=0)
+    w = np.sum(np.where(hit, np.asarray(out["sensor_weights"]), 0), axis=0)
+    t = np.sum(np.where(hit, np.asarray(out["sensor_distances"])[..., 0], 0), axis=0)
     # float32 at |o| ~ 2 km: closest-approach distance good to ~1e-4 m, i.e. ~5e-3 in f at the
     # steepest point; the median is far tighter
     assert np.max(np.abs(w - _f(rho, r_s))) < 1e-2
@@ -149,15 +160,19 @@ def test_far_misses_stop_on_the_envelope(built):
     det, prop = built
     anchors = np.asarray(det.string_anchors)[:, :2]
     # the grid point inside the array farthest from every string
-    g = np.stack(np.meshgrid(np.linspace(-300, 300, 61), np.linspace(-300, 300, 61)), -1).reshape(-1, 2)
+    g = np.stack(np.meshgrid(np.linspace(-300, 300, 61), np.linspace(-300, 300, 61)), -1).reshape(
+        -1, 2
+    )
     far = np.min(np.linalg.norm(g[:, None] - anchors[None], axis=-1), axis=1)
     xy = g[np.argmax(far)]
     assert far.max() > 10.0
     z0 = 0.5 * (det.envelope_z_min + det.envelope_z_max)
-    out = prop(jnp.array([[xy[0], xy[1], z0], [5000.0, 5000.0, -1950.0]], jnp.float32),
-               jnp.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]))
-    assert float(jnp.max(out['sensor_weights'])) < 1e-6
-    np.testing.assert_allclose(float(out['envelope_exit_t'][0]), det.envelope_z_max - z0,
-                               rtol=1e-6)
-    np.testing.assert_allclose(np.asarray(out['positions'][0]),
-                               [xy[0], xy[1], det.envelope_z_max], atol=1e-3)
+    out = prop(
+        jnp.array([[xy[0], xy[1], z0], [5000.0, 5000.0, -1950.0]], jnp.float32),
+        jnp.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]),
+    )
+    assert float(jnp.max(out["sensor_weights"])) < 1e-6
+    np.testing.assert_allclose(float(out["envelope_exit_t"][0]), det.envelope_z_max - z0, rtol=1e-6)
+    np.testing.assert_allclose(
+        np.asarray(out["positions"][0]), [xy[0], xy[1], det.envelope_z_max], atol=1e-3
+    )

@@ -11,8 +11,9 @@ breaks the global-vs-gain degeneracy: a single source is degenerate because a fr
 absorbs any per-sensor pattern, and the shared map across diverse sources over-determines it.
 ``test_single_source_is_degenerate`` holds that fact down.
 """
-import numpy as np
+
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from lucid.fitting import CalibrationForward, CalibrationProblem, calibrate, crb, gauss_newton_tx
@@ -22,17 +23,18 @@ from lucid.fitting.gn import gauss_newton
 NS, NP = 40, 4
 _rngA = np.random.default_rng(7)
 _A1 = np.linspace(0.2, 1.0, NS)[:, None] * np.cos(np.arange(NP)[None, :] + 1.0)
-_A2 = _rngA.standard_normal((NS, NP)) * 0.6        # a structurally different source
+_A2 = _rngA.standard_normal((NS, NP)) * 0.6  # a structurally different source
 THETA_TRUE = np.array([0.3, -0.5, 0.8, -0.2])
 _rng = np.random.default_rng(0)
 K_TRUE = np.exp(0.15 * _rng.standard_normal(NS))
-K_TRUE /= np.exp(np.mean(np.log(K_TRUE)))          # the mean(log k)=0 gauge the fitter uses
+K_TRUE /= np.exp(np.mean(np.log(K_TRUE)))  # the mean(log k)=0 gauge the fitter uses
 START = THETA_TRUE + np.array([0.4, -0.3, 0.5, 0.3])
 FIT_KW = dict(steps=200, refresh=5, max_step=0.3, polyak=0, tx=gauss_newton_tx(lam=1e-4, mu=0.02))
 
 
 class _LogLinear:
     """The toy's parameterisation: ``theta`` is handed to the simulator as it is."""
+
     W, P = 1, NP
 
     def to_dp(self, theta, wl, gains):
@@ -45,13 +47,17 @@ class _LogLinear:
 def _sim(source, dp, key):
     """``N k exp(A theta)``: mean charge, deterministic. The source is ``{'A', 'N'}``."""
     theta, gains = dp
-    return source['N'] * gains * jnp.exp(source['A'] @ theta), None
+    return source["N"] * gains * jnp.exp(source["A"] @ theta), None
 
 
 def _model(As=(_A1, _A2), nphot=None):
     nphot = [1.0] * len(As) if nphot is None else nphot
-    return CalibrationForward(_sim, [{'A': jnp.asarray(A), 'N': jnp.asarray(N)}
-                                     for A, N in zip(As, nphot)], _LogLinear(), NS)
+    return CalibrationForward(
+        _sim,
+        [{"A": jnp.asarray(A), "N": jnp.asarray(N)} for A, N in zip(As, nphot)],
+        _LogLinear(),
+        NS,
+    )
 
 
 def _truth(As=(_A1, _A2)):
@@ -73,7 +79,7 @@ class TestSchur:
     def test_constrained_schur_kills_constant_mode(self):
         Hkk = np.linspace(1.0, 3.0, NS)
         out = make_constrained_schur(Hkk)(np.ones(NS))
-        assert abs(float(np.sum(out))) < 1e-9      # the gauged sum-of-log-k mode is projected out
+        assert abs(float(np.sum(out))) < 1e-9  # the gauged sum-of-log-k mode is projected out
 
     def test_constrained_schur_matrix_branch_is_the_gauged_inverse(self):
         """The matrix branch (the one ``crb`` uses) against the null-space form of the same inverse.
@@ -82,6 +88,7 @@ class TestSchur:
         for any basis P of the constraint, so the two must agree column by column.
         """
         from scipy.linalg import null_space
+
         Hkk = np.linspace(1.0, 3.0, NS)
         X = np.random.default_rng(3).standard_normal((NS, 5))
         P = null_space(np.ones((1, NS)))
@@ -93,17 +100,21 @@ class TestRecovery:
     def test_recovers_toy_globals_and_gains(self):
         """Noise-free data has an exact answer, and the fit reaches it to float32 precision."""
         res = _fit(_model(), _truth())
-        assert np.abs(res['theta'] - THETA_TRUE).max() < 1e-5, res['theta']
-        assert np.std(np.log(_gauged(res['gains']))) < 1e-5
-        assert res['loss'][-1] < 1e-10             # the residual is driven to zero, not just small
+        assert np.abs(res["theta"] - THETA_TRUE).max() < 1e-5, res["theta"]
+        assert np.std(np.log(_gauged(res["gains"]))) < 1e-5
+        assert res["loss"][-1] < 1e-10  # the residual is driven to zero, not just small
 
     def test_scipy_least_squares_runs_on_the_same_problem(self):
         """Any solver: ``residuals`` and ``jacobian`` at one draw are all scipy needs, and on the
         noise-free toy it reaches the same answer as ``calibrate``."""
         from scipy.optimize import least_squares
+
         prob = CalibrationProblem(_model(), _truth(), jacobian_draws=1)
-        sol = least_squares(lambda t: np.ravel(prob.residuals(t, step=0)), START,
-                            jac=lambda t: np.reshape(prob.jacobian(t, step=0), (-1, NP)))
+        sol = least_squares(
+            lambda t: np.ravel(prob.residuals(t, step=0)),
+            START,
+            jac=lambda t: np.reshape(prob.jacobian(t, step=0), (-1, NP)),
+        )
         assert np.abs(sol.x - THETA_TRUE).max() < 1e-4, sol.x
 
     def test_single_source_is_degenerate(self):
@@ -114,11 +125,10 @@ class TestRecovery:
         per-sensor gain are not separately identifiable. Convergence and movement are asserted
         too, because "far from truth" alone is also passed by a fit that never moved.
         """
-        res = _fit(_model((_A1,)), _truth((_A1,)), steps=120,
-                   tx=gauss_newton_tx(lam=1e-3, mu=0.05))
-        assert res['loss'][-1] < 1e-8, 'the fit did not converge, so this shows nothing'
-        assert np.abs(res['theta'] - START).max() > 0.01, 'the fit never moved'
-        assert np.abs(res['theta'] - THETA_TRUE).max() > 0.1, 'theta was recovered anyway'
+        res = _fit(_model((_A1,)), _truth((_A1,)), steps=120, tx=gauss_newton_tx(lam=1e-3, mu=0.05))
+        assert res["loss"][-1] < 1e-8, "the fit did not converge, so this shows nothing"
+        assert np.abs(res["theta"] - START).max() > 0.01, "the fit never moved"
+        assert np.abs(res["theta"] - THETA_TRUE).max() > 0.1, "theta was recovered anyway"
 
     def test_polyak_returns_averaged_iterate(self):
         """``polyak=20`` reads out the mean of the last 20 iterates, not the last one.
@@ -127,13 +137,13 @@ class TestRecovery:
         shorter run (8 steps, still moving) keeps the mean visibly different from the final iterate.
         """
         res = _fit(_model(), _truth(), polyak=20)
-        np.testing.assert_allclose(res['theta'], np.mean(res['history'][-20:], 0), atol=1e-6)
-        assert np.abs(res['theta'] - THETA_TRUE).max() < 1e-5
+        np.testing.assert_allclose(res["theta"], np.mean(res["history"][-20:], 0), atol=1e-6)
+        assert np.abs(res["theta"] - THETA_TRUE).max() < 1e-5
         short = _fit(_model(), _truth(), steps=8, polyak=20)
-        hist = np.asarray(short['history'])
+        hist = np.asarray(short["history"])
         assert hist.shape == (9, NP)
         # window longer than the run: the mean of the 8 iterates, the start excluded
-        np.testing.assert_allclose(short['theta'], hist[1:].mean(0), atol=1e-6)
+        np.testing.assert_allclose(short["theta"], hist[1:].mean(0), atol=1e-6)
         assert np.abs(hist[1:].mean(0) - hist[-1]).max() > 1e-3
 
 
@@ -156,8 +166,8 @@ class TestFix:
         prob = self._Coupled(self._A)
         free = gauss_newton(prob, np.zeros(3), 60, lam=0.0, mu=0.0)
         held = gauss_newton(prob, np.zeros(3), 60, lam=0.0, mu=0.0, fix=(1,))
-        np.testing.assert_allclose(free['theta'], np.ones(3), atol=1e-9)
-        assert held['theta'][1] == 0.0                       # frozen at its starting value
+        np.testing.assert_allclose(free["theta"], np.ones(3), atol=1e-9)
+        assert held["theta"][1] == 0.0  # frozen at its starting value
 
     def test_fix_solves_the_CONDITIONAL_minimum_not_the_masked_step(self):
         """The free parameters must land where they belong GIVEN the frozen one.
@@ -170,10 +180,10 @@ class TestFix:
         sub = A[np.ix_(free_ix, free_ix)]
         rhs = sub @ np.ones(2) + A[np.ix_(free_ix, [1])].ravel() * 1.0
         want = np.linalg.solve(sub, rhs)
-        assert np.abs(want - 1.0).max() > 0.1, 'the toy is too weakly coupled to discriminate'
+        assert np.abs(want - 1.0).max() > 0.1, "the toy is too weakly coupled to discriminate"
 
         held = gauss_newton(self._Coupled(A), np.zeros(3), 60, lam=0.0, mu=0.0, fix=(1,))
-        np.testing.assert_allclose(held['theta'][free_ix], want, atol=1e-8)
+        np.testing.assert_allclose(held["theta"][free_ix], want, atol=1e-8)
 
 
 class TestFisherCRB:
@@ -191,16 +201,18 @@ class TestFisherCRB:
     TWO sources and unequal photon counts: with one source the Fisher has rank 1 and every bound
     on it is ~1e4 (the gains absorb everything).
     """
+
     NPHOT = (3000.0, 800.0)
 
     def _analytic(self, lk):
         from scipy.linalg import block_diag, null_space
+
         F = np.zeros((NP + NS, NP + NS))
         for A, N in zip((_A1, _A2), self.NPHOT):
             mu = N * np.exp(lk) * np.exp(A @ THETA_TRUE)
             G = np.hstack([A, np.eye(NS)])
             F += (G * mu[:, None]).T @ G
-        T = block_diag(np.eye(NP), null_space(np.ones((1, NS))))   # theta, gauged log k
+        T = block_diag(np.eye(NP), null_space(np.ones((1, NS))))  # theta, gauged log k
         cov = np.linalg.inv(T.T @ F @ T)[:NP, :NP]
         return np.linalg.inv(cov), cov
 
@@ -210,17 +222,18 @@ class TestFisherCRB:
         F_want, cov_want = self._analytic(lk)
         # rtol 1e-6 against a measured 5e-8. A factor 2 on F, dropping the Schur term (~10x on
         # some eigenvalues), or dropping the gauge correction (43 % on F) all fail by orders.
-        np.testing.assert_allclose(c['fisher'], F_want, rtol=1e-6, atol=1e-6 * np.abs(F_want).max())
-        np.testing.assert_allclose(c['cov_raw'], cov_want, rtol=1e-5,
-                                   atol=1e-6 * np.abs(cov_want).max())
+        np.testing.assert_allclose(c["fisher"], F_want, rtol=1e-6, atol=1e-6 * np.abs(F_want).max())
+        np.testing.assert_allclose(
+            c["cov_raw"], cov_want, rtol=1e-5, atol=1e-6 * np.abs(cov_want).max()
+        )
 
     def test_honesty_inflates_the_covariance_by_twelve(self):
         """The default bound is the raw one times 12 in covariance (sigma times sqrt 12)."""
         kw = dict(lk_true=np.log(K_TRUE), nphot=list(self.NPHOT), nb_h=1)
         raw = crb(_model(), THETA_TRUE, honesty=1.0, **kw)
         hon = crb(_model(), THETA_TRUE, **kw)
-        np.testing.assert_allclose(hon['cov'], 12.0 * raw['cov_raw'], rtol=1e-6)
-        np.testing.assert_allclose(hon['sigma'], np.sqrt(12.0 * np.diag(raw['cov_raw'])), rtol=1e-6)
+        np.testing.assert_allclose(hon["cov"], 12.0 * raw["cov_raw"], rtol=1e-6)
+        np.testing.assert_allclose(hon["sigma"], np.sqrt(12.0 * np.diag(raw["cov_raw"])), rtol=1e-6)
 
     @pytest.mark.slow
     def test_poisson_closures_scatter_at_the_bound(self):
@@ -237,13 +250,28 @@ class TestFisherCRB:
         rng = np.random.default_rng(1)
         model = _model(nphot=self.NPHOT)
         mean = [K_TRUE * N * np.exp(A @ THETA_TRUE) for A, N in zip((_A1, _A2), self.NPHOT)]
-        fits = np.array([
-            _fit(model, np.stack([rng.poisson(m).astype(np.float32) for m in mean]), THETA_TRUE,
-                 steps=30)['theta']
-            for _ in range(200)])
-        cov = crb(_model(), THETA_TRUE, lk_true=np.log(K_TRUE),
-                  nphot=list(self.NPHOT), nb_h=1, honesty=1.0)['cov_raw']
+        fits = np.array(
+            [
+                _fit(
+                    model,
+                    np.stack([rng.poisson(m).astype(np.float32) for m in mean]),
+                    THETA_TRUE,
+                    steps=30,
+                )["theta"]
+                for _ in range(200)
+            ]
+        )
+        cov = crb(
+            _model(),
+            THETA_TRUE,
+            lk_true=np.log(K_TRUE),
+            nphot=list(self.NPHOT),
+            nb_h=1,
+            honesty=1.0,
+        )["cov_raw"]
         sig = np.sqrt(np.diag(cov))
-        ratio = fits.var(0, ddof=1) / sig ** 2
+        ratio = fits.var(0, ddof=1) / sig**2
         assert np.all((ratio > 0.7) & (ratio < 1.4)), ratio
-        assert np.all(np.abs(fits.mean(0) - THETA_TRUE) < 0.35 * sig), (fits.mean(0) - THETA_TRUE) / sig
+        assert np.all(np.abs(fits.mean(0) - THETA_TRUE) < 0.35 * sig), (
+            fits.mean(0) - THETA_TRUE
+        ) / sig

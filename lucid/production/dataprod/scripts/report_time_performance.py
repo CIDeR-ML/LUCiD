@@ -17,8 +17,8 @@ Usage:
 """
 
 import argparse
-import os
 import glob
+import os
 from pathlib import Path
 
 import numpy as np
@@ -30,13 +30,13 @@ def get_config_name(config_dir):
     """
     Try to get the config name from the README.md in the config directory.
     """
-    readme_path = os.path.join(config_dir, 'README.md')
+    readme_path = os.path.join(config_dir, "README.md")
     if os.path.exists(readme_path):
         try:
-            with open(readme_path, 'r') as f:
+            with open(readme_path, "r") as f:
                 for line in f:
-                    if '**Configuration Name**:' in line:
-                        return line.split(':')[-1].strip()
+                    if "**Configuration Name**:" in line:
+                        return line.split(":")[-1].strip()
         except:
             pass
     return os.path.basename(config_dir)
@@ -56,7 +56,7 @@ def analyze_config(config_dir, use_latest_only=True):
     config_name = get_config_name(config_dir)
 
     # Find all job output files (format: job_XXXXXX-SLURM_ID.out)
-    output_files = glob.glob(os.path.join(config_dir, 'job_*-*.out'))
+    output_files = glob.glob(os.path.join(config_dir, "job_*-*.out"))
 
     if not output_files:
         return None
@@ -91,32 +91,32 @@ def analyze_config(config_dir, use_latest_only=True):
     times_array = np.array(all_times)
 
     return {
-        'config_dir': config_dir,
-        'config_id': os.path.basename(config_dir),
-        'config_name': config_name,
-        'n_jobs': n_jobs,
-        'n_events': len(all_times),
-        'times': times_array,
-        'min': np.min(times_array),
-        'max': np.max(times_array),
-        'mean': np.mean(times_array),
-        'median': np.median(times_array),
-        'std': np.std(times_array),
-        'p25': np.percentile(times_array, 25),
-        'p75': np.percentile(times_array, 75),
-        'p95': np.percentile(times_array, 95),
+        "config_dir": config_dir,
+        "config_id": os.path.basename(config_dir),
+        "config_name": config_name,
+        "n_jobs": n_jobs,
+        "n_events": len(all_times),
+        "times": times_array,
+        "min": np.min(times_array),
+        "max": np.max(times_array),
+        "mean": np.mean(times_array),
+        "median": np.median(times_array),
+        "std": np.std(times_array),
+        "p25": np.percentile(times_array, 25),
+        "p75": np.percentile(times_array, 75),
+        "p95": np.percentile(times_array, 95),
     }
 
 
 def print_statistics(result):
     """Print statistics for a config analysis result."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Config: {result['config_id']}")
     print(f"Name: {result['config_name']}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Jobs analyzed: {result['n_jobs']}")
     print(f"Events analyzed: {result['n_events']}")
-    print(f"\nTime distribution (seconds):")
+    print("\nTime distribution (seconds):")
     print(f"  Min:      {result['min']:.3f}")
     print(f"  25th %:   {result['p25']:.3f}")
     print(f"  Median:   {result['median']:.3f}")
@@ -127,7 +127,7 @@ def print_statistics(result):
     print(f"  Std Dev:  {result['std']:.3f}")
 
     # ASCII histogram
-    print_ascii_histogram(result['times'])
+    print_ascii_histogram(result["times"])
 
 
 def print_ascii_histogram(times, bins=10, width=40):
@@ -135,11 +135,11 @@ def print_ascii_histogram(times, bins=10, width=40):
     counts, edges = np.histogram(times, bins=bins)
     max_count = max(counts)
 
-    print(f"\nHistogram:")
+    print("\nHistogram:")
     for i, count in enumerate(counts):
         bar_len = int(width * count / max_count) if max_count > 0 else 0
-        bar = '█' * bar_len
-        print(f"  {edges[i]:6.2f}-{edges[i+1]:6.2f}s: {bar} ({count})")
+        bar = "█" * bar_len
+        print(f"  {edges[i]:6.2f}-{edges[i + 1]:6.2f}s: {bar} ({count})")
 
 
 def plot_histograms(results, output_file=None):
@@ -148,7 +148,8 @@ def plot_histograms(results, output_file=None):
     """
     try:
         import matplotlib
-        matplotlib.use('Agg')  # Use non-interactive backend
+
+        matplotlib.use("Agg")  # Use non-interactive backend
         import matplotlib.pyplot as plt
         from matplotlib.ticker import MaxNLocator
     except ImportError:
@@ -170,7 +171,7 @@ def plot_histograms(results, output_file=None):
         rows = (n_configs + 2) // 3
         cols = 3
 
-    fig, axes = plt.subplots(rows, cols, figsize=(4.5*cols, 4*rows))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.5 * cols, 4 * rows))
     axes = axes.flatten() if n_configs > 1 else [axes]
 
     # Color palette for different configs
@@ -178,42 +179,60 @@ def plot_histograms(results, output_file=None):
 
     for i, result in enumerate(results):
         ax = axes[i]
-        times = result['times']
+        times = result["times"]
         color = colors[i % len(colors)]
 
         # Create histogram with auto-scaled bins
         # Use range parameter to set bin edges, which ensures proper bin distribution
         p99 = np.percentile(times, 99)
-        n, bins, patches = ax.hist(times, bins=15, color=color,
-                                    edgecolor='white', alpha=0.8, linewidth=0.5)
+        n, bins, patches = ax.hist(
+            times, bins=15, color=color, edgecolor="white", alpha=0.8, linewidth=0.5
+        )
 
         # Color the bars
         for patch in patches:
             patch.set_facecolor(color)
 
         # Add vertical lines for mean and median
-        ax.axvline(result['mean'], color='darkred', linestyle='--', linewidth=1.5,
-                   label=f"Mean: {result['mean']:.2f}s")
-        ax.axvline(result['median'], color='darkgreen', linestyle='-', linewidth=1.5,
-                   label=f"Median: {result['median']:.2f}s")
+        ax.axvline(
+            result["mean"],
+            color="darkred",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Mean: {result['mean']:.2f}s",
+        )
+        ax.axvline(
+            result["median"],
+            color="darkgreen",
+            linestyle="-",
+            linewidth=1.5,
+            label=f"Median: {result['median']:.2f}s",
+        )
 
         # Labels and title
-        ax.set_xlabel('Time (s)', fontsize=9)
-        ax.set_ylabel('Count', fontsize=9)
+        ax.set_xlabel("Time (s)", fontsize=9)
+        ax.set_ylabel("Count", fontsize=9)
 
         # Shorter title
-        config_num = result['config_id'].replace('config_', '#')
-        short_name = result['config_name'][:25]
-        ax.set_title(f"{config_num}: {short_name}", fontsize=10, fontweight='bold')
+        config_num = result["config_id"].replace("config_", "#")
+        short_name = result["config_name"][:25]
+        ax.set_title(f"{config_num}: {short_name}", fontsize=10, fontweight="bold")
 
-        ax.legend(fontsize=7, loc='upper right')
+        ax.legend(fontsize=7, loc="upper right")
         ax.yaxis.set_major_locator(MaxNLocator(integer=True))
 
         # Add stats box
         stats_text = f"n={result['n_events']}\nmin={result['min']:.2f}s\nmax={result['max']:.2f}s"
-        ax.text(0.98, 0.72, stats_text, transform=ax.transAxes,
-                fontsize=7, verticalalignment='top', horizontalalignment='right',
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='gray'))
+        ax.text(
+            0.98,
+            0.72,
+            stats_text,
+            transform=ax.transAxes,
+            fontsize=7,
+            verticalalignment="top",
+            horizontalalignment="right",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="gray"),
+        )
 
         # x-axis limits match histogram range
         # ax.set_xlim(0, p99)
@@ -222,36 +241,35 @@ def plot_histograms(results, output_file=None):
     for i in range(n_configs, len(axes)):
         axes[i].set_visible(False)
 
-    plt.suptitle('LUCiD Event Processing Time Distribution', fontsize=14, fontweight='bold', y=1.02)
+    plt.suptitle("LUCiD Event Processing Time Distribution", fontsize=14, fontweight="bold", y=1.02)
     plt.tight_layout()
 
     if output_file:
-        plt.savefig(output_file, dpi=150, bbox_inches='tight')
+        plt.savefig(output_file, dpi=150, bbox_inches="tight")
         print(f"\nHistogram saved to: {output_file}")
     else:
         # Save to default file
-        default_output = 'timing_report.png'
-        plt.savefig(default_output, dpi=150, bbox_inches='tight')
+        default_output = "timing_report.png"
+        plt.savefig(default_output, dpi=150, bbox_inches="tight")
         print(f"\nHistogram saved to: {default_output}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate timing report from PhotonSim job outputs',
+        description="Generate timing report from PhotonSim job outputs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
 
-    parser.add_argument('--config-dir', type=str,
-                        help='Analyze a specific config directory')
-    parser.add_argument('--all', action='store_true',
-                        help='Analyze all configs in base directory')
-    parser.add_argument('--base-dir', type=str,
-                        help='Base directory containing config_XXXXXX folders')
-    parser.add_argument('--output', type=str,
-                        help='Output file for histogram (PNG)')
-    parser.add_argument('--no-plot', action='store_true',
-                        help='Skip plot generation, only print statistics')
+    parser.add_argument("--config-dir", type=str, help="Analyze a specific config directory")
+    parser.add_argument("--all", action="store_true", help="Analyze all configs in base directory")
+    parser.add_argument(
+        "--base-dir", type=str, help="Base directory containing config_XXXXXX folders"
+    )
+    parser.add_argument("--output", type=str, help="Output file for histogram (PNG)")
+    parser.add_argument(
+        "--no-plot", action="store_true", help="Skip plot generation, only print statistics"
+    )
 
     args = parser.parse_args()
 
@@ -277,8 +295,9 @@ def main():
             return 1
 
         # Find all config directories (recursive: block/split layers in the block layout)
-        config_dirs = sorted(glob.glob(os.path.join(args.base_dir, '**', 'config_*'),
-                                       recursive=True))
+        config_dirs = sorted(
+            glob.glob(os.path.join(args.base_dir, "**", "config_*"), recursive=True)
+        )
 
         if not config_dirs:
             print(f"No config_* directories found in {args.base_dir}")
@@ -293,7 +312,7 @@ def main():
             if result:
                 # Distinguish same-numbered configs across blocks/splits by their
                 # path relative to the detector base (<block>/<split>/config_NN).
-                result['config_id'] = os.path.relpath(config_dir, args.base_dir)
+                result["config_id"] = os.path.relpath(config_dir, args.base_dir)
                 results.append(result)
 
     else:
@@ -311,13 +330,17 @@ def main():
 
     # Print summary table
     if len(results) > 1:
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("SUMMARY TABLE")
-        print(f"{'='*80}")
-        print(f"{'Config':<20} {'Events':>8} {'Mean':>8} {'Median':>8} {'Std':>8} {'Min':>8} {'Max':>8}")
+        print(f"{'=' * 80}")
+        print(
+            f"{'Config':<20} {'Events':>8} {'Mean':>8} {'Median':>8} {'Std':>8} {'Min':>8} {'Max':>8}"
+        )
         print("-" * 80)
         for r in results:
-            print(f"{r['config_id']:<20} {r['n_events']:>8} {r['mean']:>8.2f} {r['median']:>8.2f} {r['std']:>8.2f} {r['min']:>8.2f} {r['max']:>8.2f}")
+            print(
+                f"{r['config_id']:<20} {r['n_events']:>8} {r['mean']:>8.2f} {r['median']:>8.2f} {r['std']:>8.2f} {r['min']:>8.2f} {r['max']:>8.2f}"
+            )
 
     # Generate plots
     if not args.no_plot:
@@ -326,5 +349,5 @@ def main():
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     exit(main())

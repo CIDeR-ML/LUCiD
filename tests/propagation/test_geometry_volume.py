@@ -4,14 +4,19 @@ Each detector's ``volume`` must agree with the kernel's ``bounds_check`` (which 
 it) on numpy and JAX input alike, and a scaled region must be the caller's shrink about the
 volume's own centre — the paper's placement cut is ``detector.volume.scaled(0.95)``.
 """
-import numpy as np
+
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from lucid.geometry.volume import BoxVolume, CylinderVolume, SphereVolume
 
-VOLUMES = [CylinderVolume(16.9, -18.1, 18.1), SphereVolume(17.7), BoxVolume(3.0, 6.0, 2.5),
-           CylinderVolume(560.0, -2503.0, -1400.0)]          # last: an off-centre string envelope
+VOLUMES = [
+    CylinderVolume(16.9, -18.1, 18.1),
+    SphereVolume(17.7),
+    BoxVolume(3.0, 6.0, 2.5),
+    CylinderVolume(560.0, -2503.0, -1400.0),
+]  # last: an off-centre string envelope
 
 
 def _points(vol, n=20000, seed=0):
@@ -23,27 +28,27 @@ def _points(vol, n=20000, seed=0):
 def _reference(vol, p):
     x, y, z = p[:, 0], p[:, 1], p[:, 2]
     if isinstance(vol, CylinderVolume):
-        return (x * x + y * y <= vol.radius ** 2) & (z >= vol.z_min) & (z <= vol.z_max)
+        return (x * x + y * y <= vol.radius**2) & (z >= vol.z_min) & (z <= vol.z_max)
     if isinstance(vol, SphereVolume):
         return np.sqrt(x * x + y * y + z * z) <= vol.radius
     return (np.abs(x) <= vol.half_x) & (np.abs(y) <= vol.half_y) & (np.abs(z) <= vol.half_z)
 
 
-@pytest.mark.parametrize('vol', VOLUMES, ids=lambda v: type(v).__name__)
+@pytest.mark.parametrize("vol", VOLUMES, ids=lambda v: type(v).__name__)
 def test_contains_is_the_shape(vol):
     p = _points(vol)
     inside = vol.contains(p)
     np.testing.assert_array_equal(inside, _reference(vol, p))
-    assert 0.2 < inside.mean() < 0.9                      # the sample straddles the wall
+    assert 0.2 < inside.mean() < 0.9  # the sample straddles the wall
 
 
-@pytest.mark.parametrize('vol', VOLUMES, ids=lambda v: type(v).__name__)
+@pytest.mark.parametrize("vol", VOLUMES, ids=lambda v: type(v).__name__)
 def test_numpy_and_jax_agree(vol):
     p = _points(vol).astype(np.float32)
     np.testing.assert_array_equal(np.asarray(vol.contains(jnp.asarray(p))), vol.contains(p))
 
 
-@pytest.mark.parametrize('vol', VOLUMES, ids=lambda v: type(v).__name__)
+@pytest.mark.parametrize("vol", VOLUMES, ids=lambda v: type(v).__name__)
 def test_scaled_is_a_shrink_about_the_centre(vol):
     lo, hi = vol.bounding_box()
     c = 0.5 * (lo + hi)
@@ -55,7 +60,8 @@ def test_scaled_is_a_shrink_about_the_centre(vol):
 
 def _small_detectors():
     """One small detector per shape, built directly (no config file, a few hundred sensors)."""
-    from lucid.geometry import Cylinder, Sphere, Box
+    from lucid.geometry import Box, Cylinder, Sphere
+
     return [
         (Cylinder(2.0, 4.0, 300, 0.04), CylinderVolume(2.0, -2.0, 2.0)),
         (Sphere(1.8, 300, 0.05), SphereVolume(1.8)),
@@ -63,7 +69,7 @@ def _small_detectors():
     ]
 
 
-@pytest.mark.parametrize("i", range(3), ids=['cylinder', 'sphere', 'box'])
+@pytest.mark.parametrize("i", range(3), ids=["cylinder", "sphere", "box"])
 def test_detectors_use_their_volume(i):
     """Each detector's volume is the one its own dimensions define (half-lengths for the box),
     and its bounds_check is that volume's membership, written out independently."""
@@ -72,10 +78,10 @@ def test_detectors_use_their_volume(i):
     p = _points(det.volume).astype(np.float32)
     got = np.asarray(det.bounds_check(jnp.asarray(p)))
     np.testing.assert_array_equal(got, _reference(want, p.astype(np.float64)))
-    assert 0.2 < got.mean() < 0.8             # the sample straddles the surface
+    assert 0.2 < got.mean() < 0.8  # the sample straddles the surface
 
 
-@pytest.mark.parametrize('vol', VOLUMES, ids=lambda v: type(v).__name__)
+@pytest.mark.parametrize("vol", VOLUMES, ids=lambda v: type(v).__name__)
 def test_clip_is_the_nearest_point_of_the_volume(vol):
     """Inside, unchanged; outside, a point of the volume (to rounding) that no point drawn
     uniformly inside the volume beats for distance."""

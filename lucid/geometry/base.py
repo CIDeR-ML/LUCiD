@@ -4,17 +4,18 @@ Public name: ``Detector``, the abstract base every geometry subclasses. Geometry
 code; the 3-D event display is :func:`lucid.visualization.event_display_3d`.
 """
 
-import numpy as np
 from abc import ABC, abstractmethod
+
+import numpy as np
 
 
 class Detector(ABC):
     """Base class for detector geometries"""
-    
+
     def __init__(self, n_sensors, sensor_radius):
         """
         Initialize common detector attributes.
-        
+
         Parameters:
         -----------
         n_sensors : int
@@ -25,7 +26,7 @@ class Detector(ABC):
         self.C = np.array([0.0, 0.0, 0.0])  # Always centered at origin
         self.n_sensors = n_sensors
         self.S_radius = sensor_radius
-        
+
         # These will be set by place_photosensors()
         self.all_points = None
         self.ID_to_position = None
@@ -41,10 +42,12 @@ class Detector(ABC):
         floor at the sensor radius stops a coincident sensor pair from driving a huge grid.
         """
         import math
+
         scale = math.sqrt(max_candidates_per_ray / 4.0)
         if self.all_points is None or len(self.all_points) < 2:
             return 2 * self.S_radius * scale
         from scipy.spatial import cKDTree
+
         pts = np.asarray(self.all_points)
         nn_min = float(cKDTree(pts).query(pts, k=2)[0][:, 1].min())
         return max(0.9 * nn_min * scale, self.S_radius * scale)

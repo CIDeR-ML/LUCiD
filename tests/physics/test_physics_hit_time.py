@@ -12,6 +12,7 @@ instead (0.2167 m/ns, 3.9 % slower, which ``lucid/fitting/seed.py`` already uses
 multilateration seed) is an open physics question pending the owner's decision. These tests
 pin what the simulator does today; when that decision is made, ``V_SIM`` changes with it.
 """
+
 import jax
 import numpy as np
 import pytest
@@ -19,11 +20,11 @@ import pytest
 from tests.helpers import tiny
 
 N, QE = tiny.N, tiny.QE
-C_VACUUM_M_PER_NS = 0.299792458        # SI definition of the metre
-N_WATER = 1.33                          # water's refractive_index in the material JSON
-V_SIM = C_VACUUM_M_PER_NS / N_WATER     # phase velocity, 0.22541 m/ns: the material's c/n
-V_GROUP = 0.2167                        # the seeder's group velocity, for contrast
-OFFSET_M = 0.5                          # the second source position, this far out from the axis
+C_VACUUM_M_PER_NS = 0.299792458  # SI definition of the metre
+N_WATER = 1.33  # water's refractive_index in the material JSON
+V_SIM = C_VACUUM_M_PER_NS / N_WATER  # phase velocity, 0.22541 m/ns: the material's c/n
+V_GROUP = 0.2167  # the seeder's group velocity, for contrast
+OFFSET_M = 0.5  # the second source position, this far out from the axis
 
 
 @pytest.fixture(scope="module")
@@ -34,11 +35,13 @@ def target(tiny_detector):
 def _beam(det, target, offset):
     """The pencil beam starting ``offset`` metres out from the axis toward the target."""
     from lucid.sources import laser_source
+
     _, centre, out = target
     start = np.array([0.0, 0.0, centre[2]]) + offset * out
-    path = np.hypot(centre[0], centre[1]) - offset - float(det.S_radius)   # to the PMT's front
-    return laser_source(position=start.tolist(), direction=out.tolist(), intensity=N,
-                        fiber_NA=1e-6), path
+    path = np.hypot(centre[0], centre[1]) - offset - float(det.S_radius)  # to the PMT's front
+    return laser_source(
+        position=start.tolist(), direction=out.tolist(), intensity=N, fiber_NA=1e-6
+    ), path
 
 
 def _target_hit(sim, det, target, offset, tts=0.0, key=3):
@@ -46,19 +49,20 @@ def _target_hit(sim, det, target, offset, tts=0.0, key=3):
     source, path = _beam(det, target, offset)
     params = tiny.transparent(sim.det_geom.num_sensors, tts=tts)
     charges, times = (np.asarray(o) for o in sim(source, params, jax.random.PRNGKey(key)))
-    assert charges[index] > 0.999 * charges.sum()      # the beam lands on the target
+    assert charges[index] > 0.999 * charges.sum()  # the beam lands on the target
     return float(charges[index]), float(times[index]), path
 
 
 @pytest.mark.parametrize("offset", [0.0, OFFSET_M])
-def test_sampled_first_arrival_is_path_over_phase_velocity(tiny_sampled_sim, tiny_detector,
-                                                           target, offset):
+def test_sampled_first_arrival_is_path_over_phase_velocity(
+    tiny_sampled_sim, tiny_detector, target, offset
+):
     """With no TTS the first photon arrives at exactly path / (c/n). Float32 time over a
     ~1 m path is good to ~1e-6 relative; rtol 1e-4 is 0.4 ps. The vacuum speed would be
     1.06 ns early, and the group velocity 0.17 ns late on the 0.96 m path."""
     _, t, path = _target_hit(tiny_sampled_sim, tiny_detector, target, offset)
     np.testing.assert_allclose(t, path / V_SIM, rtol=1e-4)
-    assert abs(t - path / V_GROUP) > 0.03 * path / V_GROUP   # pins the current choice
+    assert abs(t - path / V_GROUP) > 0.03 * path / V_GROUP  # pins the current choice
 
 
 def test_arrival_time_scales_with_the_path(tiny_sampled_sim, tiny_detector, target):
@@ -75,6 +79,7 @@ def test_sampled_first_arrival_with_tts(tiny_sampled_sim, tiny_detector, target)
     of 0.37, so 4 x 0.37 sigma bounds one draw."""
     from scipy.integrate import trapezoid
     from scipy.special import log_ndtr
+
     sigma = 1.0
     q, t, path = _target_hit(tiny_sampled_sim, tiny_detector, target, 0.0, tts=sigma)
     n = int(round(q))
@@ -88,8 +93,9 @@ def test_sampled_first_arrival_with_tts(tiny_sampled_sim, tiny_detector, target)
     assert abs(t - (t_geo + sigma * mean_min)) < 4 * sigma * sd_min, (t, t_geo, mean_min, n)
 
 
-def test_expected_value_time_of_coincident_arrivals_is_their_arrival(tiny_sim, tiny_detector,
-                                                                      target):
+def test_expected_value_time_of_coincident_arrivals_is_their_arrival(
+    tiny_sim, tiny_detector, target
+):
     """The expected-value forward reports the mean of the first-arrival distribution. Every ray
     of the pencil beam reaches the target at t_geo, so with no transit-time spread the first
     photo-electron arrives at t_geo exactly, however many there are."""

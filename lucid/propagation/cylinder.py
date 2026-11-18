@@ -2,14 +2,14 @@
 Cylinder-specific photon propagation functions.
 """
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-from functools import partial
 from jax import lax
 
 from lucid.propagation.sensor_map import grid_face_cells
-
 
 # Grazing-ray sqrt regularization for the wall-intersection discriminant. 0 -> legacy hard floor
 # sqrt(max(disc, 1e-6)) (C0 kink at the threshold + near-divergent 2nd derivative just above it,
@@ -47,11 +47,11 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
     LARGE = 1e10
 
     # Quadratic equation coefficients for cylinder intersection
-    a = ray_direction[0]**2 + ray_direction[1]**2
-    b = 2.0 * (ray_origin[0]*ray_direction[0] + ray_origin[1]*ray_direction[1])
-    c = ray_origin[0]**2 + ray_origin[1]**2 - r**2
+    a = ray_direction[0] ** 2 + ray_direction[1] ** 2
+    b = 2.0 * (ray_origin[0] * ray_direction[0] + ray_origin[1] * ray_direction[1])
+    c = ray_origin[0] ** 2 + ray_origin[1] ** 2 - r**2
 
-    discriminant = b**2 - 4*a*c
+    discriminant = b**2 - 4 * a * c
     epsilon = 1e-6
 
     def side_branch(_):
@@ -63,8 +63,8 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
             sqrt_disc = jnp.sqrt(jnp.maximum(discriminant, 0.0) + _CYL_SQRT_EPS)
         else:
             sqrt_disc = jnp.sqrt(jnp.maximum(discriminant, 1e-6))
-        t1 = (-b - sqrt_disc) / (2*a)
-        t2 = (-b + sqrt_disc) / (2*a)
+        t1 = (-b - sqrt_disc) / (2 * a)
+        t2 = (-b + sqrt_disc) / (2 * a)
         t1, t2 = jnp.minimum(t1, t2), jnp.maximum(t1, t2)
 
         valid_t = (t1 > 0) | (t2 > 0)
@@ -85,10 +85,7 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
         return (False, jnp.array(LARGE, dtype=ray_origin.dtype))
 
     use_parallel = jnp.abs(a) < 1e-12
-    intersects, tval = lax.cond(use_parallel,
-                                parallel_side_branch,
-                                side_branch,
-                                operand=None)
+    intersects, tval = lax.cond(use_parallel, parallel_side_branch, side_branch, operand=None)
 
     return intersects, tval
 
@@ -118,7 +115,7 @@ def intersect_cylinder_cap(ray_origin, ray_direction, r, z):
     def normal_cap_branch(_):
         t_plane = (z - ray_origin[2]) / ray_direction[2]
         ipt = ray_origin + t_plane * ray_direction
-        within_circle = (ipt[0]**2 + ipt[1]**2) <= r**2
+        within_circle = (ipt[0] ** 2 + ipt[1] ** 2) <= r**2
 
         intersects_ = (t_plane > 0) & within_circle
         tval_ = jnp.where(intersects_, t_plane, LARGE)
@@ -132,10 +129,7 @@ def intersect_cylinder_cap(ray_origin, ray_direction, r, z):
         return (intersects_, tval_)
 
     use_parallel = jnp.abs(ray_direction[2]) < 1e-12
-    intersects, tval = lax.cond(use_parallel,
-                                parallel_cap_branch,
-                                normal_cap_branch,
-                                operand=None)
+    intersects, tval = lax.cond(use_parallel, parallel_cap_branch, normal_cap_branch, operand=None)
 
     return intersects, tval
 
@@ -229,14 +223,15 @@ def intersect_cylinder_with_grid(ray_origin, ray_direction, r, h, n_cap, n_angul
     return intersects, t, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point
 
 
-batch_intersect_cylinder_with_grid = jax.vmap(intersect_cylinder_with_grid,
-                                              in_axes=(0, 0, None, None, None, None, None))
+batch_intersect_cylinder_with_grid = jax.vmap(
+    intersect_cylinder_with_grid, in_axes=(0, 0, None, None, None, None, None)
+)
 
 
 def calculate_cylinder_normals(intersection_point, is_wall, is_top_cap):
     """
     Calculate normals for cylinder surfaces.
-    
+
     Parameters
     ----------
     intersection_point : ndarray
@@ -245,7 +240,7 @@ def calculate_cylinder_normals(intersection_point, is_wall, is_top_cap):
         Boolean array indicating wall hits
     is_top_cap : ndarray
         Boolean array indicating top cap hits
-        
+
     Returns
     -------
     ndarray
@@ -253,19 +248,22 @@ def calculate_cylinder_normals(intersection_point, is_wall, is_top_cap):
     """
     # Wall normals (outward — radially away from cylinder axis)
     wall_normals = intersection_point[:, :2] / (
-            jnp.linalg.norm(intersection_point[:, :2], axis=1, keepdims=True) + 1e-10)
-    wall_normals = jnp.concatenate([wall_normals, jnp.zeros_like(intersection_point[:, :1])], axis=1)
-    
+        jnp.linalg.norm(intersection_point[:, :2], axis=1, keepdims=True) + 1e-10
+    )
+    wall_normals = jnp.concatenate(
+        [wall_normals, jnp.zeros_like(intersection_point[:, :1])], axis=1
+    )
+
     # Cap normals
-    top_cap_normal = jnp.array([0., 0., 1.])
-    bottom_cap_normal = jnp.array([0., 0., -1.])
-    
+    top_cap_normal = jnp.array([0.0, 0.0, 1.0])
+    bottom_cap_normal = jnp.array([0.0, 0.0, -1.0])
+
     # Select appropriate normal
-    return jnp.where(is_wall[:, None],
-                    wall_normals,
-                    jnp.where(is_top_cap[:, None],
-                             top_cap_normal,
-                             bottom_cap_normal))
+    return jnp.where(
+        is_wall[:, None],
+        wall_normals,
+        jnp.where(is_top_cap[:, None], top_cap_normal, bottom_cap_normal),
+    )
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
@@ -300,7 +298,7 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
         x, y, z = sensor
 
         # Convert to cylindrical coordinates
-        radius = jnp.sqrt(x ** 2 + y ** 2)
+        radius = jnp.sqrt(x**2 + y**2)
         angle = jnp.arctan2(y, x) % (2 * jnp.pi)
 
         # Determine sensor location (wall or cap)
@@ -329,30 +327,34 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
             # Calculate valid height neighbors (don't wrap at boundaries)
             height_up = jnp.clip(height_idx + 1, 0, n_height - 1)
             height_down = jnp.clip(height_idx - 1, 0, n_height - 1)
-            
-            indices = jnp.array([
-                [angular_idx, height_idx, 0],
-                [(angular_idx + 1) % n_angular, height_idx, 0],
-                [angular_idx, height_up, 0],
-                [(angular_idx + 1) % n_angular, height_up, 0],
-                [angular_idx, height_down, 0],
-                [(angular_idx + 1) % n_angular, height_down, 0],
-                [(angular_idx - 1) % n_angular, height_idx, 0],
-                [(angular_idx - 1) % n_angular, height_up, 0],
-                [(angular_idx - 1) % n_angular, height_down, 0]
-            ])
 
-            selection = jnp.array([
-                1.0,  # Central cell always included
-                include_right,
-                include_top,
-                include_right * include_top,
-                include_bottom,
-                include_right * include_bottom,
-                include_left,
-                include_left * include_top,
-                include_left * include_bottom
-            ])
+            indices = jnp.array(
+                [
+                    [angular_idx, height_idx, 0],
+                    [(angular_idx + 1) % n_angular, height_idx, 0],
+                    [angular_idx, height_up, 0],
+                    [(angular_idx + 1) % n_angular, height_up, 0],
+                    [angular_idx, height_down, 0],
+                    [(angular_idx + 1) % n_angular, height_down, 0],
+                    [(angular_idx - 1) % n_angular, height_idx, 0],
+                    [(angular_idx - 1) % n_angular, height_up, 0],
+                    [(angular_idx - 1) % n_angular, height_down, 0],
+                ]
+            )
+
+            selection = jnp.array(
+                [
+                    1.0,  # Central cell always included
+                    include_right,
+                    include_top,
+                    include_right * include_top,
+                    include_bottom,
+                    include_right * include_bottom,
+                    include_left,
+                    include_left * include_top,
+                    include_left * include_bottom,
+                ]
+            )
 
             sorted_indices = indices[jnp.argsort(-selection)]
 
@@ -381,30 +383,34 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
             x_left = jnp.clip(x_idx - 1, 0, n_cap - 1)
             y_up = jnp.clip(y_idx + 1, 0, n_cap - 1)
             y_down = jnp.clip(y_idx - 1, 0, n_cap - 1)
-            
-            indices = jnp.array([
-                [x_idx, y_idx, 1 if is_top else 2],
-                [x_right, y_idx, 1 if is_top else 2],
-                [x_idx, y_up, 1 if is_top else 2],
-                [x_right, y_up, 1 if is_top else 2],
-                [x_idx, y_down, 1 if is_top else 2],
-                [x_right, y_down, 1 if is_top else 2],
-                [x_left, y_idx, 1 if is_top else 2],
-                [x_left, y_up, 1 if is_top else 2],
-                [x_left, y_down, 1 if is_top else 2]
-            ])
 
-            selection = jnp.array([
-                1.0,
-                include_right,
-                include_top,
-                include_right * include_top,
-                include_bottom,
-                include_right * include_bottom,
-                include_left,
-                include_left * include_top,
-                include_left * include_bottom
-            ])
+            indices = jnp.array(
+                [
+                    [x_idx, y_idx, 1 if is_top else 2],
+                    [x_right, y_idx, 1 if is_top else 2],
+                    [x_idx, y_up, 1 if is_top else 2],
+                    [x_right, y_up, 1 if is_top else 2],
+                    [x_idx, y_down, 1 if is_top else 2],
+                    [x_right, y_down, 1 if is_top else 2],
+                    [x_left, y_idx, 1 if is_top else 2],
+                    [x_left, y_up, 1 if is_top else 2],
+                    [x_left, y_down, 1 if is_top else 2],
+                ]
+            )
+
+            selection = jnp.array(
+                [
+                    1.0,
+                    include_right,
+                    include_top,
+                    include_right * include_top,
+                    include_bottom,
+                    include_right * include_bottom,
+                    include_left,
+                    include_left * include_top,
+                    include_left * include_bottom,
+                ]
+            )
 
             sorted_indices = indices[jnp.argsort(-selection)]
 
@@ -419,9 +425,9 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
                 lambda: jax.lax.cond(
                     on_bottom,
                     lambda: assign_cap(False),
-                    lambda: jnp.full((9, 3), -1, dtype=jnp.int32)
-                )
-            )
+                    lambda: jnp.full((9, 3), -1, dtype=jnp.int32),
+                ),
+            ),
         )
 
     return jax.vmap(assign_single_sensor)(sensors)
@@ -437,37 +443,28 @@ def calculate_grid_centers(r, h, n_cap, n_angular, n_height):
     angular_centers = (jnp.arange(n_angular) + 0.5) * angular_step
     height_centers = (jnp.arange(n_height) - n_height / 2 + 0.5) * height_step
 
-    ang_grid, h_grid = jnp.meshgrid(angular_centers, height_centers, indexing='ij')
+    ang_grid, h_grid = jnp.meshgrid(angular_centers, height_centers, indexing="ij")
 
     wall_x = r * jnp.cos(ang_grid)
     wall_y = r * jnp.sin(ang_grid)
-    wall_centers = jnp.stack([
-        wall_x.reshape(-1),
-        wall_y.reshape(-1),
-        h_grid.reshape(-1)
-    ], axis=1)
+    wall_centers = jnp.stack([wall_x.reshape(-1), wall_y.reshape(-1), h_grid.reshape(-1)], axis=1)
 
     # Cap centers
     cap_step = 2 * r / n_cap
     cap_positions = (jnp.arange(n_cap) - n_cap / 2 + 0.5) * cap_step
-    x_grid, y_grid = jnp.meshgrid(cap_positions, cap_positions, indexing='ij')
+    x_grid, y_grid = jnp.meshgrid(cap_positions, cap_positions, indexing="ij")
 
     # Top and bottom cap centers
     top_z = jnp.full(n_cap * n_cap, h / 2)
     bottom_z = jnp.full(n_cap * n_cap, -h / 2)
 
-    cap_centers = jnp.concatenate([
-        jnp.stack([
-            x_grid.reshape(-1),
-            y_grid.reshape(-1),
-            top_z
-        ], axis=1),
-        jnp.stack([
-            x_grid.reshape(-1),
-            y_grid.reshape(-1),
-            bottom_z
-        ], axis=1)
-    ], axis=0)
+    cap_centers = jnp.concatenate(
+        [
+            jnp.stack([x_grid.reshape(-1), y_grid.reshape(-1), top_z], axis=1),
+            jnp.stack([x_grid.reshape(-1), y_grid.reshape(-1), bottom_z], axis=1),
+        ],
+        axis=0,
+    )
 
     return jnp.concatenate([wall_centers, cap_centers], axis=0)
 
@@ -479,6 +476,10 @@ def cylinder_grid_cells(n_cap, n_angular, n_height):
     cap's (x, y, 2): the convention of :func:`assign_sensors_to_grid`, read by
     :func:`lucid.propagation.sensor_map.build_inverted_sensor_map`.
     """
-    return np.concatenate([grid_face_cells(n_angular, n_height, 0),
-                           grid_face_cells(n_cap, n_cap, 1),
-                           grid_face_cells(n_cap, n_cap, 2)])
+    return np.concatenate(
+        [
+            grid_face_cells(n_angular, n_height, 0),
+            grid_face_cells(n_cap, n_cap, 1),
+            grid_face_cells(n_cap, n_cap, 2),
+        ]
+    )

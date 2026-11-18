@@ -10,14 +10,15 @@ clipping and the inside-detector check.
 """
 
 import os
-import numpy as np
+
 import jax.numpy as jnp
+import numpy as np
 
 from .base import Detector
 from .registry import register_detector
 
 
-@register_detector('string')
+@register_detector("string")
 class StringTelescope(Detector):
     """String-array neutrino telescope geometry.
 
@@ -34,8 +35,9 @@ class StringTelescope(Detector):
     envelope_z_min, envelope_z_max : float — bounding cylinder z range
     """
 
-    def __init__(self, dom_xyz, n_dom_per_str, sensor_radius,
-                 envelope_radius, envelope_z_min, envelope_z_max):
+    def __init__(
+        self, dom_xyz, n_dom_per_str, sensor_radius, envelope_radius, envelope_z_min, envelope_z_max
+    ):
         n_str = len(dom_xyz)
         max_dom = dom_xyz.shape[1]
         total_doms = int(np.sum(n_dom_per_str))
@@ -131,6 +133,7 @@ class StringTelescope(Detector):
     def volume(self):
         """The cylindrical envelope (:mod:`lucid.geometry.volume`)."""
         from lucid.geometry.volume import CylinderVolume
+
         return CylinderVolume(self.envelope_radius, self.envelope_z_min, self.envelope_z_max)
 
     def bounds_check(self, positions):
@@ -140,19 +143,19 @@ class StringTelescope(Detector):
     def get_jax_tables(self):
         """Convert tables to JAX arrays for the propagator."""
         return {
-            'string_anchors': jnp.array(self.string_anchors),
-            'string_tops': jnp.array(self.string_tops),
-            'string_axes': jnp.array(self.string_axes),
-            'dom_s_offsets': jnp.array(self.dom_s_offsets),
-            'dom_global_ids': jnp.array(self.dom_global_ids),
-            'string_s_min': jnp.array(self.string_s_min),
-            'string_s_max': jnp.array(self.string_s_max),
-            'string_curv': jnp.array(self.string_curv),
-            'n_str': self.n_str,
-            'max_dom': self.max_dom,
-            'envelope_radius': self.envelope_radius,
-            'envelope_z_min': self.envelope_z_min,
-            'envelope_z_max': self.envelope_z_max,
+            "string_anchors": jnp.array(self.string_anchors),
+            "string_tops": jnp.array(self.string_tops),
+            "string_axes": jnp.array(self.string_axes),
+            "dom_s_offsets": jnp.array(self.dom_s_offsets),
+            "dom_global_ids": jnp.array(self.dom_global_ids),
+            "string_s_min": jnp.array(self.string_s_min),
+            "string_s_max": jnp.array(self.string_s_max),
+            "string_curv": jnp.array(self.string_curv),
+            "n_str": self.n_str,
+            "max_dom": self.max_dom,
+            "envelope_radius": self.envelope_radius,
+            "envelope_z_min": self.envelope_z_min,
+            "envelope_z_max": self.envelope_z_max,
         }
 
     @classmethod
@@ -160,36 +163,47 @@ class StringTelescope(Detector):
         """Load a StringTelescope from an NPZ file."""
         data = np.load(npz_path)
         return cls(
-            dom_xyz=data['dom_xyz'],
-            n_dom_per_str=data['n_dom_per_str'],
-            sensor_radius=float(data['sensor_radius']),
-            envelope_radius=float(data['envelope_radius']),
-            envelope_z_min=float(data['envelope_z_min']),
-            envelope_z_max=float(data['envelope_z_max']),
+            dom_xyz=data["dom_xyz"],
+            n_dom_per_str=data["n_dom_per_str"],
+            sensor_radius=float(data["sensor_radius"]),
+            envelope_radius=float(data["envelope_radius"]),
+            envelope_z_min=float(data["envelope_z_min"]),
+            envelope_z_max=float(data["envelope_z_max"]),
         )
 
     @classmethod
     def from_config(cls, geometry, config_dir):
         """Per-DOM positions from the NPZ that ``geometry['npz_file_path']`` names."""
-        return cls.from_npz(os.path.join(config_dir, geometry['npz_file_path']))
+        return cls.from_npz(os.path.join(config_dir, geometry["npz_file_path"]))
 
     # ── The surface-propagator interface: unused, strings have their own propagator ──
 
     def intersect_ray(self, origins, directions, grid):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError(
+            "StringTelescope uses create_string_propagator, not create_propagator"
+        )
 
     def compute_normal(self, point, surface_info):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError(
+            "StringTelescope uses create_string_propagator, not create_propagator"
+        )
 
     def point_to_grid_cell(self, grid_info, grid):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError(
+            "StringTelescope uses create_string_propagator, not create_propagator"
+        )
 
     def assign_sensor_to_cells(self, sensors, sensor_radius, grid):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError(
+            "StringTelescope uses create_string_propagator, not create_propagator"
+        )
 
     def grid_cell_centers(self, grid):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError(
+            "StringTelescope uses create_string_propagator, not create_propagator"
+        )
 
     def total_grid_cells(self, grid):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
-
+        raise NotImplementedError(
+            "StringTelescope uses create_string_propagator, not create_propagator"
+        )

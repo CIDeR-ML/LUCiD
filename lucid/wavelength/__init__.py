@@ -8,8 +8,9 @@ Submodules:
     spectrum      — Cherenkov wavelength sampling
     scattering    — Rayleigh and Mie/HG phase function samplers
 """
-from lucid.wavelength.medium import MediumProperties, make_medium, load_qe_curve
-from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
+
+from lucid.wavelength.medium import MediumProperties, load_qe_curve, make_medium
+from lucid.wavelength.optical_model import OpticalArrays, evaluate_optical_model
 from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
 
 # Default wavelength (nm) for padding and fallback — near Cherenkov peak, mid-grid.

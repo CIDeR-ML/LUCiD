@@ -46,12 +46,13 @@ def exact(d, sigma):
 
 def exact_slope(d, sigma):
     x, lam = (r / sigma) ** 2, (np.asarray(d, np.float64) / sigma) ** 2
-    return -(np.asarray(d) / sigma ** 2) * (ncx2.cdf(x, 2, lam) - ncx2.cdf(x, 4, lam))
+    return -(np.asarray(d) / sigma**2) * (ncx2.cdf(x, 2, lam) - ncx2.cdf(x, 4, lam))
 
 
 def table(ratio, d_max_factor=10.0):
-    return create_overlap_prob(ratio * r, r, n_theta=N_QUAD, n_rho=N_QUAD, use_cache=False,
-                               d_max_factor=d_max_factor)
+    return create_overlap_prob(
+        ratio * r, r, n_theta=N_QUAD, n_rho=N_QUAD, use_cache=False, d_max_factor=d_max_factor
+    )
 
 
 def values(fn, d):
@@ -67,6 +68,7 @@ def cross_section(overlap_fn, d_max, n=5000):
 
 # ── The production table: default layout and the shipped temperature ──
 
+
 def test_default_table_matches_closed_form():
     """temperature 0.2 with the default layout, through the cache like every production caller.
 
@@ -76,8 +78,8 @@ def test_default_table_matches_closed_form():
     fn = create_overlap_prob(sigma, r, use_cache=True)
     d = np.linspace(0, 3 * r, 301)
     assert np.max(np.abs(values(fn, d) - exact(d, sigma))) < 1e-4
-    rel = abs(cross_section(fn, 10 * r) - np.pi * r ** 2) / (np.pi * r ** 2)
-    assert rel < 1e-4, rel                                   # measured 6.4e-06
+    rel = abs(cross_section(fn, 10 * r) - np.pi * r**2) / (np.pi * r**2)
+    assert rel < 1e-4, rel  # measured 6.4e-06
 
 
 # ── Every width the table is built for ──
@@ -98,8 +100,8 @@ def test_table_matches_closed_form(ratio, d_max_factor):
     d = np.linspace(0, min(d_max_factor * r, r + 5 * sigma), 201)
     got, want = values(fn, d), exact(d, sigma)
     assert np.max(np.abs(got - want)) < 1e-4
-    np.testing.assert_allclose(got[0], 1 - np.exp(-r ** 2 / (2 * sigma ** 2)), rtol=1e-3)
-    big = want > 1e-2 * want[0]            # relative error where f is not in its far tail
+    np.testing.assert_allclose(got[0], 1 - np.exp(-(r**2) / (2 * sigma**2)), rtol=1e-3)
+    big = want > 1e-2 * want[0]  # relative error where f is not in its far tail
     assert np.max(np.abs(got - want)[big] / want[big]) < 1e-3
 
 
@@ -111,11 +113,12 @@ def test_cross_section_is_the_disk_area(ratio, d_max_factor):
     sigma = ratio * r
     fn = table(ratio, d_max_factor)
     cs = cross_section(fn, min(d_max_factor * r, r + 5 * sigma))
-    rel = abs(cs - np.pi * r ** 2) / (np.pi * r ** 2)
+    rel = abs(cs - np.pi * r**2) / (np.pi * r**2)
     assert rel < 1e-3, f"σ/r={ratio}: cross-section error {rel:.2e}"
 
 
 # ── Test: the table is continuous in σ across 3r ──
+
 
 def test_table_is_continuous_in_sigma_across_3r():
     """Two widths 0.67% apart change the overlap by what the closed form says, 1.3% at most.
@@ -132,6 +135,7 @@ def test_table_is_continuous_in_sigma_across_3r():
 
 
 # ── Test: gradient works in all regimes ──
+
 
 @pytest.mark.parametrize("ratio", [0.2, 1.5, 6.0])
 def test_gradient_matches_closed_form_at_every_width(ratio):

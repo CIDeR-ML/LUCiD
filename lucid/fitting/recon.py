@@ -33,34 +33,35 @@ DELTA=1.0. SIGMA is the per-photon time resolution and must match the TTS of the
 a property of the data rather than of the method and has no default: the paper pipeline uses
 ``tts=2.1`` with ``sigma=2.1`` (``analysis/paper/utils/studies.py``, ``TTS``).
 """
+
 from dataclasses import dataclass
 
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from lucid.detector_params import ParticleParams
-from lucid.losses import counts_loss, first_arrival_window_nll
 from lucid.fitting.gn import gauss_newton
+from lucid.losses import counts_loss, first_arrival_window_nll
 from lucid.utils import cartesian_to_spherical
 
 # Natural per-parameter scales: ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
-SCALE9 = np.array([50., .2, .2, .2, .02, .02, .02, .02, .2])
-
+SCALE9 = np.array([50.0, 0.2, 0.2, 0.2, 0.02, 0.02, 0.02, 0.02, 0.2])
 
 
 @dataclass(frozen=True)
 class FitRecipe:
     """The Fisher-Gauss-Newton fit of :func:`fit_track`; the names are :func:`gauss_newton`'s."""
-    nkeys: int           # PRNG keys the gradient and metric average over, fixed for the whole fit
-    steps: int           # Gauss-Newton iterations
-    lr: float            # step scale, annealed linearly to lr_final
+
+    nkeys: int  # PRNG keys the gradient and metric average over, fixed for the whole fit
+    steps: int  # Gauss-Newton iterations
+    lr: float  # step scale, annealed linearly to lr_final
     lr_final: float
-    lam: float           # Marquardt term lam * diag(Fs)
-    mu: float            # additive Levenberg floor mu * median(diag Fs) * I; 0 runs t0 away
-    refresh: int         # the metric is rebuilt every `refresh` steps
-    max_step: float      # per-component clip on the SCALE9-scaled step
-    polyak: int          # readout: the mean of the last `polyak` iterates
+    lam: float  # Marquardt term lam * diag(Fs)
+    mu: float  # additive Levenberg floor mu * median(diag Fs) * I; 0 runs t0 away
+    refresh: int  # the metric is rebuilt every `refresh` steps
+    max_step: float  # per-component clip on the SCALE9-scaled step
+    polyak: int  # readout: the mean of the last `polyak` iterates
 
     def keys(self, key):
         """The ``nkeys`` fit keys of the event whose fit key is ``key``."""
@@ -68,26 +69,29 @@ class FitRecipe:
 
 
 # The published fit (see the module docstring for how each value was chosen).
-FIT_RECIPE = FitRecipe(nkeys=8, steps=150, lr=4.0, lr_final=1.5, lam=0.01, mu=0.1, refresh=8,
-                       max_step=3.0, polyak=40)
+FIT_RECIPE = FitRecipe(
+    nkeys=8, steps=150, lr=4.0, lr_final=1.5, lam=0.01, mu=0.1, refresh=8, max_step=3.0, polyak=40
+)
 
 
 @dataclass(frozen=True)
 class ModelRecipe:
     """The predictor and the likelihood: everything about the model but the data's TTS (``sigma``)."""
-    n_rays: int                                 # photons per forward
-    K: int                                      # scattering iterations, and the gradient ones
-    temperature: float                          # soft-overlap temperature of the predictor
-    delta: float                                # first-arrival window (ns)
-    time_weight: float                          # weight of the time NLL against the charge NLL
-    energy_scale: str                           # 'nphot' (analytic nphot(E)) | 'simtotal'
+
+    n_rays: int  # photons per forward
+    K: int  # scattering iterations, and the gradient ones
+    temperature: float  # soft-overlap temperature of the predictor
+    delta: float  # first-arrival window (ns)
+    time_weight: float  # weight of the time NLL against the charge NLL
+    energy_scale: str  # 'nphot' (analytic nphot(E)) | 'simtotal'
 
 
 # The published model. The Cherenkov lambda band is the emitter's own (its emission_band_nm, the
 # PhotonSim band). 'nphot' is one forward pass and agrees with 'simtotal' within 0.4 MeV p68 per
 # event (paired 250k test), 1.8x faster.
-MODEL_RECIPE = ModelRecipe(n_rays=250_000, K=8, temperature=0.1, delta=1.0, time_weight=1.0,
-                           energy_scale='nphot')
+MODEL_RECIPE = ModelRecipe(
+    n_rays=250_000, K=8, temperature=0.1, delta=1.0, time_weight=1.0, energy_scale="nphot"
+)
 
 
 def vec9_angles(t9, xp=jnp):
@@ -114,9 +118,10 @@ def vec9_dir(t9):
     ``(..., 3)``, e.g. a fit trajectory) — for reporting angular error."""
     t9 = np.asarray(t9, float)
     st, ct, sp, cp = t9[..., 4], t9[..., 5], t9[..., 6], t9[..., 7]
-    nt = np.hypot(st, ct); npp = np.hypot(sp, cp)
+    nt = np.hypot(st, ct)
+    npp = np.hypot(sp, cp)
     if np.any(nt == 0.0) or np.any(npp == 0.0):
-        raise ValueError(f'9-vector has a zero sin/cos pair, no direction: {t9[..., 4:8].tolist()}')
+        raise ValueError(f"9-vector has a zero sin/cos pair, no direction: {t9[..., 4:8].tolist()}")
     st, ct, sp, cp = st / nt, ct / nt, sp / npp, cp / npp
     return np.stack([st * cp, st * sp, ct], -1)
 
@@ -126,8 +131,19 @@ def vec9_from_track(energy, position, direction, t0=0.0):
     d = np.asarray(direction, float)
     pol, az = cartesian_to_spherical(d / np.linalg.norm(d), np)
     p = np.asarray(position, float)
-    return np.array([float(energy), p[0], p[1], p[2],
-                     np.sin(pol), np.cos(pol), np.sin(az), np.cos(az), float(t0)])
+    return np.array(
+        [
+            float(energy),
+            p[0],
+            p[1],
+            p[2],
+            np.sin(pol),
+            np.cos(pol),
+            np.sin(az),
+            np.cos(az),
+            float(t0),
+        ]
+    )
 
 
 class ReconProblem:
@@ -158,8 +174,7 @@ class ReconProblem:
         self._H = None
 
     def grad_metric_loss(self, theta, step, refresh=True):
-        g = np.mean([np.asarray(self.model.grad(theta, self.oc, self.ot, k))
-                     for k in self.keys], 0)
+        g = np.mean([np.asarray(self.model.grad(theta, self.oc, self.ot, k)) for k in self.keys], 0)
         if refresh or self._H is None:
             self._H = self.model.fisher_ad(theta, self.oc, self.ot, self.keys)
         return g, self._H, None
@@ -188,8 +203,9 @@ class ReconModel:
     def __init__(self, pred, *, sigma, nphot_fn, delta=1.0, time_weight=1.0):
         self.pred = pred
         self.ND = pred.det_geom.num_sensors
-        self.sigma = float(sigma); self.delta = float(delta)
-        self.time_weight = float(time_weight)                # explicit charge↔time weight on the time NLL.
+        self.sigma = float(sigma)
+        self.delta = float(delta)
+        self.time_weight = float(time_weight)  # explicit charge↔time weight on the time NLL.
         #   1.0 = the from-first-principles joint NLL  P(n)·P(t|n) = charge + conditional first-arrival;
         #   validated optimal (a balance sweep found tw=1 best; tw>1 trades a hair of P68 for failures).
         # The charge term's ENERGY gradient is routed through the TOTAL
@@ -209,25 +225,26 @@ class ReconModel:
         #                 shape pass (detached E) supplies pᵢ=μᵢ/A → μ=A·pᵢ routes ∂/∂E through A only.
 
         def _perpmt(t9, oc, ot, key):
-            t9s = t9.at[0].set(jax.lax.stop_gradient(t9[0]))   # detach E in the shape
+            t9s = t9.at[0].set(jax.lax.stop_gradient(t9[0]))  # detach E in the shape
             lw, ft, fi, tot = pred(track_from_vec9(t9s), key)  # μ(sgE, g): geometry-live shape
             if self.nphot_fn is None:
                 # energy scale from the sim's own total at LIVE E (values identical to the shape
                 # pass since sgE==E in value; only the E-gradient differs). μ = A_live · pᵢ.
                 _, _, _, tot_live = pred(track_from_vec9(t9), key)
-                A_live = jnp.sum(tot_live)                     # Σμ(E,g): carries ∂A/∂E and ∂A/∂g
-                A_shape = jnp.maximum(jnp.sum(tot), 1e-8)      # Σμ(sgE,g): ∂/∂g only
+                A_live = jnp.sum(tot_live)  # Σμ(E,g): carries ∂A/∂E and ∂A/∂g
+                A_shape = jnp.maximum(jnp.sum(tot), 1e-8)  # Σμ(sgE,g): ∂/∂g only
                 mu = jnp.maximum(tot * (A_live / A_shape), 1e-8)
-            else:                                              # analytic nphot(E) scale ratio
+            else:  # analytic nphot(E) scale ratio
                 # nphot(E)=A·E^b+c crosses zero near ~137 MeV -> escale sign-flip below it; floor it.
                 _npn = jnp.maximum(self.nphot_fn(t9[0]), 1e3)
                 _npd = jnp.maximum(self.nphot_fn(jax.lax.stop_gradient(t9[0])), 1e3)
-                escale = _npn / _npd                          # =1 in value, carries ∂/∂E
+                escale = _npn / _npd  # =1 in value, carries ∂/∂E
                 mu = jnp.maximum(tot * escale, 1e-8)
-            mu_surv = jnp.maximum(tot, 1e-8)                     # UNSCALED survival denom — must NOT
+            mu_surv = jnp.maximum(tot, 1e-8)  # UNSCALED survival denom — must NOT
             #                                                      be scaled, else far-capture dies.
-            tnll = first_arrival_window_nll(lw, ft, fi, ot, mu_surv, oc, self.ND,
-                                            sigma=self.sigma, delta=self.delta)
+            tnll = first_arrival_window_nll(
+                lw, ft, fi, ot, mu_surv, oc, self.ND, sigma=self.sigma, delta=self.delta
+            )
             return mu, tnll
 
         def _loss(t9, oc, ot, key):
@@ -249,15 +266,27 @@ class ReconModel:
         physics configs ``geom`` and ``physics``; ``sigma`` is the data's TTS (ns) and ``grid``
         the propagation grid keywords of ``setup_event_simulator``."""
         from lucid.simulation import setup_event_simulator
-        if recipe.energy_scale not in ('nphot', 'simtotal'):
-            raise ValueError(f"energy_scale must be 'nphot' or 'simtotal', got {recipe.energy_scale!r}")
+
+        if recipe.energy_scale not in ("nphot", "simtotal"):
+            raise ValueError(
+                f"energy_scale must be 'nphot' or 'simtotal', got {recipe.energy_scale!r}"
+            )
         pred = setup_event_simulator(
-            geom, recipe.n_rays, source='particle', temperature=recipe.temperature, K=recipe.K,
-            physics_config=physics, default_detector_params=True, particle=particle,
-            wavelength_mode=True, **grid)
-        nphot_fn = pred.emitter.n_photons if recipe.energy_scale == 'nphot' else None
-        return cls(pred, sigma=sigma, nphot_fn=nphot_fn, delta=recipe.delta,
-                   time_weight=recipe.time_weight)
+            geom,
+            recipe.n_rays,
+            source="particle",
+            temperature=recipe.temperature,
+            K=recipe.K,
+            physics_config=physics,
+            default_detector_params=True,
+            particle=particle,
+            wavelength_mode=True,
+            **grid,
+        )
+        nphot_fn = pred.emitter.n_photons if recipe.energy_scale == "nphot" else None
+        return cls(
+            pred, sigma=sigma, nphot_fn=nphot_fn, delta=recipe.delta, time_weight=recipe.time_weight
+        )
 
     def perpmt(self, t9, oc, ot, key):
         return self._perpmt(jnp.asarray(t9), oc, ot, key)
@@ -271,13 +300,20 @@ class ReconModel:
     def fisher_ad(self, t9, oc, ot, keys):
         """PSD Fisher metric ``Jμᵀ diag(1/μ) Jμ + Jlᵀ Jl`` via FORWARD-MODE AD (``jacfwd`` of
         ``perpmt``), averaged over ``keys``."""
-        t9 = jnp.asarray(t9, float); ND = self.ND
-        Jm = np.zeros((ND, 9)); Jl = np.zeros((ND, 9)); mu0 = np.zeros(ND)
+        t9 = jnp.asarray(t9, float)
+        ND = self.ND
+        Jm = np.zeros((ND, 9))
+        Jl = np.zeros((ND, 9))
+        mu0 = np.zeros(ND)
         for k in keys:
-            (jm, jl) = self._pjac(t9, oc, ot, k)     # each (ND, 9)
-            Jm += np.asarray(jm); Jl += np.asarray(jl)
+            (jm, jl) = self._pjac(t9, oc, ot, k)  # each (ND, 9)
+            Jm += np.asarray(jm)
+            Jl += np.asarray(jl)
             mu0 += np.asarray(self._perpmt(t9, oc, ot, k)[0])
-        n = len(keys); Jm /= n; Jl /= n; mu0 = np.maximum(mu0 / n, 1e-8)
+        n = len(keys)
+        Jm /= n
+        Jl /= n
+        mu0 = np.maximum(mu0 / n, 1e-8)
         Jmn = Jm / np.sqrt(mu0)[:, None]
         return Jmn.T @ Jmn + Jl.T @ Jl
 
@@ -304,16 +340,33 @@ def fit_track(model, obs_counts, obs_times, start, fit, *, key, on_step=None):
     scaled ``gnorm`` ((steps+1,)), its argmin ``best_iter``, and ``n_rejected`` /
     ``rejected_steps``, the steps the non-finite guard refused.
     """
-    oc = jnp.asarray(obs_counts); ot = jnp.asarray(obs_times)
+    oc = jnp.asarray(obs_counts)
+    ot = jnp.asarray(obs_times)
     # The loop is lucid.fitting.gn.gauss_newton, shared with the calibration fit. ReconProblem
     # supplies (g, H, loss) and owns the recon-specific policy (fixed keys).
     prob = ReconProblem(model, oc, ot, fit.keys(key))
-    res = gauss_newton(prob, np.asarray(start, float), fit.steps,
-                       lam=fit.lam, mu=fit.mu, jitter=1e-9,
-                       lr=fit.lr, lr_final=fit.lr_final, scale=SCALE9, max_step=fit.max_step,
-                       refresh=fit.refresh, readout='polyak', polyak=fit.polyak,
-                       reject_nonfinite=True, on_step=on_step)
-    gnorm = np.array(res['gnorm'])
-    return res['theta'], dict(traj=np.array(res['history']), gnorm=gnorm,
-                              best_iter=int(np.argmin(gnorm)), n_rejected=int(res['n_rejected']),
-                              rejected_steps=tuple(res['rejected_steps']))
+    res = gauss_newton(
+        prob,
+        np.asarray(start, float),
+        fit.steps,
+        lam=fit.lam,
+        mu=fit.mu,
+        jitter=1e-9,
+        lr=fit.lr,
+        lr_final=fit.lr_final,
+        scale=SCALE9,
+        max_step=fit.max_step,
+        refresh=fit.refresh,
+        readout="polyak",
+        polyak=fit.polyak,
+        reject_nonfinite=True,
+        on_step=on_step,
+    )
+    gnorm = np.array(res["gnorm"])
+    return res["theta"], dict(
+        traj=np.array(res["history"]),
+        gnorm=gnorm,
+        best_iter=int(np.argmin(gnorm)),
+        n_rejected=int(res["n_rejected"]),
+        rejected_steps=tuple(res["rejected_steps"]),
+    )

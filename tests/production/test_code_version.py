@@ -4,6 +4,7 @@ The production image has no ``.git/`` (``container/Dockerfile.dockerignore``), s
 batch recorded ``git_commit = 'unknown'`` although the image writes its commit into
 ``/opt/VERSIONS``. The image paths are arguments here, so a fake install and record stand in.
 """
+
 import functools
 import subprocess
 import sys
@@ -36,9 +37,16 @@ def _image(tmp_path, record):
 
 
 def _record(**over):
-    keys = dict(lucid_sha=SHA, lucid_dirty="false", lucid_ref="v9.9.9",
-                lucid_source="https://github.com/CIDeR-ML/LUCiD", photonsim_sha="f" * 40,
-                photonsim_ref="v1.0.3", build_date="2026-11-08T00:00:00Z", geant4="11.3.2")
+    keys = dict(
+        lucid_sha=SHA,
+        lucid_dirty="false",
+        lucid_ref="v9.9.9",
+        lucid_source="https://github.com/CIDeR-ML/LUCiD",
+        photonsim_sha="f" * 40,
+        photonsim_ref="v1.0.3",
+        build_date="2026-11-08T00:00:00Z",
+        geant4="11.3.2",
+    )
     keys.update(over)
     return "".join(f"{k}={v}\n" for k, v in keys.items() if v is not None)
 
@@ -57,8 +65,16 @@ def test_an_image_record_without_lucid_dirty_or_ref_leaves_them_unknown(tmp_path
     assert code_version(install, image) == (SHA, None, "unknown")
 
 
-@pytest.mark.parametrize("record", [None, _record(lucid_sha="unknown"), _record(lucid_sha=""),
-                                    _record(lucid_sha=None), _record(lucid_sha="main")])
+@pytest.mark.parametrize(
+    "record",
+    [
+        None,
+        _record(lucid_sha="unknown"),
+        _record(lucid_sha=""),
+        _record(lucid_sha=None),
+        _record(lucid_sha="main"),
+    ],
+)
 def test_an_unknown_image_commit_stays_unknown(tmp_path, record):
     """No record, the Dockerfile's ``ARG LUCID_SHA=unknown`` default, or a non-SHA value."""
     install, image = _image(tmp_path, record)
@@ -74,8 +90,9 @@ def test_a_gitless_tree_that_is_not_the_image_install_is_unknown(tmp_path):
 
 
 def _git(cwd, *args):
-    return subprocess.check_output(["git", "-C", str(cwd), "-c", "user.name=t",
-                                    "-c", "user.email=t@t", *args], text=True).strip()
+    return subprocess.check_output(
+        ["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args], text=True
+    ).strip()
 
 
 def test_a_git_checkout_gives_head_whether_tracked_files_changed_and_its_tag(tmp_path):
@@ -86,7 +103,7 @@ def test_a_git_checkout_gives_head_whether_tracked_files_changed_and_its_tag(tmp
     _git(repo, "add", "a.py")
     _git(repo, "commit", "-qm", "c")
     head = _git(repo, "rev-parse", "HEAD")
-    _, image = _image(tmp_path / "img", _record())   # a checkout wins over any image record
+    _, image = _image(tmp_path / "img", _record())  # a checkout wins over any image record
     assert code_version(str(repo), image) == (head, False, "none")
     _git(repo, "tag", "v1.2.3")
     code_version.cache_clear()
@@ -121,8 +138,7 @@ def test_the_batch_records_the_image_commit_and_dirty_flag(tmp_path, monkeypatch
 
     flag = {False: "false", True: "true", None: None}[dirty]
     install, image = _image(tmp_path, _record(lucid_dirty=flag))
-    monkeypatch.setattr(drivers, "code_version",
-                        functools.partial(code_version, install, image))
+    monkeypatch.setattr(drivers, "code_version", functools.partial(code_version, install, image))
     files = {}
     monkeypatch.setitem(sys.modules, "uproot", types.SimpleNamespace(open=lambda p: files[str(p)]))
     ev = teg._single_muon_event()
@@ -132,9 +148,17 @@ def test_the_batch_records_the_image_commit_and_dirty_flag(tmp_path, monkeypatch
     out = tmp_path / "out"
     drivers.run_particles(
         teg._StubSimulator(teg.Cylinder(teg.R_DET, teg.H_DET, 120, teg.S_RADIUS)),
-        str(tmp_path / "a.root"), output_dir=str(out), file_index=0, n_events=1, master_seed=1,
-        job_id=1, readout=Readout.from_blocks(), dataset_name="t", apply_smearing=False,
-        apply_translation=False)
+        str(tmp_path / "a.root"),
+        output_dir=str(out),
+        file_index=0,
+        n_events=1,
+        master_seed=1,
+        job_id=1,
+        readout=Readout.from_blocks(),
+        dataset_name="t",
+        apply_smearing=False,
+        apply_translation=False,
+    )
     for sub in ("sensor", "hits", "step", "labl"):
         with h5py.File(out / sub / f"wc_{sub}_0000.h5", "r") as f:
             attrs = f["config"].attrs
@@ -154,7 +178,10 @@ def test_the_photonsim_version_is_the_image_record_only_for_the_image_build(tmp_
     built.touch()
     image = (str(tmp_path / "opt" / "PhotonSim"), versions)
     assert photonsim_version(str(built), image) == {
-        "photonsim_ref": "v1.0.3", "photonsim_commit": "f" * 40, "geant4_version": "11.3.2"}
+        "photonsim_ref": "v1.0.3",
+        "photonsim_commit": "f" * 40,
+        "geant4_version": "11.3.2",
+    }
     unknown = dict.fromkeys(("photonsim_ref", "photonsim_commit", "geant4_version"), "unknown")
     elsewhere = tmp_path / "home" / "PhotonSim" / "build" / "PhotonSim"
     elsewhere.parent.mkdir(parents=True)

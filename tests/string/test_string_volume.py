@@ -10,24 +10,28 @@ Validates the volume-scatter machinery wired into the unification forward:
 Uses the committed icecube86_simple.npz and a calibration isotropic source (no SIREN net),
 so it runs without any downloaded data.
 """
+
 import os
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+
 from tests.helpers.paths import REPO
 
 # Slow by behaviour: 21 build sites, and it rebuilds simulators twice per test.
 pytestmark = pytest.mark.slow
 
 ROOT = str(REPO)
-GEOM = os.path.join(ROOT, 'config/IceCube86_simple_geom_config.json')
-PHYS = os.path.join(ROOT, 'config/IceCube86_physics_config.json')
+GEOM = os.path.join(ROOT, "config/IceCube86_simple_geom_config.json")
+PHYS = os.path.join(ROOT, "config/IceCube86_physics_config.json")
 
 
 def test_string_geometry_loads():
     from lucid.geometry import generate_detector
     from lucid.geometry.string import StringTelescope
+
     det = generate_detector(GEOM)
     assert isinstance(det, StringTelescope)
     assert det.n_sensors == 4680
@@ -43,17 +47,24 @@ def test_string_volume_forward_deposits_charge():
     pts = np.asarray(generate_detector(GEOM).all_points)
     dom = pts[len(pts) // 2]
 
-    sim = setup_event_simulator(GEOM, 200000, source='light_source', K=4,
-                                physics_config=PHYS, wavelength_mode=False,
-                                default_detector_params=True)
-    src = isotropic_source(position=[float(dom[0]) + 1.0, float(dom[1]), float(dom[2])],
-                           intensity=1e6)
+    sim = setup_event_simulator(
+        GEOM,
+        200000,
+        source="light_source",
+        K=4,
+        physics_config=PHYS,
+        wavelength_mode=False,
+        default_detector_params=True,
+    )
+    src = isotropic_source(
+        position=[float(dom[0]) + 1.0, float(dom[1]), float(dom[2])], intensity=1e6
+    )
     out = sim(src, jax.random.PRNGKey(0))
     q = out[0] if isinstance(out, (tuple, list)) else out
     q = jnp.asarray(q)
     assert q.shape == (4680,)
     assert bool(jnp.isfinite(q).all())
-    assert float(jnp.sum(q)) > 0.0          # the volume step actually deposits light
+    assert float(jnp.sum(q)) > 0.0  # the volume step actually deposits light
     # The DOM 1 m from the source collects the most charge, and more than ten times any DOM
     # beyond 10 m (its string neighbours sit ~17 m away; solid angle alone gives ~300x).
     q = np.asarray(q)
@@ -67,26 +78,36 @@ def test_string_volume_forward_deposits_charge():
 
 def _string_sim_and_dp(K):
     from lucid.simulation.simulator import setup_event_simulator
-    sim = setup_event_simulator(GEOM, 200000, source='light_source', K=K,
-                                physics_config=PHYS, wavelength_mode=False)
-    dp = setup_event_simulator(GEOM, 200000, source='light_source', K=K, physics_config=PHYS,
-                               wavelength_mode=False, default_detector_params=True
-                               ).default_detector_params
+
+    sim = setup_event_simulator(
+        GEOM, 200000, source="light_source", K=K, physics_config=PHYS, wavelength_mode=False
+    )
+    dp = setup_event_simulator(
+        GEOM,
+        200000,
+        source="light_source",
+        K=K,
+        physics_config=PHYS,
+        wavelength_mode=False,
+        default_detector_params=True,
+    ).default_detector_params
     return sim, dp
 
 
 def _string_src():
     from lucid.geometry import generate_detector
     from lucid.sources import isotropic_source
+
     pts = np.asarray(generate_detector(GEOM).all_points)
     dom = pts[len(pts) // 2]
-    return isotropic_source(position=[float(dom[0]) + 1.0, float(dom[1]), float(dom[2])],
-                            intensity=1e6)
+    return isotropic_source(
+        position=[float(dom[0]) + 1.0, float(dom[1]), float(dom[2])], intensity=1e6
+    )
 
 
 def _qsum(sim, src, d, key):
     out = sim(src, d, key)
-    q = out[0] if isinstance(out, (tuple, list)) else out   # sim returns (charges, times)
+    q = out[0] if isinstance(out, (tuple, list)) else out  # sim returns (charges, times)
     return jnp.sum(q)
 
 
@@ -97,9 +118,12 @@ def test_string_volume_mie_channel_present():
     sim, dp = _string_sim_and_dp(K=4)
     src = _string_src()
     base = float(_qsum(sim, src, dp, jax.random.PRNGKey(0)))
-    dp_lm = dp._replace(scattering=dp.scattering._replace(
-        mie_scatter_length=jnp.asarray(float(dp.scattering.mie_scatter_length) * 0.05)))  # stronger Mie
-    dp_g = dp._replace(scattering=dp.scattering._replace(g=jnp.asarray(0.0)))              # isotropic Mie
+    dp_lm = dp._replace(
+        scattering=dp.scattering._replace(
+            mie_scatter_length=jnp.asarray(float(dp.scattering.mie_scatter_length) * 0.05)
+        )
+    )  # stronger Mie
+    dp_g = dp._replace(scattering=dp.scattering._replace(g=jnp.asarray(0.0)))  # isotropic Mie
     q_lm = float(_qsum(sim, src, dp_lm, jax.random.PRNGKey(0)))
     q_g = float(_qsum(sim, src, dp_g, jax.random.PRNGKey(0)))
     assert abs(q_lm - base) > 1e-6 * abs(base), "forward does not respond to mie_scatter_length"
@@ -124,18 +148,21 @@ def test_string_volume_optical_gradient_ad_matches_fd_single_step():
 
     def q_of(which):
         def f(x):
-            if which == 'scat':
+            if which == "scat":
                 d = dp._replace(scattering=s._replace(scatter_length=x))
-            elif which == 'mie':
+            elif which == "mie":
                 d = dp._replace(scattering=s._replace(mie_scatter_length=x))
             else:
                 d = dp._replace(absorption=a._replace(absorption_length=x))
             return _qsum(sim, src, d, KEY)
+
         return f
 
-    for which, x0 in [('scat', float(s.scatter_length)),
-                      ('mie', float(s.mie_scatter_length)),
-                      ('abs', float(a.absorption_length))]:
+    for which, x0 in [
+        ("scat", float(s.scatter_length)),
+        ("mie", float(s.mie_scatter_length)),
+        ("abs", float(a.absorption_length)),
+    ]:
         f = q_of(which)
         ad = float(jax.grad(f)(jnp.asarray(x0)))
         h = abs(x0) * 0.02
@@ -146,9 +173,14 @@ def test_string_volume_optical_gradient_ad_matches_fd_single_step():
         # dominated by which photons change fate (FD scatters ~20% around AD across step sizes).
         # 0.25 still catches a sign error or a factor of two; a real accuracy test for this channel
         # needs FD averaged over keys.
-        rtol = 0.25 if which == 'mie' else 0.05
-        np.testing.assert_allclose(ad, fd, rtol=rtol, atol=1e-8 * (abs(fd) + 1.0),
-                                   err_msg=f"AD!=FD for {which}: AD={ad:.4e} FD={fd:.4e}")
+        rtol = 0.25 if which == "mie" else 0.05
+        np.testing.assert_allclose(
+            ad,
+            fd,
+            rtol=rtol,
+            atol=1e-8 * (abs(fd) + 1.0),
+            err_msg=f"AD!=FD for {which}: AD={ad:.4e} FD={fd:.4e}",
+        )
 
 
 def test_string_volume_optical_gradient_low_variance_multistep():
@@ -165,11 +197,19 @@ def test_string_volume_optical_gradient_low_variance_multistep():
     that will not flake.
     """
     from lucid.simulation.simulator import setup_event_simulator
-    sim = setup_event_simulator(GEOM, 80000, source='light_source', K=3,
-                                physics_config=PHYS, wavelength_mode=False)
-    dp = setup_event_simulator(GEOM, 80000, source='light_source', K=3, physics_config=PHYS,
-                               wavelength_mode=False, default_detector_params=True
-                               ).default_detector_params
+
+    sim = setup_event_simulator(
+        GEOM, 80000, source="light_source", K=3, physics_config=PHYS, wavelength_mode=False
+    )
+    dp = setup_event_simulator(
+        GEOM,
+        80000,
+        source="light_source",
+        K=3,
+        physics_config=PHYS,
+        wavelength_mode=False,
+        default_detector_params=True,
+    ).default_detector_params
     src = _string_src()
     s = dp.scattering
     x0 = float(s.scatter_length)
@@ -184,14 +224,17 @@ def test_string_volume_optical_gradient_low_variance_multistep():
     grads = np.array([float(gradf(jnp.asarray(x0), k)) for k in keys])
     assert np.all(np.isfinite(grads))
     # DiCE per-key std ~0.03 (measured, 8 keys); naive pathwise was ~6 and grew with K.
-    assert grads.std() < 1.0, f"multi-step AD std too high ({grads.std():.3f}) — DiCE score regressed?"
+    assert grads.std() < 1.0, (
+        f"multi-step AD std too high ({grads.std():.3f}) — DiCE score regressed?"
+    )
     # A stop_gradient on the score path gives exactly 0 for every key.
     assert np.all(grads != 0.0), grads
     # Unbiased: the key-averaged AD agrees with the key-averaged central difference (h = 5%,
     # common random numbers) within 3 standard errors of the FD mean (measured: AD -0.024,
     # FD 0.015 +- 0.13).
     h = 0.05 * x0
-    fd = np.array([float((fj(jnp.asarray(x0 + h), k) - fj(jnp.asarray(x0 - h), k)) / (2 * h))
-                   for k in keys])
+    fd = np.array(
+        [float((fj(jnp.asarray(x0 + h), k) - fj(jnp.asarray(x0 - h), k)) / (2 * h)) for k in keys]
+    )
     se = fd.std(ddof=1) / np.sqrt(len(keys))
     assert abs(grads.mean() - fd.mean()) < 3 * se, (grads.mean(), fd.mean(), se)

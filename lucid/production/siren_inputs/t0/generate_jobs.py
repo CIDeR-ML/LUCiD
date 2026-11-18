@@ -44,9 +44,9 @@ from lucid.production.platform.user_paths import load_user_paths  # noqa: E402
 
 USER_PATHS_DEFAULT = SCRIPT_DIR.parent.parent / "platform" / "user_paths.sh"
 CALCULATE_T0 = Path("tools") / "t0_correction" / "calculate_t0.py"
-T0_FORM = "stretched_exp_delay"          # lucid.siren.emitter.T0_FORM; the fit the simulator reads
+T0_FORM = "stretched_exp_delay"  # lucid.siren.emitter.T0_FORM; the fit the simulator reads
 CELL = re.compile(r"^(\d+)MeV$")
-HIST = "PhotonHist_TimeDistanceNorm"     # what calculate_t0.py fits; filled when /output/smax is set
+HIST = "PhotonHist_TimeDistanceNorm"  # what calculate_t0.py fits; filled when /output/smax is set
 
 
 class SetupError(ValueError):
@@ -74,66 +74,100 @@ def link_inputs(cells, links: Path, particle: str) -> None:
         (links / f"{particle}_{energy}MeV.root").symlink_to(root)
 
 
-def plan(env: dict, material: str, particle: str, inputs: Optional[Path],
-         output: Optional[Path]) -> tuple:
+def plan(
+    env: dict, material: str, particle: str, inputs: Optional[Path], output: Optional[Path]
+) -> tuple:
     """``(calculate_t0.py, photonsim data dir, inputs dir, cells, output dir)``; raises
     SetupError naming what is missing."""
     ps = env.get("PHOTONSIM_DEV_PATH")
     if not ps:
-        raise SetupError("PHOTONSIM_DEV_PATH is not set in user_paths.sh: the PhotonSim checkout "
-                         f"whose {CALCULATE_T0} runs the fit and whose data/ holds smax_fit.csv")
+        raise SetupError(
+            "PHOTONSIM_DEV_PATH is not set in user_paths.sh: the PhotonSim checkout "
+            f"whose {CALCULATE_T0} runs the fit and whose data/ holds smax_fit.csv"
+        )
     calc = Path(ps) / CALCULATE_T0
     if not calc.is_file():
         raise SetupError(f"no {calc}")
     if T0_FORM not in calc.read_text():
-        raise SetupError(f"{calc} predates the {T0_FORM!r} fit the simulator reads; update "
-                         f"the PhotonSim checkout (main since May 2026)")
+        raise SetupError(
+            f"{calc} predates the {T0_FORM!r} fit the simulator reads; update "
+            f"the PhotonSim checkout (main since May 2026)"
+        )
     smax = Path(ps) / "data" / material / particle / "smax_fit.csv"
     if not smax.is_file():
         raise SetupError(f"no s_max fit {smax} (the smax stage writes it)")
     if inputs is None:
         base = env.get("SIREN_INPUTS_BASE_PATH") or env.get("SIREN_OUTPUT_BASE_PATH")
         if not base:
-            raise SetupError("no input root: pass --inputs, or set SIREN_OUTPUT_BASE_PATH (or "
-                             "SIREN_INPUTS_BASE_PATH) in user_paths.sh")
+            raise SetupError(
+                "no input root: pass --inputs, or set SIREN_OUTPUT_BASE_PATH (or "
+                "SIREN_INPUTS_BASE_PATH) in user_paths.sh"
+            )
         inputs = Path(base) / "training_inputs" / material / particle
     cells = find_cells(inputs)
     if not cells:
-        raise SetupError(f"no <E>MeV/photonsim.root under {inputs}: run the training-input scan "
-                         f"(lucid.production.siren_inputs.generate_jobs, then merge.sh) first")
+        raise SetupError(
+            f"no <E>MeV/photonsim.root under {inputs}: run the training-input scan "
+            f"(lucid.production.siren_inputs.generate_jobs, then merge.sh) first"
+        )
     import uproot
+
     for _, root in (cells[0], cells[-1]):
         with uproot.open(root) as f:
             if HIST not in f:
-                raise SetupError(f"{root} has no {HIST}: its PhotonSim ran without /output/smax "
-                                 f"or predates the histogram; rerun that scan")
+                raise SetupError(
+                    f"{root} has no {HIST}: its PhotonSim ran without /output/smax "
+                    f"or predates the histogram; rerun that scan"
+                )
     if output is None:
         base = env.get("SIREN_OUTPUT_BASE_PATH") or env.get("OUTPUT_BASE_PATH")
         if not base:
-            raise SetupError("no output root: pass --output, or set SIREN_OUTPUT_BASE_PATH (or "
-                             "OUTPUT_BASE_PATH) in user_paths.sh")
+            raise SetupError(
+                "no output root: pass --output, or set SIREN_OUTPUT_BASE_PATH (or "
+                "OUTPUT_BASE_PATH) in user_paths.sh"
+            )
         output = Path(base) / "t0_parametrization" / material / particle
     return calc, Path(ps) / "data", inputs, cells, output
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--material", required=True, help="e.g. water")
     p.add_argument("--particle", required=True, help="PhotonSim's name, e.g. mu- or e-")
-    p.add_argument("--inputs", type=Path, default=None,
-                   help="the training-input scan, <E>MeV/photonsim.root (default: "
-                        "<SIREN_INPUTS_BASE_PATH or SIREN_OUTPUT_BASE_PATH>/training_inputs/<m>/<p>)")
-    p.add_argument("--output", type=Path, default=None,
-                   help="output directory (default: <SIREN_OUTPUT_BASE_PATH or "
-                        "OUTPUT_BASE_PATH>/t0_parametrization/<m>/<p>)")
+    p.add_argument(
+        "--inputs",
+        type=Path,
+        default=None,
+        help="the training-input scan, <E>MeV/photonsim.root (default: "
+        "<SIREN_INPUTS_BASE_PATH or SIREN_OUTPUT_BASE_PATH>/training_inputs/<m>/<p>)",
+    )
+    p.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="output directory (default: <SIREN_OUTPUT_BASE_PATH or "
+        "OUTPUT_BASE_PATH>/t0_parametrization/<m>/<p>)",
+    )
     p.add_argument("-s", "--submit", action="store_true", help="Submit the job (default: prepare).")
-    p.add_argument("-P", "--partition", default=None,
-                   help="Override SLURM_PARTITION (or CONDOR_JOB_FLAVOUR) from user_paths.sh.")
-    p.add_argument("--user-paths", type=Path, default=USER_PATHS_DEFAULT,
-                   help="Path to user_paths.sh (default: %(default)s).")
-    p.add_argument("--no-skip-existing", action="store_true",
-                   help="Prepare the job even when timing_parameters.json exists.")
+    p.add_argument(
+        "-P",
+        "--partition",
+        default=None,
+        help="Override SLURM_PARTITION (or CONDOR_JOB_FLAVOUR) from user_paths.sh.",
+    )
+    p.add_argument(
+        "--user-paths",
+        type=Path,
+        default=USER_PATHS_DEFAULT,
+        help="Path to user_paths.sh (default: %(default)s).",
+    )
+    p.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Prepare the job even when timing_parameters.json exists.",
+    )
     return p.parse_args(argv)
 
 
@@ -144,19 +178,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if not env.get("LUCID_IMAGE_PATH"):
             raise SetupError("LUCID_IMAGE_PATH is not set in user_paths.sh")
-        partition = (args.partition or env.get("SLURM_PARTITION")
-                     or env.get("CONDOR_JOB_FLAVOUR", ""))
+        partition = (
+            args.partition or env.get("SLURM_PARTITION") or env.get("CONDOR_JOB_FLAVOUR", "")
+        )
         if not partition:
             raise SetupError("SLURM_PARTITION (or CONDOR_JOB_FLAVOUR) is not set in user_paths.sh")
-        partition = partition.split(",")[0].split(":")[0]    # a CPU job: the first partition
-        calc, data, inputs, cells, out = plan(env, args.material, args.particle,
-                                              args.inputs, args.output)
+        partition = partition.split(",")[0].split(":")[0]  # a CPU job: the first partition
+        calc, data, inputs, cells, out = plan(
+            env, args.material, args.particle, args.inputs, args.output
+        )
     except SetupError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if args.submit and shutil.which(adapter.submit_cmd) is None:
-        print(f"error: {adapter.submit_cmd} not on PATH; --submit requires this cluster.",
-              file=sys.stderr)
+        print(
+            f"error: {adapter.submit_cmd} not on PATH; --submit requires this cluster.",
+            file=sys.stderr,
+        )
         return 2
 
     print(f"=== t0 fit: {args.material}/{args.particle} ===")
@@ -170,12 +208,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     links = out / "inputs"
     link_inputs(cells, links, args.particle)
-    command = (f"/opt/conda/bin/python3 {calc} {links} --out-dir {out} "
-               f"--material {args.material} --particle {args.particle} --smax-data-dir {data}")
-    body = adapter.render_command_job(command=command, cell_dir=out,
-                                      job_name=f"t0_{args.material}_{args.particle}",
-                                      log_stem="job", partition=partition,
-                                      gpus="0")   # the fit is CPU-only
+    command = (
+        f"/opt/conda/bin/python3 {calc} {links} --out-dir {out} "
+        f"--material {args.material} --particle {args.particle} --smax-data-dir {data}"
+    )
+    body = adapter.render_command_job(
+        command=command,
+        cell_dir=out,
+        job_name=f"t0_{args.material}_{args.particle}",
+        log_stem="job",
+        partition=partition,
+        gpus="0",
+    )  # the fit is CPU-only
     sb = out / f"submit.{adapter.submit_extension}"
     sb.write_text(body)
     sb.chmod(0o755)

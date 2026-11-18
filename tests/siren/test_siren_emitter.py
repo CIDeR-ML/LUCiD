@@ -3,6 +3,7 @@
 The round trip and the curve checks need no model; the shipped-model cases read the downloaded
 water weights (marker ``requires_emitter``).
 """
+
 import json
 from pathlib import Path
 
@@ -11,39 +12,66 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from lucid.siren.emitter import (
+    decode_target,
+    density,
+    emitter_dir,
+    encode_target,
+    load_emitter,
+    make_n_photons_fn,
+    read_emitter,
+    read_weights,
+    target_range,
+    validate_record,
+    write_emitter,
+)
 from lucid.siren.net import SIREN
-from lucid.siren.emitter import (decode_target, density, emitter_dir, encode_target, load_emitter,
-                                 make_n_photons_fn, read_emitter, read_weights, target_range,
-                                 validate_record, write_emitter)
 from lucid.utils import base_dir_path
 
 ROOT = Path(base_dir_path())
 # Photon yield at 1 GeV from the shipped polynomials.
-YIELD_1GEV = {'muon': 201927.7, 'electron': 214863.8}
+YIELD_1GEV = {"muon": 201927.7, "electron": 214863.8}
 
 
-def _record(kind='cherenkov'):
-    axis2 = {'cherenkov': ('angle_rad', [0.01, 3.1]), 'dedx': ('dedx_kev_per_mm', [1.0, 999.0])}
-    r = {'kind': kind, 'net': {'hidden_features': 8, 'hidden_layers': 1, 'w0': 30.0},
-         'domain': {'energy_mev': [100.0, 5000.0], axis2[kind][0]: axis2[kind][1],
-                    's_over_smax': [0.001, 0.999]},
-         'target': {'log10_min': -3.0, 'log10_max': 2.5, 'offset': 1e-3},
-         'grid_bins': 16,
-         's_max_mm': {'form': 'A*E^B', 'params': {'A': 6.1, 'B': 0.98}}}
-    if kind == 'cherenkov':
-        r['n_photons'] = {'form': 'logpoly', 'coeffs': [12.0, 1.0], 'u0': 6.0, 'du': 2.0}
-        r['t0'] = {'form': 'stretched_exp_delay', 'c_mm_per_ns': 299.792,
-                   'log10_A': [-1.1, 0.0, -0.07, 0.003], 'log10_lambda_mm': [-0.5, 1.0, 0.16, -0.03],
-                   'beta': [11.6, -11.5, 3.8, -0.39]}
-        r['emission_band_nm'] = [274.91, 673.83]
-    r['provenance'] = {'material': 'water', 'particle': 'mu-', 'table': 't.h5', 'steps': 10,
-                       'losses': {'final_train': 1.0, 'final_val': 1.0, 'best_val': 1.0},
-                       'init': None, 'commit': None, 'trained_at_utc': None}
-    r['training'] = {'recipe': {}}
+def _record(kind="cherenkov"):
+    axis2 = {"cherenkov": ("angle_rad", [0.01, 3.1]), "dedx": ("dedx_kev_per_mm", [1.0, 999.0])}
+    r = {
+        "kind": kind,
+        "net": {"hidden_features": 8, "hidden_layers": 1, "w0": 30.0},
+        "domain": {
+            "energy_mev": [100.0, 5000.0],
+            axis2[kind][0]: axis2[kind][1],
+            "s_over_smax": [0.001, 0.999],
+        },
+        "target": {"log10_min": -3.0, "log10_max": 2.5, "offset": 1e-3},
+        "grid_bins": 16,
+        "s_max_mm": {"form": "A*E^B", "params": {"A": 6.1, "B": 0.98}},
+    }
+    if kind == "cherenkov":
+        r["n_photons"] = {"form": "logpoly", "coeffs": [12.0, 1.0], "u0": 6.0, "du": 2.0}
+        r["t0"] = {
+            "form": "stretched_exp_delay",
+            "c_mm_per_ns": 299.792,
+            "log10_A": [-1.1, 0.0, -0.07, 0.003],
+            "log10_lambda_mm": [-0.5, 1.0, 0.16, -0.03],
+            "beta": [11.6, -11.5, 3.8, -0.39],
+        }
+        r["emission_band_nm"] = [274.91, 673.83]
+    r["provenance"] = {
+        "material": "water",
+        "particle": "mu-",
+        "table": "t.h5",
+        "steps": 10,
+        "losses": {"final_train": 1.0, "final_val": 1.0, "best_val": 1.0},
+        "init": None,
+        "commit": None,
+        "trained_at_utc": None,
+    }
+    r["training"] = {"recipe": {}}
     return r
 
 
-@pytest.mark.parametrize('kind', ['cherenkov', 'dedx'])
+@pytest.mark.parametrize("kind", ["cherenkov", "dedx"])
 def test_write_then_read_is_the_same_emitter(tmp_path, kind):
     """What the trainer writes is what the loader reads: the params bit for bit, the domain, and
     the density, which is the decoded net output on the normalised inputs."""
@@ -54,21 +82,29 @@ def test_write_then_read_is_the_same_emitter(tmp_path, kind):
     e = read_emitter(tmp_path)
     for a, b in zip(jax.tree.leaves(params), jax.tree.leaves(e.params)):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
-    assert e.kind == kind and e.grid_bins == 16 and (e.n_photons is None) == (kind == 'dedx')
+    assert e.kind == kind and e.grid_bins == 16 and (e.n_photons is None) == (kind == "dedx")
     ax2 = jnp.linspace(e.lo[1], e.hi[1], 7)
     r = jnp.linspace(e.lo[2], e.hi[2], 7)
-    x = jnp.stack([jnp.full(7, -1.0 + 2 * (1000.0 - 100.0) / 4900.0),
-                   jnp.linspace(-1.0, 1.0, 7), jnp.linspace(-1.0, 1.0, 7)], 1)
+    x = jnp.stack(
+        [
+            jnp.full(7, -1.0 + 2 * (1000.0 - 100.0) / 4900.0),
+            jnp.linspace(-1.0, 1.0, 7),
+            jnp.linspace(-1.0, 1.0, 7),
+        ],
+        1,
+    )
     raw = net.apply(params, x)[:, 0]
     expect = np.maximum(10.0 ** (np.asarray(raw, np.float64) * 5.5 - 3.0) - 1e-3, 0.0)
     # atol: float32 resolution of the decoded value at the offset (1e-3) it subtracts
-    np.testing.assert_allclose(np.asarray(density(e, e.params, 1000.0, ax2, r)), expect,
-                               rtol=1e-4, atol=1e-8)
-    assert e.s_max_m(1000.0) == 6.1 * 1000.0 ** 0.98 / 1000.0
-    if kind == 'cherenkov':     # in predict_t0's order: log10 A, log10 lambda, beta
-        t0 = rec['t0']
-        np.testing.assert_allclose(np.stack(e.t0), [t0['log10_A'], t0['log10_lambda_mm'],
-                                                    t0['beta']], rtol=1e-6)
+    np.testing.assert_allclose(
+        np.asarray(density(e, e.params, 1000.0, ax2, r)), expect, rtol=1e-4, atol=1e-8
+    )
+    assert e.s_max_m(1000.0) == 6.1 * 1000.0**0.98 / 1000.0
+    if kind == "cherenkov":  # in predict_t0's order: log10 A, log10 lambda, beta
+        t0 = rec["t0"]
+        np.testing.assert_allclose(
+            np.stack(e.t0), [t0["log10_A"], t0["log10_lambda_mm"], t0["beta"]], rtol=1e-6
+        )
 
 
 def test_decoding_inverts_the_training_encoding():
@@ -89,50 +125,63 @@ def test_decoding_inverts_the_training_encoding():
 def test_an_emitter_of_another_schema_or_t0_form_is_refused(tmp_path):
     net = SIREN(hidden_features=8, hidden_layers=1, out_features=1)
     write_emitter(tmp_path, _record(), net.init(jax.random.PRNGKey(0), jnp.zeros((1, 3))))
-    meta = json.loads((tmp_path / 'emitter.json').read_text())
-    (tmp_path / 'emitter.json').write_text(json.dumps({**meta, 't0': {**meta['t0'], 'form': 'linear'}}))
-    with pytest.raises(ValueError, match='unsupported t0 form'):
+    meta = json.loads((tmp_path / "emitter.json").read_text())
+    (tmp_path / "emitter.json").write_text(
+        json.dumps({**meta, "t0": {**meta["t0"], "form": "linear"}})
+    )
+    with pytest.raises(ValueError, match="unsupported t0 form"):
         read_emitter(tmp_path)
-    (tmp_path / 'emitter.json').write_text(json.dumps({**meta, 'schema': 0}))
-    with pytest.raises(ValueError, match='schema'):
+    (tmp_path / "emitter.json").write_text(json.dumps({**meta, "schema": 0}))
+    with pytest.raises(ValueError, match="schema"):
         read_emitter(tmp_path)
 
 
 def _promoted(rec):
-    return {**rec, 'provenance': {**rec['provenance'], 'run': 'r', 'selection': None,
-                                  'smax_fit': 's.csv', 'promoted_at_utc': 'now',
-                                  'promoted_commit': None}}
+    return {
+        **rec,
+        "provenance": {
+            **rec["provenance"],
+            "run": "r",
+            "selection": None,
+            "smax_fit": "s.csv",
+            "promoted_at_utc": "now",
+            "promoted_commit": None,
+        },
+    }
 
 
 def test_validate_record_names_what_is_wrong():
     """A trainer's record is valid as a run; installed (promoted) it needs the t0 fit, the band
     and the promotion's provenance. Every problem is named, not only the first."""
-    rec = {'schema': 1, **_record()}
+    rec = {"schema": 1, **_record()}
     validate_record(rec)
     validate_record(_promoted(rec), promoted=True)
-    run = {k: v for k, v in rec.items() if k not in ('t0', 'emission_band_nm')}
+    run = {k: v for k, v in rec.items() if k not in ("t0", "emission_band_nm")}
     validate_record(run)
     with pytest.raises(ValueError) as e:
         validate_record(run, promoted=True)
-    for what in ('t0 fit', 'emission_band_nm', "provenance lacks ['run'"):
+    for what in ("t0 fit", "emission_band_nm", "provenance lacks ['run'"):
         assert what in str(e.value)
-    for bad, what in [({'kind': 'scint'}, 'kind'),
-                      ({'domain': {**rec['domain'], 'energy_mev': [5000.0, 100.0]}}, 'domain.energy_mev'),
-                      ({'target': {**rec['target'], 'offset': 0.0}}, 'offset > 0'),
-                      ({'s_max_mm': {'form': 'A*E^B', 'params': {'A': 1.0}}}, "lacks ['B']"),
-                      ({'t0': {**rec['t0'], 'beta': [1.0, 2.0]}}, 't0.beta'),
-                      ({'emission_band_nm': [600.0, 300.0]}, 'emission_band_nm'),
-                      ({'provenance': {'material': 'water'}}, 'provenance lacks'),
-                      ({'training': {}}, 'training.recipe')]:
-        with pytest.raises(ValueError, match=what.replace('[', r'\[').replace('*', r'\*')):
+    for bad, what in [
+        ({"kind": "scint"}, "kind"),
+        ({"domain": {**rec["domain"], "energy_mev": [5000.0, 100.0]}}, "domain.energy_mev"),
+        ({"target": {**rec["target"], "offset": 0.0}}, "offset > 0"),
+        ({"s_max_mm": {"form": "A*E^B", "params": {"A": 1.0}}}, "lacks ['B']"),
+        ({"t0": {**rec["t0"], "beta": [1.0, 2.0]}}, "t0.beta"),
+        ({"emission_band_nm": [600.0, 300.0]}, "emission_band_nm"),
+        ({"provenance": {"material": "water"}}, "provenance lacks"),
+        ({"training": {}}, "training.recipe"),
+    ]:
+        with pytest.raises(ValueError, match=what.replace("[", r"\[").replace("*", r"\*")):
             validate_record({**rec, **bad})
-    dedx = {'schema': 1, **_record('dedx')}
-    with pytest.raises(ValueError, match='a dE/dx emitter has no t0'):
-        validate_record({**dedx, 't0': rec['t0']})
+    dedx = {"schema": 1, **_record("dedx")}
+    with pytest.raises(ValueError, match="a dE/dx emitter has no t0"):
+        validate_record({**dedx, "t0": rec["t0"]})
 
 
-@pytest.mark.parametrize('emitter', sorted(ROOT.glob('data/*/*/*/emitter.json')),
-                         ids=lambda p: '/'.join(p.parts[-4:-1]))
+@pytest.mark.parametrize(
+    "emitter", sorted(ROOT.glob("data/*/*/*/emitter.json")), ids=lambda p: "/".join(p.parts[-4:-1])
+)
 def test_every_shipped_emitter_is_a_valid_promoted_record(emitter):
     validate_record(json.loads(emitter.read_text()), promoted=True)
 
@@ -140,56 +189,71 @@ def test_every_shipped_emitter_is_a_valid_promoted_record(emitter):
 def test_an_installed_emitter_must_be_promoted(tmp_path, monkeypatch):
     """load_emitter reads data/ as promoted: a training run copied there by hand is refused."""
     import lucid.siren.emitter as em
+
     net = SIREN(hidden_features=8, hidden_layers=1, out_features=1)
-    rec = {k: v for k, v in _record().items() if k not in ('t0', 'emission_band_nm')}
-    write_emitter(tmp_path / 'water' / 'muon' / 'cherenkov', rec,
-                  net.init(jax.random.PRNGKey(0), jnp.zeros((1, 3))))
-    monkeypatch.setattr(em, 'emitter_dir', lambda p, m, k: tmp_path / m / p / k)
-    read_emitter(tmp_path / 'water' / 'muon' / 'cherenkov')
-    with pytest.raises(ValueError, match='lucid-siren-promote'):
-        load_emitter('muon', 'water', 'cherenkov')
+    rec = {k: v for k, v in _record().items() if k not in ("t0", "emission_band_nm")}
+    write_emitter(
+        tmp_path / "water" / "muon" / "cherenkov",
+        rec,
+        net.init(jax.random.PRNGKey(0), jnp.zeros((1, 3))),
+    )
+    monkeypatch.setattr(em, "emitter_dir", lambda p, m, k: tmp_path / m / p / k)
+    read_emitter(tmp_path / "water" / "muon" / "cherenkov")
+    with pytest.raises(ValueError, match="lucid-siren-promote"):
+        load_emitter("muon", "water", "cherenkov")
 
 
-@pytest.mark.parametrize('particle, kind', [('pion', 'cherenkov'), ('mu-', 'cherenkov'),
-                                            ('muon', 'scintillation')])
+@pytest.mark.parametrize(
+    "particle, kind", [("pion", "cherenkov"), ("mu-", "cherenkov"), ("muon", "scintillation")]
+)
 def test_a_particle_or_kind_with_no_emitter_raises(particle, kind):
-    with pytest.raises(ValueError, match='no SIREN emitter'):
-        emitter_dir(particle, 'water', kind)
+    with pytest.raises(ValueError, match="no SIREN emitter"):
+        emitter_dir(particle, "water", kind)
 
 
-@pytest.mark.parametrize('material', sorted(p.stem for p in (ROOT / 'config' / 'materials').glob('*.json')))
+@pytest.mark.parametrize(
+    "material", sorted(p.stem for p in (ROOT / "config" / "materials").glob("*.json"))
+)
 def test_every_material_names_an_emitter_set_with_both_particles(material):
     """A material JSON's "siren" key names the emitters it runs (wbls and ice: water's)."""
-    siren = json.loads((ROOT / 'config' / 'materials' / f'{material}.json').read_text())['siren']
-    for particle in ('muon', 'electron'):
-        for kind in ('cherenkov', 'dedx'):
-            assert (emitter_dir(particle, siren, kind) / 'emitter.json').is_file()
+    siren = json.loads((ROOT / "config" / "materials" / f"{material}.json").read_text())["siren"]
+    for particle in ("muon", "electron"):
+        for kind in ("cherenkov", "dedx"):
+            assert (emitter_dir(particle, siren, kind) / "emitter.json").is_file()
 
 
 # ---- the shipped curves (tracked; no model needed) --------------------------------------------
 
-@pytest.mark.parametrize('particle', ['muon', 'electron'])
+
+@pytest.mark.parametrize("particle", ["muon", "electron"])
 def test_shipped_photon_yield_is_positive_increasing_and_spans_its_fit(particle):
-    block = json.loads((emitter_dir(particle, 'water', 'cherenkov') / 'emitter.json')
-                       .read_text())['n_photons']
+    block = json.loads((emitter_dir(particle, "water", "cherenkov") / "emitter.json").read_text())[
+        "n_photons"
+    ]
     fn = make_n_photons_fn(block)
     np.testing.assert_allclose(float(fn(1000.0)), YIELD_1GEV[particle], rtol=1e-4)
     # the centred basis spans exactly the fitted range
-    assert np.isclose(np.exp(block['u0'] - block['du']), block['fit_min_mev'], rtol=1e-6)
-    assert np.isclose(np.exp(block['u0'] + block['du']), block['fit_max_mev'], rtol=1e-6)
-    E = np.geomspace(block['fit_min_mev'], block['fit_max_mev'], 400)
+    assert np.isclose(np.exp(block["u0"] - block["du"]), block["fit_min_mev"], rtol=1e-6)
+    assert np.isclose(np.exp(block["u0"] + block["du"]), block["fit_max_mev"], rtol=1e-6)
+    E = np.geomspace(block["fit_min_mev"], block["fit_max_mev"], 400)
     N = np.asarray(fn(E))
     assert np.all(N > 0) and np.all(np.diff(N) > 0)
 
 
 # ---- the shipped water models ----------------------------------------------------------------
 
-@pytest.mark.parametrize('particle, kind', [
-    pytest.param(p, k, marks=pytest.mark.requires_emitter(p, 'water', dedx=k == 'dedx'))
-    for p in ('muon', 'electron') for k in ('cherenkov', 'dedx')])
+
+@pytest.mark.parametrize(
+    "particle, kind",
+    [
+        pytest.param(p, k, marks=pytest.mark.requires_emitter(p, "water", dedx=k == "dedx"))
+        for p in ("muon", "electron")
+        for k in ("cherenkov", "dedx")
+    ],
+)
 def test_the_shipped_emitter_holds_every_weight_of_its_file(particle, kind):
-    e = load_emitter(particle, 'water', kind)
-    path = emitter_dir(particle, 'water', kind) / 'weights.npz'
+    e = load_emitter(particle, "water", kind)
+    path = emitter_dir(particle, "water", kind) / "weights.npz"
     with np.load(path) as f:
         stored = np.sort(np.concatenate([np.ravel(f[k]) for k in f.files]))
     loaded = np.sort(np.concatenate([np.ravel(np.asarray(x)) for x in jax.tree.leaves(e.params)]))

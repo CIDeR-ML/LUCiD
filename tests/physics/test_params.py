@@ -1,13 +1,15 @@
 """Tests for DetectorParams, ParticleParams, and param utilities."""
+
 import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
 
 from lucid.detector_params import (
     ParticleParams,
-    normalize_params, denormalize_params, default_bounds,
+    default_bounds,
+    denormalize_params,
+    normalize_params,
 )
-
 from tests.helpers.params import lab_dp
 
 
@@ -27,16 +29,18 @@ class TestParticleParams:
         pp = ParticleParams(
             energy=500.0,
             position=jnp.array([0.0, 0.0, 0.0]),
-            theta=0.5, phi=1.0, t0=0.0,
+            theta=0.5,
+            phi=1.0,
+            t0=0.0,
         )
         # spherical -> Cartesian with theta the polar angle from +z and phi the azimuth from +x
         d = pp.direction
-        npt.assert_allclose(d, [np.sin(0.5) * np.cos(1.0), np.sin(0.5) * np.sin(1.0), np.cos(0.5)],
-                            atol=1e-6)
+        npt.assert_allclose(
+            d, [np.sin(0.5) * np.cos(1.0), np.sin(0.5) * np.sin(1.0), np.cos(0.5)], atol=1e-6
+        )
 
     def test_direction_along_z(self):
-        pp = ParticleParams(energy=500.0, position=jnp.zeros(3),
-                            theta=0.0, phi=0.0, t0=0.0)
+        pp = ParticleParams(energy=500.0, position=jnp.zeros(3), theta=0.0, phi=0.0, t0=0.0)
         npt.assert_allclose(pp.direction, [0.0, 0.0, 1.0], atol=1e-6)
 
 

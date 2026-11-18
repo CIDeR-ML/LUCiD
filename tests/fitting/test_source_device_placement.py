@@ -17,16 +17,18 @@ commits on this backend. Not covered: that the jitted singleton physically execu
 device (operand devices are not introspectable under `jit`, and the output's device after
 `jnp.stack` reflects the stack, not the placement); wall-clock overlap is a profiler question.
 """
+
 import os
 import subprocess
 import sys
 
 import pytest
+
 from tests.helpers.paths import REPO
 
 # Run in a subprocess with 8 forced CPU devices. Everything the child needs is in this string:
 # keeping it self-contained is deliberate, so the parent's already-initialised JAX cannot leak in.
-PROG = r'''
+PROG = r"""
 import sys, json
 sys.path.insert(0, %r)
 import jax, jax.numpy as jnp
@@ -64,28 +66,38 @@ out = {
     'commits': list(jax.device_put(jnp.ones(3), devs[-1]).devices())[0].id,
 }
 print('RESULT ' + json.dumps(out))
-'''
+"""
 
 
 def _run(n_devices):
     """Run PROG under `n_devices` forced CPU devices and return its parsed RESULT."""
     import json
+
     repo = str(REPO)
     env = dict(os.environ)
-    env['XLA_FLAGS'] = (env.get('XLA_FLAGS', '') +
-                        f' --xla_force_host_platform_device_count={n_devices}').strip()
-    env['JAX_PLATFORMS'] = 'cpu'
-    env.pop('CUDA_VISIBLE_DEVICES', None)
-    p = subprocess.run([sys.executable, '-c', PROG % repo], capture_output=True, text=True,
-                       env=env, cwd=repo, timeout=600)
+    env["XLA_FLAGS"] = (
+        env.get("XLA_FLAGS", "") + f" --xla_force_host_platform_device_count={n_devices}"
+    ).strip()
+    env["JAX_PLATFORMS"] = "cpu"
+    env.pop("CUDA_VISIBLE_DEVICES", None)
+    p = subprocess.run(
+        [sys.executable, "-c", PROG % repo],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=repo,
+        timeout=600,
+    )
     if p.returncode != 0:
-        pytest.fail(f'child failed (rc={p.returncode})\nstdout:\n{p.stdout}\nstderr:\n{p.stderr[-3000:]}')
-    line = next((l for l in p.stdout.splitlines() if l.startswith('RESULT ')), None)
-    assert line, f'no RESULT line\nstdout:\n{p.stdout}\nstderr:\n{p.stderr[-2000:]}'
-    return json.loads(line[len('RESULT '):])
+        pytest.fail(
+            f"child failed (rc={p.returncode})\nstdout:\n{p.stdout}\nstderr:\n{p.stderr[-3000:]}"
+        )
+    line = next((l for l in p.stdout.splitlines() if l.startswith("RESULT ")), None)
+    assert line, f"no RESULT line\nstdout:\n{p.stdout}\nstderr:\n{p.stderr[-2000:]}"
+    return json.loads(line[len("RESULT ") :])
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def placed():
     return _run(8)
 
@@ -93,7 +105,7 @@ def placed():
 def test_the_forced_device_count_actually_took(placed):
     """The control. If the flag were ignored the child would see one device and everything below
     would pass vacuously."""
-    assert placed['n_devices'] == 8
+    assert placed["n_devices"] == 8
 
 
 def test_the_singleton_source_is_the_one_that_gets_placed(placed):
@@ -101,10 +113,11 @@ def test_the_singleton_source_is_the_one_that_gets_placed(placed):
     needs its own device). `largest_group` confirms the other seven really grouped together, since
     in this layout the singleton is also index 0.
     """
-    assert placed['placed_index'] == 0
-    assert placed['largest_group'] == 7, (
-        'the seven same-structure sources did not group; the layout under test is not the '
-        'published one and the placement question it is asking is the wrong one')
+    assert placed["placed_index"] == 0
+    assert placed["largest_group"] == 7, (
+        "the seven same-structure sources did not group; the layout under test is not the "
+        "published one and the placement question it is asking is the wrong one"
+    )
 
 
 def test_the_singleton_gets_a_device_outside_the_mapped_range(placed):
@@ -112,17 +125,18 @@ def test_the_singleton_gets_a_device_outside_the_mapped_range(placed):
     them, or it queues behind a shard. Expected: device 7, from
     `devs[min(n_sources - 1, len(devs) - 1)]` with 8 sources and 8 devices.
     """
-    assert placed['laser_dev_id'] is not None, 'no device was chosen for the singleton source'
-    assert placed['laser_dev_id'] >= placed['largest_group'], (
+    assert placed["laser_dev_id"] is not None, "no device was chosen for the singleton source"
+    assert placed["laser_dev_id"] >= placed["largest_group"], (
         f"singleton placed on device {placed['laser_dev_id']}, inside the range "
-        f"0..{placed['largest_group'] - 1} that pmap occupies -- it will serialise behind a shard")
-    assert placed['laser_dev_id'] == 7
+        f"0..{placed['largest_group'] - 1} that pmap occupies -- it will serialise behind a shard"
+    )
+    assert placed["laser_dev_id"] == 7
 
 
 def test_device_put_commits_on_this_backend(placed):
     """Placement is only real if `device_put` binds. A backend where it silently no-ops would make
     every assertion above true and the fix ineffective."""
-    assert placed['commits'] == 7
+    assert placed["commits"] == 7
 
 
 def test_one_device_degrades_without_crashing():
@@ -131,5 +145,5 @@ def test_one_device_degrades_without_crashing():
     one, which is where the no-op behaviour in the main suite comes from.
     """
     solo = _run(1)
-    assert solo['n_devices'] == 1
-    assert solo['laser_dev_id'] == 0, 'with one device the rule must clamp to it, not raise'
+    assert solo["n_devices"] == 1
+    assert solo["laser_dev_id"] == 0, "with one device the rule must clamp to it, not raise"

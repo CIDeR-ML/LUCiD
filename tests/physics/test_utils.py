@@ -5,16 +5,23 @@ The smears are what the paper's pseudo-data are made with (``smear_times`` for t
 ``smear_charges_SK_like`` for ``Abe_2013``, ``smear_charges_spe`` for ``Bellamy_94``), so their
 magnitudes are pinned, not only their signs.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
 import pytest
 
-from lucid.utils import (cartesian_to_spherical, rotation_onto, smear_charges_SK_like,
-                         smear_charges_spe, smear_times, spherical_to_cartesian)
+from lucid.utils import (
+    cartesian_to_spherical,
+    rotation_onto,
+    smear_charges_SK_like,
+    smear_charges_spe,
+    smear_times,
+    spherical_to_cartesian,
+)
 
-N = 20_000      # draws per magnitude check: the std of a sample std is ~1/sqrt(2N) = 0.5%
+N = 20_000  # draws per magnitude check: the std of a sample std is ~1/sqrt(2N) = 0.5%
 
 
 class TestSphericalToCartesian:
@@ -45,7 +52,7 @@ class TestSphericalToCartesian:
 class TestCartesianToSpherical:
     """The inverse: angles of a unit direction, theta in [0, pi] and phi in [-pi, pi]."""
 
-    @pytest.mark.parametrize('xp, atol', [(np, 1e-15), (jnp, 1e-6)])
+    @pytest.mark.parametrize("xp, atol", [(np, 1e-15), (jnp, 1e-6)])
     def test_round_trip_from_angles(self, xp, atol):
         """decode(encode) on a grid off the poles; phi outside [-pi, pi] comes back wrapped."""
         theta, phi = np.meshgrid([0.2, 1.0, np.pi / 2, 2.9], [-3.0, -0.5, 0.0, 1.2, 3.1, 4.0, 7.0])
@@ -54,7 +61,7 @@ class TestCartesianToSpherical:
         npt.assert_allclose(t, theta, atol=atol)
         npt.assert_allclose(p, np.angle(np.exp(1j * phi)), atol=atol)
 
-    @pytest.mark.parametrize('xp', [np, jnp])
+    @pytest.mark.parametrize("xp", [np, jnp])
     def test_round_trip_from_directions(self, xp):
         """encode(decode) returns the direction, the poles and the -x axis (phi = +-pi) included."""
         rng = np.random.default_rng(0)
@@ -66,31 +73,40 @@ class TestCartesianToSpherical:
 
     def test_poles_and_clipping(self):
         """theta is exactly 0 and pi at the poles; a z a rounding above 1 is clipped, not NaN."""
-        assert cartesian_to_spherical(np.array([0., 0., 1.]), np)[0] == 0.0
-        assert cartesian_to_spherical(np.array([0., 0., -1.]), np)[0] == np.pi
-        assert cartesian_to_spherical(np.array([0., 0., 1. + 1e-15]), np)[0] == 0.0
+        assert cartesian_to_spherical(np.array([0.0, 0.0, 1.0]), np)[0] == 0.0
+        assert cartesian_to_spherical(np.array([0.0, 0.0, -1.0]), np)[0] == np.pi
+        assert cartesian_to_spherical(np.array([0.0, 0.0, 1.0 + 1e-15]), np)[0] == 0.0
 
     def test_particle_params_encodes_through_the_codec(self):
         """``ParticleParams.from_cartesian`` is this codec on the normalised direction, to the bit,
         for unit and unnormalised inputs, and its ``direction`` decodes back to ``d / |d|``."""
         from lucid.detector_params import ParticleParams
+
         rng = np.random.default_rng(1)
         d = rng.normal(size=(2000, 3)) * rng.uniform(0.1, 10.0, size=(2000, 1))
-        d = jnp.asarray(np.concatenate([d / np.linalg.norm(d, axis=1, keepdims=True), d]),
-                        jnp.float32)
+        d = jnp.asarray(
+            np.concatenate([d / np.linalg.norm(d, axis=1, keepdims=True), d]), jnp.float32
+        )
         p = jax.vmap(lambda v: ParticleParams.from_cartesian(1.0, jnp.zeros(3), v))(d)
         theta, phi = jax.vmap(lambda v: cartesian_to_spherical(v / jnp.linalg.norm(v)))(d)
         npt.assert_array_equal(p.theta, theta)
         npt.assert_array_equal(p.phi, phi)
-        npt.assert_allclose(jax.vmap(lambda q: q.direction)(p),
-                            d / jnp.linalg.norm(d, axis=1, keepdims=True), atol=5e-6)
+        npt.assert_allclose(
+            jax.vmap(lambda q: q.direction)(p),
+            d / jnp.linalg.norm(d, axis=1, keepdims=True),
+            atol=5e-6,
+        )
 
 
 def _directions(rng, n=200):
     """Random unit directions plus the poles, and directions 1e-3 .. 1e-9 rad off each pole."""
     d = rng.normal(size=(n, 3))
-    near = [[np.cos(p) * e, np.sin(p) * e, s] for e in (1e-3, 1e-6, 1e-9)
-            for p in (0.3, 2.0) for s in (1.0, -1.0)]
+    near = [
+        [np.cos(p) * e, np.sin(p) * e, s]
+        for e in (1e-3, 1e-6, 1e-9)
+        for p in (0.3, 2.0)
+        for s in (1.0, -1.0)
+    ]
     d = np.concatenate([d, [[0, 0, 1], [0, 0, -1]], near])
     return d / np.linalg.norm(d, axis=1, keepdims=True)
 
@@ -98,7 +114,7 @@ def _directions(rng, n=200):
 class TestRotationOnto:
     """The shortest-arc rotation taking direction ``a`` onto ``b``."""
 
-    @pytest.mark.parametrize('xp, atol', [(np, 1e-14), (jnp, 2e-6)])
+    @pytest.mark.parametrize("xp, atol", [(np, 1e-14), (jnp, 2e-6)])
     def test_proper_rotation_taking_a_onto_b(self, xp, atol):
         """Orthonormal and det +1 to rounding, maps a to b and fixes a x b, for b random and near
         +-z (a = +z) and for random pairs; the inputs need not be unit. Near b = -a the arc is
@@ -118,7 +134,7 @@ class TestRotationOnto:
             axis = np.cross(a_unit, b_unit)
             npt.assert_allclose(R @ axis, axis, atol=conditioned)
 
-    @pytest.mark.parametrize('xp', [np, jnp])
+    @pytest.mark.parametrize("xp", [np, jnp])
     def test_identity_and_the_half_turn(self, xp):
         """a onto a is the identity, exactly; +z onto -z is the documented half turn about +y."""
         z = xp.asarray([0.0, 0.0, 1.0])
@@ -138,16 +154,30 @@ class TestRotationOnto:
 
         def central(a, b, h=1e-6):
             eye = np.eye(3)
-            return [np.array([(f(*(x + h * e if k == i else y for k, y in enumerate((a, b))), np)
-                               - f(*(x - h * e if k == i else y for k, y in enumerate((a, b))), np))
-                              / (2 * h) for e in eye]) for i, x in enumerate((a, b))]
+            return [
+                np.array(
+                    [
+                        (
+                            f(*(x + h * e if k == i else y for k, y in enumerate((a, b))), np)
+                            - f(*(x - h * e if k == i else y for k, y in enumerate((a, b))), np)
+                        )
+                        / (2 * h)
+                        for e in eye
+                    ]
+                )
+                for i, x in enumerate((a, b))
+            ]
 
         grad = jax.jit(jax.grad(lambda a, b: f(a, b, jnp), argnums=(0, 1)))
         z = np.array([0.0, 0.0, 1.0])
-        near_z = [z] + [np.array([np.cos(p) * e, np.sin(p) * e, 1.0]) for e in (1e-3, 1e-5)
-                        for p in (0.0, 1.0, 2.5, 4.0)]
-        pairs = [(z, b) for b in near_z] + [(rng.normal(size=3), rng.normal(size=3))
-                                            for _ in range(20)]
+        near_z = [z] + [
+            np.array([np.cos(p) * e, np.sin(p) * e, 1.0])
+            for e in (1e-3, 1e-5)
+            for p in (0.0, 1.0, 2.5, 4.0)
+        ]
+        pairs = [(z, b) for b in near_z] + [
+            (rng.normal(size=3), rng.normal(size=3)) for _ in range(20)
+        ]
         for a, b in pairs:
             got = grad(jnp.asarray(a, jnp.float32), jnp.asarray(b, jnp.float32))
             for g, want in zip(got, central(a, b)):
@@ -179,8 +209,9 @@ class TestSmearChargesSKLike:
         docstring attributes to arXiv:1307.0162 Table 2 (not re-checked against the paper here).
         Measured at Q = 10, 50 and 500, each within 3% of its own sigma."""
         for q, frac in ((10.0, 0.012), (50.0, 0.0075), (500.0, 0.005)):
-            out = np.asarray(smear_charges_SK_like(jnp.full(N, q), jax.random.PRNGKey(7)),
-                             np.float64)
+            out = np.asarray(
+                smear_charges_SK_like(jnp.full(N, q), jax.random.PRNGKey(7)), np.float64
+            )
             assert out.std() / q == pytest.approx(frac, rel=0.03), q
             assert abs(out.mean() - q) < 5 * frac * q / np.sqrt(N), q
 
@@ -190,9 +221,10 @@ class TestSmearChargesSKLike:
         Same key, same normal draw: the two must agree everywhere, including on which side of
         each regime boundary (20, 130) a charge falls."""
         from lucid.simulation.digitizer import charge_resolution_sigma
+
         q = jnp.array([0.5, 19.99, 20.0, 129.9, 130.0, 500.0])
         key = jax.random.PRNGKey(3)
-        sigma = charge_resolution_sigma(np.asarray(q), 'sk_like')
+        sigma = charge_resolution_sigma(np.asarray(q), "sk_like")
         noise = np.asarray(jax.random.normal(key, shape=q.shape))
         want = np.clip(np.asarray(q) + noise * sigma, 0.0, None)
         npt.assert_allclose(np.asarray(smear_charges_SK_like(q, key)), want, rtol=1e-6)
@@ -200,7 +232,7 @@ class TestSmearChargesSKLike:
     def test_never_negative_and_needs_a_key(self):
         out = smear_charges_SK_like(jnp.array([0.0, 0.01, 1.0]), jax.random.PRNGKey(0))
         assert bool(jnp.all(out >= 0))
-        with pytest.raises(ValueError, match='key'):
+        with pytest.raises(ValueError, match="key"):
             smear_charges_SK_like(jnp.array([1.0]))
 
 
@@ -213,10 +245,11 @@ class TestSmearChargesSPE:
         Var Q = N [(1-w)(sig^2 + mu^2) + 2 w tau^2 - m1^2] / fit_mean^2 (textbook, independent of
         the module's binomial split). Q = 50 p.e. on 2e4 sensors: mean to 0.3%, std to 3%."""
         from lucid.simulation.digitizer import _SPE_SK as spe
-        w, mu, sig, tau, fm = spe['w'], spe['mu'], spe['sig'], spe['tau'], spe['fit_mean']
+
+        w, mu, sig, tau, fm = spe["w"], spe["mu"], spe["sig"], spe["tau"], spe["fit_mean"]
         m1 = (1 - w) * mu + w * tau
         assert m1 == pytest.approx(fm, rel=1e-3)
-        var1 = (1 - w) * (sig ** 2 + mu ** 2) + w * 2 * tau ** 2 - m1 ** 2
+        var1 = (1 - w) * (sig**2 + mu**2) + w * 2 * tau**2 - m1**2
 
         n_pe = 50.0
         out = np.asarray(smear_charges_spe(jnp.full(N, n_pe), jax.random.PRNGKey(5)), np.float64)
@@ -224,5 +257,5 @@ class TestSmearChargesSPE:
         assert out.std() == pytest.approx(np.sqrt(n_pe * var1) / fm, rel=0.03)
 
     def test_needs_a_key(self):
-        with pytest.raises(ValueError, match='key'):
+        with pytest.raises(ValueError, match="key"):
             smear_charges_spe(jnp.array([1.0]))

@@ -21,8 +21,8 @@ the real statistics. ``t_geo`` and ``μ`` are known inputs (geometry + the charg
 
 from functools import cache
 
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # TTS occupancy order-statistic, Poisson-conditioned: the per-PMT first-arrival.
@@ -65,15 +65,17 @@ def _order_stat_moments():
     x = np.linspace(-12.0, 8.0, 8000)
     dx = x[1] - x[0]
     logphi = -0.5 * x * x - 0.5 * np.log(2.0 * np.pi)
-    logS = _log_ndtr(-x)                                  # log(1-Φ(x)), stable
+    logS = _log_ndtr(-x)  # log(1-Φ(x)), stable
     n = np.arange(1, _NMAX_PE + 1)
-    m = np.zeros(_NMAX_PE); v = np.zeros(_NMAX_PE)
+    m = np.zeros(_NMAX_PE)
+    v = np.zeros(_NMAX_PE)
     for i, nn in enumerate(n):
         f = np.exp(np.log(nn) + logphi + (nn - 1) * logS)
         norm = f.sum() * dx
         mi = (x * f).sum() * dx / norm
         qi = (x * x * f).sum() * dx / norm
-        m[i] = mi; v[i] = max(qi - mi * mi, 1e-9)
+        m[i] = mi
+        v[i] = max(qi - mi * mi, 1e-9)
     return m, v
 
 
@@ -92,17 +94,20 @@ def _build_occ_tables():
 
     _M_N, _V_N = _order_stat_moments()
     mu_grid = np.concatenate([[1e-8], np.geomspace(1e-3, 400.0, 800)])
-    bias = np.zeros_like(mu_grid); var = np.zeros_like(mu_grid)
+    bias = np.zeros_like(mu_grid)
+    var = np.zeros_like(mu_grid)
     n = np.arange(1, _NMAX_PE + 1)
     for i, mu in enumerate(mu_grid):
         if mu < 1e-6:
-            bias[i] = _M_N[0]; var[i] = _V_N[0]          # only N=1 (m_1≈0, v_1≈1)
+            bias[i] = _M_N[0]
+            var[i] = _V_N[0]  # only N=1 (m_1≈0, v_1≈1)
             continue
         logp = -mu + n * np.log(mu) - _gammaln(n + 1.0)
-        w = np.exp(logp) / max(1.0 - np.exp(-mu), 1e-300)   # P(N=n | N≥1)
+        w = np.exp(logp) / max(1.0 - np.exp(-mu), 1e-300)  # P(N=n | N≥1)
         em = float(np.sum(w * _M_N))
-        e2 = float(np.sum(w * (_V_N + _M_N ** 2)))           # E[min² | N≥1]
-        bias[i] = em; var[i] = max(e2 - em * em, 1e-9)
+        e2 = float(np.sum(w * (_V_N + _M_N**2)))  # E[min² | N≥1]
+        bias[i] = em
+        var[i] = max(e2 - em * em, 1e-9)
     return mu_grid, bias, var
 
 
@@ -137,9 +142,9 @@ def _occ_bias_var(mu):
     return jnp.interp(mu, mu_grid, var)
 
 
-
-def calibrate_timing(fa_mean_obs, fa_var_obs, t_geo, mu, n_flashes, *,
-                     weights=None, t0_true=None, tts_true=None):
+def calibrate_timing(
+    fa_mean_obs, fa_var_obs, t_geo, mu, n_flashes, *, weights=None, t0_true=None, tts_true=None
+):
     """Recover per-PMT ``t0`` and global ``TTS`` from per-PMT first-arrival moments.
 
     Parameters
@@ -169,8 +174,8 @@ def calibrate_timing(fa_mean_obs, fa_var_obs, t_geo, mu, n_flashes, *,
     lit = W > 0
     n_lit = int(lit.sum())
 
-    b_mean = np.asarray(_occ_bias_mean(jnp.asarray(mu)))     # E[min | N≥1]
-    b_var = np.asarray(_occ_bias_var(jnp.asarray(mu)))       # Var[min | N≥1]
+    b_mean = np.asarray(_occ_bias_mean(jnp.asarray(mu)))  # E[min | N≥1]
+    b_var = np.asarray(_occ_bias_var(jnp.asarray(mu)))  # Var[min | N≥1]
 
     # 1) TTS from the variance (t0-independent): Var[first] = TTS²·Var[min|N≥1].
     ratio = fa_var_obs[lit] / np.clip(b_var[lit], 1e-6, None)
@@ -186,16 +191,24 @@ def calibrate_timing(fa_mean_obs, fa_var_obs, t_geo, mu, n_flashes, *,
     # Global TTS: variance estimator over M flashes, pooled over n_lit PMTs.
     tts_floor = 1.0 / np.sqrt(2.0 * n_flashes * n_lit)
 
-    out = dict(t0_hat=t0_hat, tts_hat=tts_hat, t0_floor=t0_floor, tts_floor=tts_floor,
-               lit=lit, b_mean=b_mean, b_var=b_var, n_lit=n_lit)
+    out = dict(
+        t0_hat=t0_hat,
+        tts_hat=tts_hat,
+        t0_floor=t0_floor,
+        tts_floor=tts_floor,
+        lit=lit,
+        b_mean=b_mean,
+        b_var=b_var,
+        n_lit=n_lit,
+    )
 
     if t0_true is not None:
         t0t = np.asarray(t0_true, float)
-        t0t = np.where(lit, t0t - np.average(t0t[lit], weights=W[lit]), 0.0)   # same gauge
-        out['t0_rms'] = float(np.sqrt(np.average((t0_hat[lit] - t0t[lit]) ** 2, weights=W[lit])))
-        out['t0_corr'] = float(np.corrcoef(t0_hat[lit], t0t[lit])[0, 1])
-        out['t0_floor_median'] = float(np.median(t0_floor[lit]))
+        t0t = np.where(lit, t0t - np.average(t0t[lit], weights=W[lit]), 0.0)  # same gauge
+        out["t0_rms"] = float(np.sqrt(np.average((t0_hat[lit] - t0t[lit]) ** 2, weights=W[lit])))
+        out["t0_corr"] = float(np.corrcoef(t0_hat[lit], t0t[lit])[0, 1])
+        out["t0_floor_median"] = float(np.median(t0_floor[lit]))
     if tts_true is not None:
-        out['tts_frac_err'] = abs(tts_hat / tts_true - 1.0)
+        out["tts_frac_err"] = abs(tts_hat / tts_true - 1.0)
 
     return out

@@ -18,40 +18,43 @@ Two ingredients, deliberately separated for reproducibility:
 Energies are chosen uniformly in track length s_max(E) (~--spacing-m apart), from
 --energy-min to --energy-max. Run inside the container.
 """
+
 import argparse
 import os
 import sys
 from pathlib import Path
 
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import LogNorm
 
-REPO_ROOT = Path(__file__).resolve().parents[2]        # LUCiD/
+REPO_ROOT = Path(__file__).resolve().parents[2]  # LUCiD/
 sys.path.insert(0, str(REPO_ROOT))
-from analysis.paper.utils import paths, provenance      # noqa: E402
+from analysis.paper.utils import paths, provenance  # noqa: E402
 
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['font.size'] = 12
+plt.rcParams["font.family"] = "serif"
+plt.rcParams["font.size"] = 12
 
-MATERIAL = 'water'
-G4NAME = {'muon': 'mu-', 'electron': 'e-'}
+MATERIAL = "water"
+G4NAME = {"muon": "mu-", "electron": "e-"}
 # defaults = the paper configuration
 D_ENERGY_MIN, D_ENERGY_MAX, D_SPACING_M = 500.0, 10000.0, 2.0
-DELAY_CAP = 0.25           # y-axis top (ns)
-MARKER_SPACING_NS = 0.01   # raw points are thinned to one per this step in delay
+DELAY_CAP = 0.25  # y-axis top (ns)
+MARKER_SPACING_NS = 0.01  # raw points are thinned to one per this step in delay
 
 
 # ------------------------------------------------------------ shipped parametrization
 def _delay_line(E, emitter):
     """Model delay t - d/c (ns) vs distance d (m) over 0..s_max(E), from predict_t0."""
     from lucid.sources.siren_rays import predict_t0
+
     d = np.linspace(0.0, emitter.s_max_m(E), 300)
     t = np.asarray(predict_t0(d, float(E), emitter.t0, emitter.c_mm_per_ns))
-    return d, t - d * 1000.0 / emitter.c_mm_per_ns           # d/c in the fit's mm and mm/ns
+    return d, t - d * 1000.0 / emitter.c_mm_per_ns  # d/c in the fit's mm and mm/ns
 
 
 def select_energies(emitter, e_min, e_max, spacing_m):
@@ -61,21 +64,28 @@ def select_energies(emitter, e_min, e_max, spacing_m):
     for E in grid:
         s_m = emitter.s_max_m(E)
         if last is None or (s_m - last) >= spacing_m:
-            out.append(float(E)); last = s_m
+            out.append(float(E))
+            last = s_m
     return out
 
 
 # ------------------------------------------------------------------ optional raw points
 def _load_points(E, data_dir, smax_mm):
     """(d_mm, delay) from the nearest-energy sample ROOT, or None. Needs PhotonSim's reader."""
-    import glob, re
+    import glob
+    import re
+
     # anchored: '100MeV' must not match '1100MeV_...'
-    cands = sorted(c for c in glob.glob(f'{data_dir}/*MeV*.root')
-                   if re.search(rf'(?<![0-9]){int(E)}MeV', os.path.basename(c)))
+    cands = sorted(
+        c
+        for c in glob.glob(f"{data_dir}/*MeV*.root")
+        if re.search(rf"(?<![0-9]){int(E)}MeV", os.path.basename(c))
+    )
     if not cands:
         return None
-    sys.path.insert(0, str(_photonsim_dir() / 'tools' / 't0_correction'))
-    from calculate_t0 import load_profile, MIN_D_MM
+    sys.path.insert(0, str(_photonsim_dir() / "tools" / "t0_correction"))
+    from calculate_t0 import MIN_D_MM, load_profile
+
     try:
         d_mm, delay = load_profile(Path(cands[0]), smax_mm)
     except (KeyError, ValueError):
@@ -87,40 +97,52 @@ def _decimate(values, spacing):
     keep, last = [], -np.inf
     for i, v in enumerate(values):
         if abs(v - last) >= spacing:
-            keep.append(i); last = v
+            keep.append(i)
+            last = v
     return np.asarray(keep, dtype=int)
 
 
 # --------------------------------------------------------- minimal 5-event/energy sample
 def _photonsim_dir():
-    for c in (os.environ.get('LUCID_PHOTONSIM_DIR'),
-              REPO_ROOT.parent / 'PhotonSim', '/opt/PhotonSim'):
-        if c and (Path(c) / 'tools' / 't0_correction' / 'calculate_t0.py').exists():
+    for c in (
+        os.environ.get("LUCID_PHOTONSIM_DIR"),
+        REPO_ROOT.parent / "PhotonSim",
+        "/opt/PhotonSim",
+    ):
+        if c and (Path(c) / "tools" / "t0_correction" / "calculate_t0.py").exists():
             return Path(c)
-    raise FileNotFoundError('PhotonSim checkout not found; set $LUCID_PHOTONSIM_DIR')
+    raise FileNotFoundError("PhotonSim checkout not found; set $LUCID_PHOTONSIM_DIR")
 
 
 def generate_sample(particle, energies, n_events, out_dir):
     """Simulate n_events/energy with the bundled PhotonSim (bakes /output/smax so the
     timing histogram is booked). Writes <out_dir>/<particle>_<E>MeV.root."""
     import subprocess
+
     ps = _photonsim_dir()
-    sys.path.insert(0, str(ps / 'tools' / 't0_correction'))
-    from generate_energy_scan_macros import _load_smax_row, _eval_smax
-    binary = ps / 'build' / 'PhotonSim'
-    smax_row, _ = _load_smax_row(ps / 'data', MATERIAL, G4NAME[particle])
-    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    sys.path.insert(0, str(ps / "tools" / "t0_correction"))
+    from generate_energy_scan_macros import _eval_smax, _load_smax_row
+
+    binary = ps / "build" / "PhotonSim"
+    smax_row, _ = _load_smax_row(ps / "data", MATERIAL, G4NAME[particle])
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     for E in energies:
         smax_mm = _eval_smax(smax_row, E)
-        root = out_dir / f'{particle}_{int(E)}MeV.root'
-        mac = out_dir / f'{particle}_{int(E)}MeV.mac'
+        root = out_dir / f"{particle}_{int(E)}MeV.root"
+        mac = out_dir / f"{particle}_{int(E)}MeV.mac"
         mac.write_text(
             f"/output/filename {root}\n/output/smax {smax_mm:.6f} mm\n/run/initialize\n"
             f"/photon/storeIndividual false\n/gun/particle {G4NAME[particle]}\n"
-            f"/gun/energy {E} MeV\n/run/beamOn {n_events}\n")
-        print(f'  sim {particle} {int(E)} MeV x{n_events} -> {root.name}', flush=True)
-        subprocess.run([str(binary), str(mac)], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            f"/gun/energy {E} MeV\n/run/beamOn {n_events}\n"
+        )
+        print(f"  sim {particle} {int(E)} MeV x{n_events} -> {root.name}", flush=True)
+        subprocess.run(
+            [str(binary), str(mac)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 # --------------------------------------------------------------------------------- figure
@@ -133,69 +155,83 @@ def make_figure(particle, energies, emitter, data_dir, out):
     fig, ax = plt.subplots(figsize=(5.2, 2.6))
     for E in energies:
         c = cmap(norm(E / 1000.0))
-        d, delay = _delay_line(E, emitter)                  # shipped parametrization
-        ax.plot(d, delay, '-', color=c, lw=1.8, alpha=0.8, zorder=2)
-        if data_dir:                                        # optional raw points (PhotonSim: mm)
+        d, delay = _delay_line(E, emitter)  # shipped parametrization
+        ax.plot(d, delay, "-", color=c, lw=1.8, alpha=0.8, zorder=2)
+        if data_dir:  # optional raw points (PhotonSim: mm)
             pts = _load_points(E, data_dir, emitter.s_max_m(E) * 1000.0)
             if pts is not None:
                 dp, dyp = pts
                 idx = _decimate(dyp, MARKER_SPACING_NS)[1:]
-                ax.plot(dp[idx] / 1000.0, dyp[idx], 'o', ms=3.0, alpha=0.95,
-                        color=c, zorder=3)
-    ax.axhline(0, color='grey', lw=0.4)
-    ax.set_xlim(0, None); ax.set_ylim(0, DELAY_CAP)
-    ax.set_xlabel('Distance from Origin (m)')
-    ax.set_ylabel(r'$t_0$ Correction (ns)')
+                ax.plot(dp[idx] / 1000.0, dyp[idx], "o", ms=3.0, alpha=0.95, color=c, zorder=3)
+    ax.axhline(0, color="grey", lw=0.4)
+    ax.set_xlim(0, None)
+    ax.set_ylim(0, DELAY_CAP)
+    ax.set_xlabel("Distance from Origin (m)")
+    ax.set_ylabel(r"$t_0$ Correction (ns)")
 
-    sm = ScalarMappable(norm=norm, cmap=cmap); sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax); cbar.set_label('Energy (GeV)')
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax)
+    cbar.set_label("Energy (GeV)")
     cand = np.array([0.1, 0.2, 0.3, 0.5, 1, 2, 3, 5, 10, 20])
     ticks = cand[(cand >= gev.min()) & (cand <= vmax)]
     if ticks.size:
-        cbar.set_ticks(ticks); cbar.set_ticklabels([f'{t:g}' for t in ticks])
+        cbar.set_ticks(ticks)
+        cbar.set_ticklabels([f"{t:g}" for t in ticks])
 
     fig.tight_layout()
-    out = Path(out); out.mkdir(parents=True, exist_ok=True)
-    base = out / f'{particle}_t0_correction'
-    for ext in ('png', 'pdf'):
-        fig.savefig(f'{base}.{ext}', dpi=150, bbox_inches='tight')
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    base = out / f"{particle}_t0_correction"
+    for ext in ("png", "pdf"):
+        fig.savefig(f"{base}.{ext}", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f'wrote {base}.pdf (+png)')
+    print(f"wrote {base}.pdf (+png)")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--generate-data', action='store_true',
-                    help='simulate the minimal n-event/energy sample first')
-    ap.add_argument('--plot-results', action='store_true', help='(default action)')
-    ap.add_argument('--particles', default='muon,electron')
-    ap.add_argument('--data-dir', default=None,
-                    help='dir of PhotonSim ROOTs for the points (default: the generated sample)')
-    ap.add_argument('--events', type=int, default=20, help='events/energy for --generate-data')
-    ap.add_argument('--energy-min', type=float, default=D_ENERGY_MIN)
-    ap.add_argument('--energy-max', type=float, default=D_ENERGY_MAX)
-    ap.add_argument('--spacing-m', type=float, default=D_SPACING_M)
-    ap.add_argument('--out', default=None)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--generate-data",
+        action="store_true",
+        help="simulate the minimal n-event/energy sample first",
+    )
+    ap.add_argument("--plot-results", action="store_true", help="(default action)")
+    ap.add_argument("--particles", default="muon,electron")
+    ap.add_argument(
+        "--data-dir",
+        default=None,
+        help="dir of PhotonSim ROOTs for the points (default: the generated sample)",
+    )
+    ap.add_argument("--events", type=int, default=20, help="events/energy for --generate-data")
+    ap.add_argument("--energy-min", type=float, default=D_ENERGY_MIN)
+    ap.add_argument("--energy-max", type=float, default=D_ENERGY_MAX)
+    ap.add_argument("--spacing-m", type=float, default=D_SPACING_M)
+    ap.add_argument("--out", default=None)
     a = ap.parse_args()
     out = Path(a.out) if a.out else paths.figure_dir()
 
-    for particle in a.particles.split(','):
+    for particle in a.particles.split(","):
         particle = particle.strip()
         from lucid.siren.emitter import load_emitter
-        emitter = load_emitter(particle, MATERIAL, 'cherenkov')    # the LUCiD-bundled fit
+
+        emitter = load_emitter(particle, MATERIAL, "cherenkov")  # the LUCiD-bundled fit
         energies = select_energies(emitter, a.energy_min, a.energy_max, a.spacing_m)
-        print(f'{particle}: {len(energies)} energies '
-              f'({energies[0]:.0f}-{energies[-1]:.0f} MeV), ~{a.spacing_m} m spacing')
-        sample_dir = paths.data_dir('t0_correction', 'local') / particle
+        print(
+            f"{particle}: {len(energies)} energies "
+            f"({energies[0]:.0f}-{energies[-1]:.0f} MeV), ~{a.spacing_m} m spacing"
+        )
+        sample_dir = paths.data_dir("t0_correction", "local") / particle
         if a.generate_data:
             generate_sample(particle, energies, a.events, sample_dir)
         data_dir = a.data_dir or (str(sample_dir) if sample_dir.exists() else None)
         make_figure(particle, energies, emitter, data_dir, out)
     if a.generate_data:
-        provenance.write_run_record(paths.data_dir('t0_correction', 'local'), __file__, a)
+        provenance.write_run_record(paths.data_dir("t0_correction", "local"), __file__, a)
     provenance.write_run_record(out, __file__, a)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

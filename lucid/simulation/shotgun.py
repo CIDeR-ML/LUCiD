@@ -4,6 +4,7 @@ Supplies shotgun-appropriate defaults (hard sensor kernel, MC sampling, K=12)
 and returns it with a ``.batch`` helper for N-case ``vmap`` execution. All real work
 happens inside ``setup_event_simulator`` with ``hits='waveform'`` or ``hits='photon_hits'``.
 """
+
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -15,8 +16,9 @@ from lucid.simulation.simulator import Simulator, setup_event_simulator
 @dataclass(frozen=True, eq=False)
 class ShotgunSimulator:
     """A shotgun ``Simulator`` with its batched variant and readout layout. Calling it calls ``sim``."""
+
     sim: Simulator
-    batch: Callable             # jit(vmap(sim)) over a leading case axis
+    batch: Callable  # jit(vmap(sim)) over a leading case axis
     num_sensors: int
     waveform_config: dict
 
@@ -29,9 +31,9 @@ def setup_shotgun_simulator(
     *,
     physics_config: str,
     n_photons: int,
-    hits: str = 'waveform',
-    transport: str = 'sampled',
-    detection: str = 'sampled',
+    hits: str = "waveform",
+    transport: str = "sampled",
+    detection: str = "sampled",
     K: int = 12,
     temperature: Optional[float] = None,
     window_ns: float = 500.0,
@@ -41,7 +43,7 @@ def setup_shotgun_simulator(
     smear_time: bool = True,
     smear_charge: bool = True,
     default_detector_params: bool = True,
-    wavelength_sampling: str = 'cherenkov',
+    wavelength_sampling: str = "cherenkov",
     **grid_params,
 ):
     """Build a photon-shotgun simulator.
@@ -85,20 +87,23 @@ def setup_shotgun_simulator(
     ShotgunSimulator
         Callable per case; ``.batch`` vmaps over a leading case axis.
     """
-    if hits not in ('waveform', 'photon_hits'):
+    if hits not in ("waveform", "photon_hits"):
         raise ValueError(f"hits must be 'waveform' or 'photon_hits', got {hits!r}")
 
     waveform_config = dict(
-        window_ns=window_ns, bin_width_ns=bin_width_ns,
-        tts_sigma_ns=tts_sigma_ns, t_min_ns=t_min_ns,
-        smear_time=smear_time, smear_charge=smear_charge,
+        window_ns=window_ns,
+        bin_width_ns=bin_width_ns,
+        tts_sigma_ns=tts_sigma_ns,
+        t_min_ns=t_min_ns,
+        smear_time=smear_time,
+        smear_charge=smear_charge,
     )
     # Each hits function takes only its own options: the per-photon records the TTS alone, the
     # expected waveform no charge smearing.
-    if hits == 'photon_hits':
+    if hits == "photon_hits":
         hits_config = dict(tts_sigma_ns=tts_sigma_ns, smear_time=smear_time)
-    elif detection == 'expected':
-        hits_config = {k: v for k, v in waveform_config.items() if k != 'smear_charge'}
+    elif detection == "expected":
+        hits_config = {k: v for k, v in waveform_config.items() if k != "smear_charge"}
     else:
         hits_config = waveform_config
 
@@ -107,7 +112,7 @@ def setup_shotgun_simulator(
         n_photons=n_photons,
         temperature=temperature,
         K=K,
-        source='light_source',
+        source="light_source",
         transport=transport,
         detection=detection,
         hits=hits,

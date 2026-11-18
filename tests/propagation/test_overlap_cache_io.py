@@ -4,6 +4,7 @@ Jobs that miss a cold cache all build the same table and all write it, so a read
 file mid-write. The write goes through a temporary file and a rename, and a file that cannot be
 read is treated as a miss.
 """
+
 import os
 
 import jax.numpy as jnp
@@ -30,7 +31,7 @@ def test_round_trip_leaves_no_temporary_file(cache_dir):
     assert [p.name for p in cache_dir.iterdir()] == [overlap.get_cache_filename(0.1, 0.02)]
 
 
-@pytest.mark.parametrize('content', ['{"r": 0.1, "d_val', '', '{"r": 0.1}'])
+@pytest.mark.parametrize("content", ['{"r": 0.1, "d_val', "", '{"r": 0.1}'])
 def test_a_partial_or_foreign_file_is_a_miss(cache_dir, content):
     os.makedirs(cache_dir, exist_ok=True)
     (cache_dir / overlap.get_cache_filename(0.1, 0.02)).write_text(content)

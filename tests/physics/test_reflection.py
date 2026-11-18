@@ -1,25 +1,32 @@
 """Tests for the pluggable reflection models (lucid.simulation.reflection)."""
+
 import jax
 import jax.numpy as jnp
-import numpy.testing as npt
-
-from lucid.simulation.reflection import (
-    ScalarReflection, scalar_reflection,
-    ScalarMixReflection, scalar_mix_reflection,
-    AngularReflection, angular_reflection,
-    pmt_reflectance, get_reflection_model, sensor_normal_reflectance,
-    fresnel_rr, fresnel_rc, n_glass,
-)
 import numpy as np
+import numpy.testing as npt
 import pytest
-from lucid.detector_params import create_default_detector_params
-from tests.helpers.paths import REPO
 
+from lucid.detector_params import create_default_detector_params
+from lucid.simulation.reflection import (
+    AngularReflection,
+    ScalarMixReflection,
+    ScalarReflection,
+    angular_reflection,
+    fresnel_rc,
+    fresnel_rr,
+    get_reflection_model,
+    n_glass,
+    pmt_reflectance,
+    scalar_mix_reflection,
+    scalar_reflection,
+    sensor_normal_reflectance,
+)
+from tests.helpers.paths import REPO
 
 _DIR = jnp.array([0.3, 0.0, 0.95]) / jnp.linalg.norm(jnp.array([0.3, 0.0, 0.95]))
 _NORMAL = jnp.array([0.0, 0.0, -1.0])
 _KEY = jax.random.PRNGKey(0)
-N_WATER = 1.33          # config/materials/water.json refractive_index
+N_WATER = 1.33  # config/materials/water.json refractive_index
 
 
 class TestScalarModel:
@@ -36,16 +43,28 @@ class TestScalarModel:
 
 class TestAngularModel:
     def _params(self):
-        return AngularReflection(R0w=jnp.asarray(0.05), pw=jnp.asarray(1.5),
-                                 fw=jnp.asarray(0.1), nr=jnp.asarray(2.8),
-                                 nk=jnp.asarray(1.5), fs=jnp.asarray(0.2))
+        return AngularReflection(
+            R0w=jnp.asarray(0.05),
+            pw=jnp.asarray(1.5),
+            fw=jnp.asarray(0.1),
+            nr=jnp.asarray(2.8),
+            nk=jnp.asarray(1.5),
+            fs=jnp.asarray(0.2),
+        )
 
     def test_schlick_normal_incidence_is_R0(self):
         """At normal incidence (cosθ=1) the Schlick wall reflectance equals R0."""
         rp = self._params()
         # direction anti-parallel to normal → cth_inc = 1
         refl_prob, _, _ = angular_reflection(
-            jnp.array([0.0, 0.0, 1.0]), _NORMAL, False, rp, jnp.asarray(400.0), _KEY, n_medium=N_WATER)
+            jnp.array([0.0, 0.0, 1.0]),
+            _NORMAL,
+            False,
+            rp,
+            jnp.asarray(400.0),
+            _KEY,
+            n_medium=N_WATER,
+        )
         npt.assert_allclose(refl_prob, rp.R0w, atol=1e-5)
 
     def test_schlick_grazing_approaches_one(self):
@@ -54,26 +73,36 @@ class TestAngularModel:
         grazing = jnp.array([0.99995, 0.0, 0.01])
         grazing = grazing / jnp.linalg.norm(grazing)
         refl_prob, _, _ = angular_reflection(
-            grazing, _NORMAL, False, rp, jnp.asarray(400.0), _KEY, n_medium=N_WATER)
+            grazing, _NORMAL, False, rp, jnp.asarray(400.0), _KEY, n_medium=N_WATER
+        )
         assert float(refl_prob) > 0.9
 
     def test_sensor_uses_fresnel(self):
         """Sensor reflectance matches the standalone pmt_reflectance at the angle."""
         rp = self._params()
         cth = jnp.abs(jnp.sum(_DIR * _NORMAL))
-        expected = pmt_reflectance(jnp.clip(cth, 0., 1.), jnp.asarray(400.0), rp.nr, rp.nk, N_WATER)
+        expected = pmt_reflectance(
+            jnp.clip(cth, 0.0, 1.0), jnp.asarray(400.0), rp.nr, rp.nk, N_WATER
+        )
         refl_prob, _, _ = angular_reflection(
-            _DIR, _NORMAL, True, rp, jnp.asarray(400.0), _KEY, n_medium=N_WATER)
+            _DIR, _NORMAL, True, rp, jnp.asarray(400.0), _KEY, n_medium=N_WATER
+        )
         npt.assert_allclose(refl_prob, expected, atol=1e-5)
 
     def test_magnitude_gradients_are_pathwise(self):
         """R0w (wall) and nr (sensor) gradients flow and are finite (pathwise via sg(normal))."""
         rp = self._params()
-        gw = jax.grad(lambda x: angular_reflection(
-            _DIR, _NORMAL, False, rp._replace(R0w=x), jnp.asarray(400.0), _KEY, n_medium=N_WATER)[0])(jnp.asarray(0.05))
-        gs = jax.grad(lambda x: angular_reflection(
-            _DIR, _NORMAL, True, rp._replace(nr=x), jnp.asarray(400.0), _KEY, n_medium=N_WATER)[0])(jnp.asarray(2.8))
-        assert jnp.isfinite(gw) and float(gw) > 0.0   # higher R0 → more reflection
+        gw = jax.grad(
+            lambda x: angular_reflection(
+                _DIR, _NORMAL, False, rp._replace(R0w=x), jnp.asarray(400.0), _KEY, n_medium=N_WATER
+            )[0]
+        )(jnp.asarray(0.05))
+        gs = jax.grad(
+            lambda x: angular_reflection(
+                _DIR, _NORMAL, True, rp._replace(nr=x), jnp.asarray(400.0), _KEY, n_medium=N_WATER
+            )[0]
+        )(jnp.asarray(2.8))
+        assert jnp.isfinite(gw) and float(gw) > 0.0  # higher R0 → more reflection
         assert jnp.isfinite(gs)
 
     def test_spec_diff_score_is_branch_logprob(self):
@@ -81,15 +110,18 @@ class TestAngularModel:
         the diffuse one, with f = fw at walls; the specular share is f (binomial s.e. 0.002)."""
         rp = self._params()
         from lucid.simulation.optics import compute_reflection_direction
+
         spec_dir = compute_reflection_direction(_DIR, _NORMAL)
         keys = jax.random.split(jax.random.PRNGKey(1), 20000)
-        _, d, lr = jax.vmap(lambda k: angular_reflection(
-            _DIR, _NORMAL, False, rp, jnp.asarray(400.0), k, n_medium=N_WATER))(keys)
+        _, d, lr = jax.vmap(
+            lambda k: angular_reflection(
+                _DIR, _NORMAL, False, rp, jnp.asarray(400.0), k, n_medium=N_WATER
+            )
+        )(keys)
         is_spec = np.asarray(jnp.all(jnp.abs(d - spec_dir) < 1e-6, axis=1))
         f = float(rp.fw)
         npt.assert_allclose(np.asarray(lr), np.where(is_spec, np.log(f), np.log1p(-f)), rtol=1e-5)
         assert abs(is_spec.mean() - f) < 0.01
-
 
 
 def _fresnel_sine_law(theta_i, n1, n2):
@@ -170,8 +202,11 @@ class TestFresnelAnalytic:
         ng = float(n_glass(jnp.asarray(lam)))
         R1 = ((N_WATER - ng) / (N_WATER + ng)) ** 2
         R2 = ((ng - nr) ** 2 + nk**2) / ((ng + nr) ** 2 + nk**2)
-        npt.assert_allclose(pmt_reflectance(jnp.asarray(1.0), jnp.asarray(lam), nr, nk, N_WATER),
-                            _two_interface_bounce_sum(R1, R2), rtol=1e-5)
+        npt.assert_allclose(
+            pmt_reflectance(jnp.asarray(1.0), jnp.asarray(lam), nr, nk, N_WATER),
+            _two_interface_bounce_sum(R1, R2),
+            rtol=1e-5,
+        )
 
     def test_pmt_reflectance_oblique_lossless_cathode(self):
         """Off normal, with a lossless cathode (k = 0) both interfaces follow the sine
@@ -183,51 +218,67 @@ class TestFresnelAnalytic:
             R1, ctg = _fresnel_sine_law(theta, N_WATER, ng)
             R2, _ = _fresnel_sine_law(np.arccos(ctg), ng, nr)
             npt.assert_allclose(
-                pmt_reflectance(jnp.asarray(np.cos(theta), jnp.float32), jnp.asarray(lam), nr, 0.0, N_WATER),
-                _two_interface_bounce_sum(R1, R2), rtol=5e-4, err_msg=f"theta={theta}")
+                pmt_reflectance(
+                    jnp.asarray(np.cos(theta), jnp.float32), jnp.asarray(lam), nr, 0.0, N_WATER
+                ),
+                _two_interface_bounce_sum(R1, R2),
+                rtol=5e-4,
+                err_msg=f"theta={theta}",
+            )
 
 
 def test_the_angular_model_reflects_off_the_cathode_from_the_detector_medium():
     """The first cathode interface is medium -> glass: ice (n = 1.309, config/materials/ice.json)
     gives its own closed-form ((n - n_g)/(n + n_g))^2, not water's 1.33."""
     import json
-    n_ice = json.load(open(str(REPO / 'config/materials/ice.json')))['refractive_index']
+
+    n_ice = json.load(open(str(REPO / "config/materials/ice.json")))["refractive_index"]
     lam, nr, nk = 405.0, 2.8, 1.5
     ng = float(n_glass(jnp.asarray(lam)))
     R2 = ((ng - nr) ** 2 + nk**2) / ((ng + nr) ** 2 + nk**2)
-    rp = AngularReflection(R0w=jnp.asarray(0.1), pw=jnp.asarray(5.0), fw=jnp.asarray(0.5),
-                           nr=jnp.asarray(nr), nk=jnp.asarray(nk), fs=jnp.asarray(0.9))
+    rp = AngularReflection(
+        R0w=jnp.asarray(0.1),
+        pw=jnp.asarray(5.0),
+        fw=jnp.asarray(0.5),
+        nr=jnp.asarray(nr),
+        nk=jnp.asarray(nk),
+        fs=jnp.asarray(0.9),
+    )
     for n in (n_ice, N_WATER):
-        fn, _ = get_reflection_model('angular', n_medium=n)
+        fn, _ = get_reflection_model("angular", n_medium=n)
         p, _, _ = fn(jnp.array([0.0, 0.0, 1.0]), _NORMAL, True, rp, jnp.asarray(lam), _KEY)
         npt.assert_allclose(p, _two_interface_bounce_sum(((n - ng) / (n + ng)) ** 2, R2), rtol=1e-5)
 
 
 class TestRegistry:
     def test_scalar_and_angular_registered(self):
-        fn_s, build_s = get_reflection_model('scalar', n_medium=N_WATER)
-        fn_a, build_a = get_reflection_model('angular', n_medium=N_WATER)
+        fn_s, build_s = get_reflection_model("scalar", n_medium=N_WATER)
+        fn_a, build_a = get_reflection_model("angular", n_medium=N_WATER)
         dp = create_default_detector_params(10)
         rp_s = build_s(dp)
         rp_a = build_a(dp)
         assert isinstance(rp_s, ScalarReflection)
         assert isinstance(rp_a, AngularReflection)
         npt.assert_allclose(rp_a.nr, dp.reflection.cathode_nr)
-        fn_m, build_m = get_reflection_model('scalar_mix', n_medium=N_WATER)
+        fn_m, build_m = get_reflection_model("scalar_mix", n_medium=N_WATER)
         assert fn_m is scalar_mix_reflection
         assert isinstance(build_m(dp), ScalarMixReflection)
 
     def test_unknown_model_raises(self):
         import pytest
+
         with pytest.raises(ValueError, match="Unknown reflection model"):
-            get_reflection_model('quantum', n_medium=N_WATER)
+            get_reflection_model("quantum", n_medium=N_WATER)
 
 
 class TestScalarMixModel:
     def _params(self, fw=0.55, fs=0.90):
-        return ScalarMixReflection(wall_rate=jnp.asarray(0.05), sensor_rate=jnp.asarray(0.25),
-                                   wall_fspec=jnp.asarray(fw), sensor_fspec=jnp.asarray(fs))
-
+        return ScalarMixReflection(
+            wall_rate=jnp.asarray(0.05),
+            sensor_rate=jnp.asarray(0.25),
+            wall_fspec=jnp.asarray(fw),
+            sensor_fspec=jnp.asarray(fs),
+        )
 
     def test_magnitude_matches_scalar_rates(self):
         """Reflection PROBABILITY is the plain wall/sensor rate (pathwise, fspec-independent)."""
@@ -242,10 +293,12 @@ class TestScalarMixModel:
         Binomial standard error at n = 20000, f = 0.3 is 3.2e-3; atol 0.015 is ~5 sigma."""
         rp = self._params(fw=0.3)
         from lucid.simulation.optics import compute_reflection_direction
+
         spec_dir = compute_reflection_direction(_DIR, _NORMAL)
         keys = jax.random.split(jax.random.PRNGKey(0), 20000)
-        d = jax.vmap(lambda k: scalar_mix_reflection(_DIR, _NORMAL, False, rp,
-                                                     jnp.asarray(0.0), k)[1])(keys)
+        d = jax.vmap(
+            lambda k: scalar_mix_reflection(_DIR, _NORMAL, False, rp, jnp.asarray(0.0), k)[1]
+        )(keys)
         frac = float(jnp.mean(jnp.all(jnp.abs(d - spec_dir) < 1e-6, axis=1)))
         assert abs(frac - 0.3) < 0.015, frac
 
@@ -261,6 +314,7 @@ class TestScalarMixModel:
             return lr
 
         from lucid.simulation.optics import compute_reflection_direction
+
         spec_dir = compute_reflection_direction(_DIR, _NORMAL)
         seen = set()
         for i in range(200):
@@ -281,7 +335,7 @@ class TestScalarMixModel:
         """Configs that never set the fspec fields get the SK-lit specular fractions
         (wall 0.55, sensor 0.90) — the default 'scalar_mix' model's physical mixture."""
         dp = create_default_detector_params(10)
-        _, builder = get_reflection_model('scalar_mix', n_medium=N_WATER)
+        _, builder = get_reflection_model("scalar_mix", n_medium=N_WATER)
         rp = builder(dp)
         npt.assert_allclose(rp.wall_fspec, 0.55)
         npt.assert_allclose(rp.sensor_fspec, 0.90)
@@ -294,43 +348,68 @@ class TestSamplePathHonorsModel:
     def _reflect_args(self, refl_params, key):
         # scatter_length huge -> always reaches the surface; sensor_rate=1 -> always reflects.
         return dict(
-            position=jnp.zeros(3), direction=_DIR, time=jnp.asarray(0.0),
-            surface_distance=jnp.asarray(1.0), normal=_NORMAL,
-            scatter_length=jnp.asarray(1e9), mie_scatter_length=jnp.asarray(1e9),
-            g=jnp.asarray(0.9), refl_params=refl_params, absorption_length=jnp.asarray(1e9),
-            hit_sensor=jnp.asarray(True), lam=jnp.asarray(400.0), rng_key=key,
-            speed_of_light=jnp.asarray(0.2254))
+            position=jnp.zeros(3),
+            direction=_DIR,
+            time=jnp.asarray(0.0),
+            surface_distance=jnp.asarray(1.0),
+            normal=_NORMAL,
+            scatter_length=jnp.asarray(1e9),
+            mie_scatter_length=jnp.asarray(1e9),
+            g=jnp.asarray(0.9),
+            refl_params=refl_params,
+            absorption_length=jnp.asarray(1e9),
+            hit_sensor=jnp.asarray(True),
+            lam=jnp.asarray(400.0),
+            rng_key=key,
+            speed_of_light=jnp.asarray(0.2254),
+        )
 
     def test_default_reflection_fn_is_scalar(self):
         from lucid.simulation.photon_step import photon_iteration_sample
+
         rp = ScalarReflection(wall_rate=jnp.asarray(1.0), sensor_rate=jnp.asarray(1.0))
         for i in range(20):
             k = jax.random.PRNGKey(i)
             a = photon_iteration_sample(**self._reflect_args(rp, k))
-            b = photon_iteration_sample(**self._reflect_args(rp, k), reflection_fn=scalar_reflection)
+            b = photon_iteration_sample(
+                **self._reflect_args(rp, k), reflection_fn=scalar_reflection
+            )
             for x, y in zip(a, b):
-                npt.assert_array_equal(x, y)   # default == explicit scalar, bit-for-bit
+                npt.assert_array_equal(x, y)  # default == explicit scalar, bit-for-bit
 
     def test_sample_path_honors_scalar_mix(self):
-        from lucid.simulation.photon_step import photon_iteration_sample
         from lucid.simulation.optics import compute_reflection_direction
+        from lucid.simulation.photon_step import photon_iteration_sample
+
         specular = compute_reflection_direction(_DIR, _NORMAL)
         sca = ScalarReflection(wall_rate=jnp.asarray(1.0), sensor_rate=jnp.asarray(1.0))
-        mix_spec = ScalarMixReflection(wall_rate=jnp.asarray(1.0), sensor_rate=jnp.asarray(1.0),
-                                       wall_fspec=jnp.asarray(0.0), sensor_fspec=jnp.asarray(1.0))
-        mix_diff = ScalarMixReflection(wall_rate=jnp.asarray(1.0), sensor_rate=jnp.asarray(1.0),
-                                       wall_fspec=jnp.asarray(0.0), sensor_fspec=jnp.asarray(0.0))
+        mix_spec = ScalarMixReflection(
+            wall_rate=jnp.asarray(1.0),
+            sensor_rate=jnp.asarray(1.0),
+            wall_fspec=jnp.asarray(0.0),
+            sensor_fspec=jnp.asarray(1.0),
+        )
+        mix_diff = ScalarMixReflection(
+            wall_rate=jnp.asarray(1.0),
+            sensor_rate=jnp.asarray(1.0),
+            wall_fspec=jnp.asarray(0.0),
+            sensor_fspec=jnp.asarray(0.0),
+        )
         k = jax.random.PRNGKey(0)
         # scalar sensor reflection is specular
-        d_sca = photon_iteration_sample(**self._reflect_args(sca, k), reflection_fn=scalar_reflection)[1]
+        d_sca = photon_iteration_sample(
+            **self._reflect_args(sca, k), reflection_fn=scalar_reflection
+        )[1]
         npt.assert_allclose(d_sca, specular, atol=1e-6)
         # scalar_mix sensor_fspec=1 -> also specular (honored)
-        d_mix_spec = photon_iteration_sample(**self._reflect_args(mix_spec, k),
-                                             reflection_fn=scalar_mix_reflection)[1]
+        d_mix_spec = photon_iteration_sample(
+            **self._reflect_args(mix_spec, k), reflection_fn=scalar_mix_reflection
+        )[1]
         npt.assert_allclose(d_mix_spec, specular, atol=1e-6)
         # scalar_mix sensor_fspec=0 -> diffuse, NOT specular (proves the model is honored)
-        d_mix_diff = photon_iteration_sample(**self._reflect_args(mix_diff, k),
-                                             reflection_fn=scalar_mix_reflection)[1]
+        d_mix_diff = photon_iteration_sample(
+            **self._reflect_args(mix_diff, k), reflection_fn=scalar_mix_reflection
+        )[1]
         assert not bool(jnp.allclose(d_mix_diff, specular, atol=1e-3))
 
 
@@ -341,19 +420,32 @@ class TestSensorNormalReflectance:
         lam = jnp.asarray(400.0)
         rp = ScalarReflection(wall_rate=jnp.asarray(0.5), sensor_rate=jnp.asarray(0.3))
         npt.assert_allclose(sensor_normal_reflectance(scalar_reflection, rp, lam), 0.3)
-        rpm = ScalarMixReflection(wall_rate=jnp.asarray(0.5), sensor_rate=jnp.asarray(0.3),
-                                  wall_fspec=jnp.asarray(0.5), sensor_fspec=jnp.asarray(0.9))
+        rpm = ScalarMixReflection(
+            wall_rate=jnp.asarray(0.5),
+            sensor_rate=jnp.asarray(0.3),
+            wall_fspec=jnp.asarray(0.5),
+            sensor_fspec=jnp.asarray(0.9),
+        )
         npt.assert_allclose(sensor_normal_reflectance(scalar_mix_reflection, rpm, lam), 0.3)
 
     def test_angular_model_gives_its_fresnel_value(self):
         """The angular model's sensor R0 is the closed-form normal-incidence stack value."""
         lam = 405.0
-        rp = AngularReflection(R0w=jnp.asarray(0.05), pw=jnp.asarray(1.5),
-                               fw=jnp.asarray(0.1), nr=jnp.asarray(2.8),
-                               nk=jnp.asarray(1.5), fs=jnp.asarray(0.2))
+        rp = AngularReflection(
+            R0w=jnp.asarray(0.05),
+            pw=jnp.asarray(1.5),
+            fw=jnp.asarray(0.1),
+            nr=jnp.asarray(2.8),
+            nk=jnp.asarray(1.5),
+            fs=jnp.asarray(0.2),
+        )
         ng = float(n_glass(jnp.asarray(lam)))
         R1 = ((N_WATER - ng) / (N_WATER + ng)) ** 2
         R2 = ((ng - 2.8) ** 2 + 1.5**2) / ((ng + 2.8) ** 2 + 1.5**2)
-        npt.assert_allclose(sensor_normal_reflectance(get_reflection_model('angular', n_medium=N_WATER)[0], rp,
-                                                      jnp.asarray(lam)),
-                            _two_interface_bounce_sum(R1, R2), rtol=1e-5)
+        npt.assert_allclose(
+            sensor_normal_reflectance(
+                get_reflection_model("angular", n_medium=N_WATER)[0], rp, jnp.asarray(lam)
+            ),
+            _two_interface_bounce_sum(R1, R2),
+            rtol=1e-5,
+        )

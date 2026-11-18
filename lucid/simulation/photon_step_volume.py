@@ -42,13 +42,13 @@ pre-step ``dice_dep`` to the deposit and accumulates ``log_p``.
 import jax
 import jax.numpy as jnp
 
-from lucid.utils import normalize
 from lucid.simulation.optics import (
-    sample_scatter_distance,
     create_local_frame,
+    sample_scatter_distance,
     solve_rayleigh_inverse_cdf,
 )
-from lucid.wavelength.scattering import hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf
+from lucid.utils import normalize
+from lucid.wavelength.scattering import hg_logpdf, hg_sample_cos_theta, rayleigh_logpdf
 
 
 def photon_step_volume(
@@ -81,7 +81,7 @@ def photon_step_volume(
     # Two-channel scatter rate (LIVE → direct optical gradient into the deposit).
     mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
     mu_tot = 1.0 / scatter_length + 1.0 / mie_safe
-    p_mie = (1.0 / mie_safe) / mu_tot                  # P(a scatter is Mie)
+    p_mie = (1.0 / mie_safe) / mu_tot  # P(a scatter is Mie)
 
     safe_distances = jnp.maximum(per_dom_distances, 0.0)
 
@@ -95,7 +95,7 @@ def photon_step_volume(
     # mu_tot (reparam) for the time, DETACHED for the trajectory + decision + score.
     d_live = sample_scatter_distance(segment_length, 1.0 / mu_tot, k[0], eps=1e-7)
     d = sg(d_live)
-    scatter_attenuation = jnp.exp(-d / absorption_length)   # absorption survival (λ_abs grad direct)
+    scatter_attenuation = jnp.exp(-d / absorption_length)  # absorption survival (λ_abs grad direct)
     continuing_factor = (1.0 - total_detected) * scatter_attenuation
 
     # Scattered direction: Mie/Rayleigh mixture; g DETACHED in the sampler (scored below).
@@ -105,7 +105,7 @@ def photon_step_volume(
     cmie = hg_sample_cos_theta(ua, sg(g))
     cray = jnp.clip(solve_rayleigh_inverse_cdf(ua), -1.0, 1.0)
     cth = jnp.where(is_mie, cmie, cray)
-    sth = jnp.sqrt(jnp.clip(1.0 - cth ** 2, 0.0, 1.0))
+    sth = jnp.sqrt(jnp.clip(1.0 - cth**2, 0.0, 1.0))
     frame = create_local_frame(direction)
     local = jnp.array([sth * jnp.cos(phi), sth * jnp.sin(phi), cth])
     new_direction = normalize(frame.T @ local)
@@ -113,15 +113,17 @@ def photon_step_volume(
     # Trajectory: detached free path → optical gradient rides the score, not the pathwise
     # route through the discrete DOM-candidate selection. direction LIVE → track gradient.
     new_position = position + d * normalize(direction)
-    new_time = time + d_live / speed_of_light            # Option C: live free path → optical time grad
+    new_time = time + d_live / speed_of_light  # Option C: live free path → optical time grad
 
     # DiCE score (optical only): truncated-exponential free-path log-pdf + Mie/Rayleigh angle
     # log-pdf. d, segment_length, cmie, cray DETACHED so the score carries optical gradients
     # via the live mu_tot / p_mie / g coefficients (never a track gradient).
     lf = jnp.log(mu_tot) - mu_tot * d - jnp.log1p(-jnp.exp(-mu_tot * sg(segment_length)))
-    la = jnp.where(is_mie,
-                   jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
-                   jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray)))
+    la = jnp.where(
+        is_mie,
+        jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
+        jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray)),
+    )
     logp_increment = lf + la
 
     # Tag parity with photon_step's 8th return. The volume model has no surface
@@ -129,5 +131,12 @@ def photon_step_volume(
     # that takes a step has indirect by construction.
     indirect = jnp.ones_like(new_time, dtype=bool)
 
-    return (new_position, new_direction, new_time, per_dom_charges,
-            continuing_factor, logp_increment, indirect)
+    return (
+        new_position,
+        new_direction,
+        new_time,
+        per_dom_charges,
+        continuing_factor,
+        logp_increment,
+        indirect,
+    )

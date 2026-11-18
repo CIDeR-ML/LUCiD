@@ -13,6 +13,7 @@ asserts closed-form values on hand-built hits:
   comes from deposit k with probability exp(-sum_{j<k} w_j) (1 - exp(-w_k)); with it the mean is
   integrated here by scipy quadrature, not by the module's node rule.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -43,8 +44,9 @@ def test_charge_is_qe_times_summed_weight_and_time_is_the_mean_first_arrival():
     w = jnp.full(n_rays, 0.8)
     idx = jnp.zeros(n_rays, dtype=jnp.int32)
     t = jnp.linspace(10.0, 15.0, n_rays)
-    q, t_meas = on_deposits(first_arrival_expected, w, idx, t, n_sensors, qe=qe,
-                            qe_corrections=jnp.ones(n_sensors))
+    q, t_meas = on_deposits(
+        first_arrival_expected, w, idx, t, n_sensors, qe=qe, qe_corrections=jnp.ones(n_sensors)
+    )
     npt.assert_allclose(np.asarray(q), [10 * 0.8 * qe, 0, 0, 0, 0], rtol=1e-6)
     # mu = 1.6 photo-electrons spread over 10..15 ns: the mean first arrival is 11.80 ns,
     # between the earliest deposit and the weight-averaged time 12.5
@@ -60,8 +62,9 @@ def test_time_with_the_transit_time_spread_is_the_smeared_mean(tts):
     w = jnp.array([3.0, 0.2, 1.0, 0.5])
     idx = jnp.array([0, 0, 0, 1])
     t = jnp.array([20.0, 18.5, 31.0, 50.0])
-    _, t_meas = on_deposits(first_arrival_expected, w, idx, t, 3, qe=1.0,
-                            qe_corrections=jnp.ones(3), tts=tts)
+    _, t_meas = on_deposits(
+        first_arrival_expected, w, idx, t, 3, qe=1.0, qe_corrections=jnp.ones(3), tts=tts
+    )
     npt.assert_allclose(float(t_meas[0]), _mean_first(w[:3], t[:3], tts), atol=2e-3)
     npt.assert_allclose(float(t_meas[1]), _mean_first(w[3:], t[3:], tts), atol=2e-3)
     assert float(t_meas[2]) == 0.0
@@ -69,10 +72,17 @@ def test_time_with_the_transit_time_spread_is_the_smeared_mean(tts):
 
 def test_total_charge_gradient_in_qe_is_the_summed_weight():
     """sum_s Q_s = qe * sum_i w_i, so d/dqe = sum_i w_i = 0.8 + 0.6 = 1.4 exactly."""
+
     def total(qe):
-        q, _ = on_deposits(first_arrival_expected, jnp.array([0.8, 0.6]), jnp.array([0, 1]),
-                           jnp.array([10.0, 12.0]), 5, qe=qe,
-                           qe_corrections=jnp.ones(5))
+        q, _ = on_deposits(
+            first_arrival_expected,
+            jnp.array([0.8, 0.6]),
+            jnp.array([0, 1]),
+            jnp.array([10.0, 12.0]),
+            5,
+            qe=qe,
+            qe_corrections=jnp.ones(5),
+        )
         return jnp.sum(q)
 
     npt.assert_allclose(float(jax.grad(total)(0.2)), 1.4, rtol=1e-6)
@@ -81,10 +91,17 @@ def test_total_charge_gradient_in_qe_is_the_summed_weight():
 def test_qe_correction_gradient_is_per_sensor_and_zero_when_unlit():
     """dQ_total/dc_s = qe * sum_{i in s} w_i: sensor 0 gets 0.2*(0.8+0.6) = 0.28, sensor 1
     0.2*0.5 = 0.10, unlit sensors exactly 0 (a leak through the segment sum would show here)."""
+
     def total(c):
-        q, _ = on_deposits(first_arrival_expected, jnp.array([0.8, 0.6, 0.5]), jnp.array([0, 0, 1]),
-                           jnp.array([10.0, 12.0, 8.0]), 5, qe=0.2,
-                           qe_corrections=c)
+        q, _ = on_deposits(
+            first_arrival_expected,
+            jnp.array([0.8, 0.6, 0.5]),
+            jnp.array([0, 0, 1]),
+            jnp.array([10.0, 12.0, 8.0]),
+            5,
+            qe=0.2,
+            qe_corrections=c,
+        )
         return jnp.sum(q)
 
     grad = jax.grad(total)(jnp.ones(5))

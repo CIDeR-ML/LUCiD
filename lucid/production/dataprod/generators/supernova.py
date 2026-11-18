@@ -35,6 +35,7 @@ sntools is invoked as ``sys.executable -m sntools.genevts`` so a CFS
 ``PYTHONUSERBASE`` install (see user_paths.sh SN_ENV_BASE) is picked up via
 the container Python without a PATH dance.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -48,10 +49,11 @@ from typing import Optional
 # code not listed here raises rather than being treated as massless.
 NEUTRINO_PDGS = {12, -12, 14, -14, 16, -16}
 PARTICLE_MASS_MeV = {
-    11: 0.510999, -11: 0.510999,   # e-, e+
-    22: 0.0,                        # gamma
-    2112: 939.565420,               # neutron
-    2212: 938.272088,               # proton
+    11: 0.510999,
+    -11: 0.510999,  # e-, e+
+    22: 0.0,  # gamma
+    2112: 939.565420,  # neutron
+    2212: 938.272088,  # proton
     **{pdg: 0.0 for pdg in NEUTRINO_PDGS},
 }
 
@@ -59,9 +61,14 @@ PARTICLE_MASS_MeV = {
 # NoTransformation, so an unstated ordering would mean no oscillation in sntools and NMO in LUCiD's
 # old default: the ordering is required (supernova.orderings), never defaulted.
 SNTOOLS_TRANSFORMATIONS = (
-    "NoTransformation", "AdiabaticMSW_NMO", "AdiabaticMSW_IMO",
-    "SNEWPY-CompleteExchange", "SNEWPY-NonAdiabaticMSWH", "SNEWPY-TwoFlavorDecoherence_NMO",
-    "SNEWPY-TwoFlavorDecoherence_IMO", "SNEWPY-ThreeFlavorDecoherence",
+    "NoTransformation",
+    "AdiabaticMSW_NMO",
+    "AdiabaticMSW_IMO",
+    "SNEWPY-CompleteExchange",
+    "SNEWPY-NonAdiabaticMSWH",
+    "SNEWPY-TwoFlavorDecoherence_NMO",
+    "SNEWPY-TwoFlavorDecoherence_IMO",
+    "SNEWPY-ThreeFlavorDecoherence",
 )
 
 # Ordering label → sntools transformation. The AdiabaticMSW variants are
@@ -89,13 +96,17 @@ KMAX_PARTICLES = 4096  # must match PhotonSim RooTrackerReader::kMaxParticles
 # (StdHep) has no channel slot, so we carry the code in a sidecar and stamp it
 # into the labl truth (per_interaction/interaction_channel + /channel).
 CHANNEL_CODE_TO_NAME = {
-    -1001001: "ibd",                 # inverse beta decay
-    98: "es", -98: "es",             # neutrino-electron elastic scattering
-    1008016: "o16e",                 # nu_e + 16O CC
-    -1008016: "o16eb",               # nu_e-bar + 16O CC
-    2001001: "ps", -2001001: "ps",   # proton scattering (LS)
-    1006012: "c12e", -1006012: "c12eb",
-    2006012: "c12nc", -2006012: "c12nc",
+    -1001001: "ibd",  # inverse beta decay
+    98: "es",
+    -98: "es",  # neutrino-electron elastic scattering
+    1008016: "o16e",  # nu_e + 16O CC
+    -1008016: "o16eb",  # nu_e-bar + 16O CC
+    2001001: "ps",
+    -2001001: "ps",  # proton scattering (LS)
+    1006012: "c12e",
+    -1006012: "c12eb",
+    2006012: "c12nc",
+    -2006012: "c12nc",
     0: "unknown",
 }
 
@@ -118,11 +129,14 @@ def _resolve_flux_file(flux_file: str) -> Path:
             # (resolved here against the caller's cwd) would not survive.
             return cand.resolve()
     raise SupernovaError(
-        f"flux_file not found: {flux_file!r} (tried as-is and relative to {_REPO_ROOT})")
+        f"flux_file not found: {flux_file!r} (tried as-is and relative to {_REPO_ROOT})"
+    )
 
 
-_ALLOWED_ORDERINGS = (f"an ordering label {sorted(ORDERING_TO_TRANSFORMATION)} or an sntools "
-                      f"--transformation {list(SNTOOLS_TRANSFORMATIONS)}")
+_ALLOWED_ORDERINGS = (
+    f"an ordering label {sorted(ORDERING_TO_TRANSFORMATION)} or an sntools "
+    f"--transformation {list(SNTOOLS_TRANSFORMATIONS)}"
+)
 
 
 def _transformation_for(ordering: str) -> str:
@@ -143,13 +157,20 @@ def sn_orderings(sn: dict) -> list:
     ``supernova.ordering``, which the fan-out and ``run_sntools`` read differently.
     """
     if "ordering" in sn:
-        raise ValueError('supernova.ordering is no longer read; list the mass ordering(s) in '
-                         'supernova.orderings, e.g. "orderings": ["NMO"]')
+        raise ValueError(
+            "supernova.ordering is no longer read; list the mass ordering(s) in "
+            'supernova.orderings, e.g. "orderings": ["NMO"]'
+        )
     orderings = sn.get("orderings")
-    if (not isinstance(orderings, list) or not orderings
-            or not all(isinstance(o, str) for o in orderings)):
-        raise ValueError(f"supernova.orderings must be a non-empty list of mass orderings, each "
-                         f"{_ALLOWED_ORDERINGS}; got {orderings!r}")
+    if (
+        not isinstance(orderings, list)
+        or not orderings
+        or not all(isinstance(o, str) for o in orderings)
+    ):
+        raise ValueError(
+            f"supernova.orderings must be a non-empty list of mass orderings, each "
+            f"{_ALLOWED_ORDERINGS}; got {orderings!r}"
+        )
     if len(set(orderings)) != len(orderings):
         raise ValueError(f"supernova.orderings repeats an entry: {orderings}")
     for o in orderings:
@@ -167,8 +188,9 @@ def resolve_ordering(sn: dict, ordering: Optional[str] = None) -> tuple:
     orderings = sn_orderings(sn)
     if ordering is None:
         if len(orderings) != 1:
-            raise ValueError(f"supernova.orderings lists {orderings}; pass --sn-ordering to "
-                             f"choose one")
+            raise ValueError(
+                f"supernova.orderings lists {orderings}; pass --sn-ordering to choose one"
+            )
         ordering = orderings[0]
     elif ordering not in orderings:
         raise ValueError(f"--sn-ordering {ordering!r} is not in supernova.orderings {orderings}")
@@ -191,30 +213,49 @@ def _resolve_model(config_sn: dict, model_name: Optional[str]) -> dict:
             return models[0]
         raise SupernovaError(
             f"multiple models present ({[m.get('name') for m in models]}); "
-            f"a specific --sn-model must be selected")
+            f"a specific --sn-model must be selected"
+        )
     for m in models:
         if m.get("name") == model_name:
             return m
     raise SupernovaError(
-        f"model {model_name!r} not found in supernova.models "
-        f"({[m.get('name') for m in models]})")
+        f"model {model_name!r} not found in supernova.models ({[m.get('name') for m in models]})"
+    )
 
 
 def _build_sntools_cmd(
-    *, flux_file: str, fmt: str, detector: str, transformation: str,
-    distance: float, channel: Optional[str], starttime: Optional[float],
-    endtime: Optional[float], seed: int, out_kin: Path,
+    *,
+    flux_file: str,
+    fmt: str,
+    detector: str,
+    transformation: str,
+    distance: float,
+    channel: Optional[str],
+    starttime: Optional[float],
+    endtime: Optional[float],
+    seed: int,
+    out_kin: Path,
 ) -> list[str]:
     """Assemble the ``python -m sntools.genevts ...`` command for one run."""
     cmd = [
-        sys.executable, "-m", "sntools.genevts", str(flux_file),
-        "--format", fmt,
-        "--detector", detector,
-        "--transformation", transformation,
-        "--distance", f"{distance:g}",
-        "--mcformat", "NUANCE",
-        "--output", str(out_kin),
-        "--randomseed", str(int(seed)),
+        sys.executable,
+        "-m",
+        "sntools.genevts",
+        str(flux_file),
+        "--format",
+        fmt,
+        "--detector",
+        detector,
+        "--transformation",
+        transformation,
+        "--distance",
+        f"{distance:g}",
+        "--mcformat",
+        "NUANCE",
+        "--output",
+        str(out_kin),
+        "--randomseed",
+        str(int(seed)),
     ]
     if channel and channel != "all":
         cmd += ["--channel", channel]
@@ -276,16 +317,18 @@ def _p4_gev(pdg: int, e_mev: float, dx: float, dy: float, dz: float) -> tuple:
     """
     if pdg not in PARTICLE_MASS_MeV:
         raise SupernovaError(
-            f"no rest mass for PDG {pdg} (sntools track); add it to PARTICLE_MASS_MeV")
+            f"no rest mass for PDG {pdg} (sntools track); add it to PARTICLE_MASS_MeV"
+        )
     mass = PARTICLE_MASS_MeV[pdg]
     p2 = e_mev * e_mev - mass * mass
-    p = p2 ** 0.5 if p2 > 0.0 else 0.0
+    p = p2**0.5 if p2 > 0.0 else 0.0
     gev = 1.0e-3
     return (dx * p * gev, dy * p * gev, dz * p * gev, e_mev * gev)
 
 
-def _write_rootracker(events: list[dict], out_path: Path, rotation,
-                      cap: Optional[int] = None) -> int:
+def _write_rootracker(
+    events: list[dict], out_path: Path, rotation, cap: Optional[int] = None
+) -> int:
     """Write events to a gRooTracker TTree; return the entry count.
 
     Reproduces GENIE's rooTracker layout — a ``TTree`` named ``gRooTracker``
@@ -315,15 +358,17 @@ def _write_rootracker(events: list[dict], out_path: Path, rotation,
     max_np = 1
     for evt in events:
         rows: list[tuple] = []
+
         def _dir(dx, dy, dz):
             r = rotation @ np.array([dx, dy, dz], dtype=np.float64)
             return float(r[0]), float(r[1]), float(r[2])
+
         # Incoming neutrino(s): status 0 → PhotonSim records true nu pdg/energy.
-        for (ppdg, e, dx, dy, dz) in evt["incoming"]:
+        for ppdg, e, dx, dy, dz in evt["incoming"]:
             if ppdg in NEUTRINO_PDGS:
                 rows.append((ppdg, 0, _p4_gev(ppdg, e, *_dir(dx, dy, dz))))
         # Outgoing final-state particles: status 1 → injected as G4 primaries.
-        for (ppdg, e, dx, dy, dz) in evt["outgoing"]:
+        for ppdg, e, dx, dy, dz in evt["outgoing"]:
             rows.append((ppdg, 1, _p4_gev(ppdg, e, *_dir(dx, dy, dz))))
         if len(rows) > KMAX_PARTICLES:
             rows = rows[:KMAX_PARTICLES]
@@ -350,16 +395,23 @@ def _write_rootracker(events: list[dict], out_path: Path, rotation,
             p4[i, k, 3] = energy
 
     with uproot.recreate(str(out_path)) as f:
-        f.mktree("gRooTracker", {
-            "StdHepN": np.int32,
-            "StdHepPdg": ("int32", (np_fixed,)),
-            "StdHepStatus": ("int32", (np_fixed,)),
-            "StdHepP4": ("float64", (np_fixed, 4)),
-        })
-        f["gRooTracker"].extend({
-            "StdHepN": n_arr, "StdHepPdg": pdg,
-            "StdHepStatus": status, "StdHepP4": p4,
-        })
+        f.mktree(
+            "gRooTracker",
+            {
+                "StdHepN": np.int32,
+                "StdHepPdg": ("int32", (np_fixed,)),
+                "StdHepStatus": ("int32", (np_fixed,)),
+                "StdHepP4": ("float64", (np_fixed, 4)),
+            },
+        )
+        f["gRooTracker"].extend(
+            {
+                "StdHepN": n_arr,
+                "StdHepPdg": pdg,
+                "StdHepStatus": status,
+                "StdHepP4": p4,
+            }
+        )
     return nev
 
 
@@ -386,7 +438,8 @@ def run_sntools(
     """
     if "supernova" not in config:
         raise SupernovaError(
-            "config missing 'supernova' block (primary_source=supernova requires it)")
+            "config missing 'supernova' block (primary_source=supernova requires it)"
+        )
     sn = config["supernova"]
     missing = [k for k in ("detector", "distance_kpc") if k not in sn]
     if missing:
@@ -396,8 +449,7 @@ def run_sntools(
     fmt = model.get("format")
     flux_file = model.get("flux_file")
     if not fmt or not flux_file:
-        raise SupernovaError(
-            f"model {model.get('name')!r} needs both 'format' and 'flux_file'")
+        raise SupernovaError(f"model {model.get('name')!r} needs both 'format' and 'flux_file'")
     # SNEWPY-* formats: flux_file is a model file under the SNEWPY cache
     # (<model_path>/<Model>/<file>). sntools abspath()s the path relative to CWD,
     # so we must hand it the absolute cache path (the model must be pre-downloaded;
@@ -405,13 +457,15 @@ def run_sntools(
     # repo-relative files.
     if str(fmt).startswith("SNEWPY-"):
         from snewpy import model_path as _snewpy_cache
-        _model = str(fmt)[len("SNEWPY-"):]
+
+        _model = str(fmt)[len("SNEWPY-") :]
         cand = Path(_snewpy_cache) / _model / flux_file
         if not cand.is_file():
             raise SupernovaError(
                 f"SNEWPY model file not found in cache: {cand}. Pre-download it "
                 f"once (see this module's docstring) — compute nodes may "
-                f"lack network.")
+                f"lack network."
+            )
         flux_file = str(cand)
     else:
         flux_file = str(_resolve_flux_file(flux_file))
@@ -447,15 +501,24 @@ def run_sntools(
     for i, channel in enumerate(channel_runs):
         kin_path = output_dir / f"sn_job_{job_padded}_{(channel or 'all')}.kin"
         cmd = _build_sntools_cmd(
-            flux_file=flux_file, fmt=fmt, detector=detector,
-            transformation=transformation, distance=distance,
-            channel=channel, starttime=starttime, endtime=endtime,
+            flux_file=flux_file,
+            fmt=fmt,
+            detector=detector,
+            transformation=transformation,
+            distance=distance,
+            channel=channel,
+            starttime=starttime,
+            endtime=endtime,
             # Distinct seed per channel run so they don't correlate.
-            seed=int(seed) + i, out_kin=kin_path,
+            seed=int(seed) + i,
+            out_kin=kin_path,
         )
         print("=== sntools: generating supernova events ===", flush=True)
-        print(f"    model={model.get('name')} ordering={ordering} "
-              f"transformation={transformation} channel={channel or 'all'}", flush=True)
+        print(
+            f"    model={model.get('name')} ordering={ordering} "
+            f"transformation={transformation} channel={channel or 'all'}",
+            flush=True,
+        )
         print("    " + " ".join(cmd), flush=True)
         t0 = time.time()
         rc = subprocess.call(cmd, cwd=str(output_dir))
@@ -476,7 +539,8 @@ def run_sntools(
     if not all_events:
         raise SupernovaError(
             "sntools produced 0 events — check distance/time window/flux "
-            "(a too-distant SN or too-narrow window yields no interactions)")
+            "(a too-distant SN or too-narrow window yields no interactions)"
+        )
 
     # Order the whole burst by interaction time before capping, so a cap keeps
     # the burst onset (earliest interactions) in time order and the all-at-once
@@ -490,7 +554,9 @@ def run_sntools(
     # rotation. Default +z (identity). Recorded in a sidecar so the true direction
     # is available downstream for pointing studies.
     import numpy as np
+
     from lucid.utils import rotation_onto
+
     sn_direction = [float(x) for x in (sn.get("direction") or [0.0, 0.0, 1.0])]
     if not any(sn_direction):
         raise SupernovaError("supernova.direction must be a non-zero vector")
@@ -505,6 +571,7 @@ def run_sntools(
     #   .times.json    — interaction time in ms (the all-at-once generator turns
     #                    each into a per-interaction t0 = global_t0 + time_ms*1e6)
     import json
+
     sidecar = output_dir / f"gntp_job_{job_padded}.channels.json"
     sidecar.write_text(json.dumps([int(e["code"]) for e in capped]))
     times_sidecar = output_dir / f"gntp_job_{job_padded}.times.json"
@@ -518,6 +585,7 @@ def run_sntools(
     if cap_events is not None:
         print(f"    capped to {n_entries} of {len(all_events)} events (validation)", flush=True)
     from collections import Counter
+
     chan_hist = Counter(CHANNEL_CODE_TO_NAME.get(int(e["code"]), "unknown") for e in capped)
     print(f"    channels: {dict(chan_hist)}", flush=True)
     print(f"    wrote {n_entries} rooTracker entries → {gtrac_file}", flush=True)

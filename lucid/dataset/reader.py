@@ -2,6 +2,7 @@
 
 Needs only ``h5py`` and numpy.
 """
+
 from __future__ import annotations
 
 import h5py
@@ -23,16 +24,16 @@ def iter_events(filename):
     The groups are named ``event_{i:03d}``, so past 999 events a lexicographic sort puts
     ``event_1000`` before ``event_101``; this one does not.
     """
-    with h5py.File(filename, 'r') as f:
-        names = [k for k in f.keys() if k.startswith('event_')]
-    for name in sorted(names, key=lambda k: int(k[len('event_'):])):
-        yield int(name[len('event_'):]), name
+    with h5py.File(filename, "r") as f:
+        names = [k for k in f.keys() if k.startswith("event_")]
+    for name in sorted(names, key=lambda k: int(k[len("event_") :])):
+        yield int(name[len("event_") :]), name
 
 
 def list_events(filename):
     """Return the ``config/source_event_idx`` array from a file."""
-    with h5py.File(filename, 'r') as f:
-        return np.asarray(f['config/source_event_idx'][:])
+    with h5py.File(filename, "r") as f:
+        return np.asarray(f["config/source_event_idx"][:])
 
 
 def _group_to_dict(grp):
@@ -51,12 +52,13 @@ def _group_to_dict(grp):
 
 def _read_event(filename, event_idx):
     """Return the event_NNN/ group contents as a dict keyed by dataset/attr name."""
-    with h5py.File(filename, 'r') as f:
-        name = f'event_{int(event_idx):03d}'
+    with h5py.File(filename, "r") as f:
+        name = f"event_{int(event_idx):03d}"
         if name not in f:
             raise KeyError(
                 f"Event group {name!r} not found in {filename}. "
-                f"Available: {sorted(k for k in f.keys() if k.startswith('event_'))[:5]} ...")
+                f"Available: {sorted(k for k in f.keys() if k.startswith('event_'))[:5]} ..."
+            )
         return _group_to_dict(f[name])
 
 

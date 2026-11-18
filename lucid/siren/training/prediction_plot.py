@@ -39,11 +39,11 @@ logger = logging.getLogger(__name__)
 # Energy axis label for the marginal panel
 _AXIS_LABELS = {
     "photon": ("Opening angle [rad]", r"$s / s_{\max}$"),
-    "dedx":   (r"dE/dx [keV/mm]",     r"$s / s_{\max}$"),
+    "dedx": (r"dE/dx [keV/mm]", r"$s / s_{\max}$"),
 }
 _INTENSITY_LABELS = {
     "photon": "photons / event / bin",
-    "dedx":   "entries / event / bin",
+    "dedx": "entries / event / bin",
 }
 
 
@@ -54,7 +54,7 @@ class PredictionComparisonCallback:
         self,
         *,
         h5_path: Path,
-        dataset,                      # PhotonSimDataset
+        dataset,  # PhotonSimDataset
         output_dir: Path,
         energies_mev: Iterable[int],
         distance_slices: Iterable[float],
@@ -110,29 +110,28 @@ class PredictionComparisonCallback:
             actual = int(energy_values[j])
             if abs(actual - req) > 0.05 * max(abs(req), 1):
                 logger.warning(
-                    "prediction_plot: requested E=%d MeV → grid neighbour "
-                    "%d MeV (%.1f%% off)",
-                    req, actual, 100 * (actual - req) / max(abs(req), 1),
+                    "prediction_plot: requested E=%d MeV → grid neighbour %d MeV (%.1f%% off)",
+                    req,
+                    actual,
+                    100 * (actual - req) / max(abs(req), 1),
                 )
             e_idx.append(j)
         self.energy_indices = np.asarray(e_idx, dtype=int)
         self.energy_values = energy_values
-        self.energies_grid = energy_values[self.energy_indices]    # (n_E_req,)
+        self.energies_grid = energy_values[self.energy_indices]  # (n_E_req,)
 
         # Nearest-neighbor s/s_max slices.
-        d_idx = [int(np.argmin(np.abs(distance_centers - s)))
-                 for s in self.distance_slices_req]
+        d_idx = [int(np.argmin(np.abs(distance_centers - s))) for s in self.distance_slices_req]
         self.distance_slice_indices = np.asarray(d_idx, dtype=int)
         self.distance_slices_grid = distance_centers[self.distance_slice_indices]
 
         # Nearest-neighbor x-axis slices (angle in rad for photon,
         # dE/dx in keV/mm for dedx).
-        x_idx = [int(np.argmin(np.abs(x_centers - xv)))
-                 for xv in self.xaxis_slices_req]
+        x_idx = [int(np.argmin(np.abs(x_centers - xv))) for xv in self.xaxis_slices_req]
         self.xaxis_slice_indices = np.asarray(x_idx, dtype=int)
         self.xaxis_slices_grid = x_centers[self.xaxis_slice_indices]
 
-        self.x_centers = x_centers              # (n_x,)
+        self.x_centers = x_centers  # (n_x,)
         self.distance_centers = distance_centers  # (n_d,)
         n_E = len(self.energy_indices)
         n_x = len(x_centers)
@@ -158,38 +157,32 @@ class PredictionComparisonCallback:
 
         # Pre-build the *unnormalised* model-input grids.
         # View A inputs: (n_E, n_slices, n_x, 3) → flatten to (N_A, 3).
-        Ev_A = np.broadcast_to(self.energies_grid[:, None, None],
-                               (n_E, n_slices, n_x))
-        Xc_A = np.broadcast_to(x_centers[None, None, :],
-                               (n_E, n_slices, n_x))
-        Dc_A = np.broadcast_to(self.distance_slices_grid[None, :, None],
-                               (n_E, n_slices, n_x))
+        Ev_A = np.broadcast_to(self.energies_grid[:, None, None], (n_E, n_slices, n_x))
+        Xc_A = np.broadcast_to(x_centers[None, None, :], (n_E, n_slices, n_x))
+        Dc_A = np.broadcast_to(self.distance_slices_grid[None, :, None], (n_E, n_slices, n_x))
         self.inputs_A_phys = np.stack(
-            [Ev_A.ravel(), Xc_A.ravel(), Dc_A.ravel()], axis=-1,
+            [Ev_A.ravel(), Xc_A.ravel(), Dc_A.ravel()],
+            axis=-1,
         ).astype(np.float32)
         self.inputs_A_shape = (n_E, n_slices, n_x)
 
         # View B inputs: (n_E, n_x, n_d, 3) for summing later → flatten too.
-        Ev_B = np.broadcast_to(self.energies_grid[:, None, None],
-                               (n_E, n_x, n_d))
-        Xc_B = np.broadcast_to(x_centers[None, :, None],
-                               (n_E, n_x, n_d))
-        Dc_B = np.broadcast_to(distance_centers[None, None, :],
-                               (n_E, n_x, n_d))
+        Ev_B = np.broadcast_to(self.energies_grid[:, None, None], (n_E, n_x, n_d))
+        Xc_B = np.broadcast_to(x_centers[None, :, None], (n_E, n_x, n_d))
+        Dc_B = np.broadcast_to(distance_centers[None, None, :], (n_E, n_x, n_d))
         self.inputs_B_phys = np.stack(
-            [Ev_B.ravel(), Xc_B.ravel(), Dc_B.ravel()], axis=-1,
+            [Ev_B.ravel(), Xc_B.ravel(), Dc_B.ravel()],
+            axis=-1,
         ).astype(np.float32)
         self.inputs_B_shape = (n_E, n_x, n_d)
 
         # View C inputs: (n_E, n_xslices, n_d, 3) → flatten.
-        Ev_C = np.broadcast_to(self.energies_grid[:, None, None],
-                               (n_E, n_xslices, n_d))
-        Xc_C = np.broadcast_to(self.xaxis_slices_grid[None, :, None],
-                               (n_E, n_xslices, n_d))
-        Dc_C = np.broadcast_to(distance_centers[None, None, :],
-                               (n_E, n_xslices, n_d))
+        Ev_C = np.broadcast_to(self.energies_grid[:, None, None], (n_E, n_xslices, n_d))
+        Xc_C = np.broadcast_to(self.xaxis_slices_grid[None, :, None], (n_E, n_xslices, n_d))
+        Dc_C = np.broadcast_to(distance_centers[None, None, :], (n_E, n_xslices, n_d))
         self.inputs_C_phys = np.stack(
-            [Ev_C.ravel(), Xc_C.ravel(), Dc_C.ravel()], axis=-1,
+            [Ev_C.ravel(), Xc_C.ravel(), Dc_C.ravel()],
+            axis=-1,
         ).astype(np.float32)
         self.inputs_C_shape = (n_E, n_xslices, n_d)
 
@@ -223,21 +216,21 @@ class PredictionComparisonCallback:
             pred_B_flat = self._predict(trainer.state, self.inputs_B_phys)
             pred_C_flat = self._predict(trainer.state, self.inputs_C_phys)
         except Exception as exc:
-            logger.warning("prediction_plot: inference failed at step %d: %s",
-                           step, exc)
+            logger.warning("prediction_plot: inference failed at step %d: %s", step, exc)
             return
 
-        pred_A = pred_A_flat.reshape(self.inputs_A_shape)   # (n_E, n_slices, n_x)
+        pred_A = pred_A_flat.reshape(self.inputs_A_shape)  # (n_E, n_slices, n_x)
         pred_B_full = pred_B_flat.reshape(self.inputs_B_shape)  # (n_E, n_x, n_d)
-        pred_B = pred_B_full.sum(axis=1)                    # (n_E, n_d) — sum over angle/dedx
-        pred_C = pred_C_flat.reshape(self.inputs_C_shape)   # (n_E, n_xslices, n_d)
+        pred_B = pred_B_full.sum(axis=1)  # (n_E, n_d) — sum over angle/dedx
+        pred_C = pred_C_flat.reshape(self.inputs_C_shape)  # (n_E, n_xslices, n_d)
 
         self._save_figure(step, pred_A, pred_B, pred_C)
 
     # ---- rendering ---------------------------------------------------------
 
-    def _save_figure(self, step: int, pred_A: np.ndarray,
-                     pred_B: np.ndarray, pred_C: np.ndarray) -> None:
+    def _save_figure(
+        self, step: int, pred_A: np.ndarray, pred_B: np.ndarray, pred_C: np.ndarray
+    ) -> None:
         n_E = len(self.energy_indices)
         n_slices = len(self.distance_slice_indices)
         n_xslices = len(self.xaxis_slice_indices)
@@ -258,15 +251,30 @@ class PredictionComparisonCallback:
             ax = fig.add_subplot(gs[0, m])
             for k in range(n_E):
                 c = colors[k]
-                ax.plot(self.x_centers, np.maximum(self.truth_A[k, m], floor),
-                        "--", color=c, lw=1.0, alpha=0.85)
-                ax.plot(self.x_centers, np.maximum(pred_A[k, m], floor),
-                        "-", color=c, lw=1.4,
-                        label=f"{int(self.energies_grid[k])} MeV")
-            ax.axhline(self.zero_threshold, color="red", linestyle=":",
-                       lw=0.9, alpha=0.6,
-                       label=(f"zero threshold ({self.zero_threshold:g})"
-                              if m == n_slices - 1 else None))
+                ax.plot(
+                    self.x_centers,
+                    np.maximum(self.truth_A[k, m], floor),
+                    "--",
+                    color=c,
+                    lw=1.0,
+                    alpha=0.85,
+                )
+                ax.plot(
+                    self.x_centers,
+                    np.maximum(pred_A[k, m], floor),
+                    "-",
+                    color=c,
+                    lw=1.4,
+                    label=f"{int(self.energies_grid[k])} MeV",
+                )
+            ax.axhline(
+                self.zero_threshold,
+                color="red",
+                linestyle=":",
+                lw=0.9,
+                alpha=0.6,
+                label=(f"zero threshold ({self.zero_threshold:g})" if m == n_slices - 1 else None),
+            )
             ax.set_yscale("log")
             ax.set_title(f"{smax_label} = {self.distance_slices_grid[m]:.3f}")
             ax.set_xlabel(x_label)
@@ -281,18 +289,25 @@ class PredictionComparisonCallback:
             ax = fig.add_subplot(gs[1, p])
             for k in range(n_E):
                 c = colors[k]
-                ax.plot(self.distance_centers,
-                        np.maximum(self.truth_C[k, p], floor),
-                        "--", color=c, lw=1.0, alpha=0.85)
-                ax.plot(self.distance_centers,
-                        np.maximum(pred_C[k, p], floor),
-                        "-", color=c, lw=1.4,
-                        label=f"{int(self.energies_grid[k])} MeV")
-            ax.axhline(self.zero_threshold, color="red", linestyle=":",
-                       lw=0.9, alpha=0.6)
+                ax.plot(
+                    self.distance_centers,
+                    np.maximum(self.truth_C[k, p], floor),
+                    "--",
+                    color=c,
+                    lw=1.0,
+                    alpha=0.85,
+                )
+                ax.plot(
+                    self.distance_centers,
+                    np.maximum(pred_C[k, p], floor),
+                    "-",
+                    color=c,
+                    lw=1.4,
+                    label=f"{int(self.energies_grid[k])} MeV",
+                )
+            ax.axhline(self.zero_threshold, color="red", linestyle=":", lw=0.9, alpha=0.6)
             ax.set_yscale("log")
-            ax.set_title(_format_xaxis_title(self.table_type,
-                                             self.xaxis_slices_grid[p]))
+            ax.set_title(_format_xaxis_title(self.table_type, self.xaxis_slices_grid[p]))
             ax.set_xlabel(smax_label)
             if p == 0:
                 ax.set_ylabel(y_label)
@@ -304,13 +319,22 @@ class PredictionComparisonCallback:
         ax_b = fig.add_subplot(gs[2, :])
         for k in range(n_E):
             c = colors[k]
-            ax_b.plot(self.distance_centers,
-                      np.maximum(self.truth_B[k], floor),
-                      "--", color=c, lw=1.0, alpha=0.85)
-            ax_b.plot(self.distance_centers,
-                      np.maximum(pred_B[k], floor),
-                      "-", color=c, lw=1.6,
-                      label=f"{int(self.energies_grid[k])} MeV")
+            ax_b.plot(
+                self.distance_centers,
+                np.maximum(self.truth_B[k], floor),
+                "--",
+                color=c,
+                lw=1.0,
+                alpha=0.85,
+            )
+            ax_b.plot(
+                self.distance_centers,
+                np.maximum(pred_B[k], floor),
+                "-",
+                color=c,
+                lw=1.6,
+                label=f"{int(self.energies_grid[k])} MeV",
+            )
         ax_b.set_yscale("log")
         ax_b.set_title(f"Marginal — summed over {x_label.split('[')[0].strip()}")
         ax_b.set_xlabel(smax_label)
@@ -320,9 +344,9 @@ class PredictionComparisonCallback:
 
         # Single super-title with the training step.
         fig.suptitle(
-            f"SIREN ({self.table_type}) — step {step}   "
-            f"(truth: dashed, prediction: solid)",
-            fontsize=12, y=0.995,
+            f"SIREN ({self.table_type}) — step {step}   (truth: dashed, prediction: solid)",
+            fontsize=12,
+            y=0.995,
         )
         fig.tight_layout(rect=(0, 0, 1, 0.97))
 

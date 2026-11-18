@@ -1,11 +1,13 @@
 """Calibration source ray generators: the isotropic (Fibonacci-lattice and random) and laser-fibre sources."""
 
+from functools import partial
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 from jax import random
-from typing import NamedTuple
-from functools import partial
-from lucid.utils import normalize, create_local_frame
+
+from lucid.utils import create_local_frame, normalize
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -26,7 +28,9 @@ def get_isotropic_rays(source_position, source_intensity, Nphot, key):
         next_offset = (carry + block_increment) % 1.0
         return next_offset, carry
 
-    _, block_offsets = jax.lax.scan(scan_fn, 0.0, None, length=n_full_blocks + (1 if remainder else 0))
+    _, block_offsets = jax.lax.scan(
+        scan_fn, 0.0, None, length=n_full_blocks + (1 if remainder else 0)
+    )
 
     # Generate all points
     all_indices = jnp.arange(Nphot, dtype=jnp.float32)
@@ -53,6 +57,7 @@ def get_isotropic_rays(source_position, source_intensity, Nphot, key):
 
     return ray_vectors, ray_origins, photon_weights
 
+
 @partial(jax.jit, static_argnums=(2,))
 def get_isotropic_rays_random(source_position, source_intensity, Nphot, key):
     """
@@ -68,7 +73,9 @@ def get_isotropic_rays_random(source_position, source_intensity, Nphot, key):
 
 
 @partial(jax.jit, static_argnums=(3,))
-def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_photons, key, n_medium, fiber_NA=0.22):
+def generate_laser_photons(
+    fiber_position, fiber_direction, source_intensity, n_photons, key, n_medium, fiber_NA=0.22
+):
     """
     Generate laser photons from a fiber tip with realistic angular distribution.
     Photons are distributed WITHIN the cone, not just on its surface.
@@ -142,6 +149,7 @@ def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_
 # Moved from lucid/detector_params.py during Phase 2.2 refactor.
 # ---------------------------------------------------------------------------
 
+
 class IsotropicSource(NamedTuple):
     """Isotropic point source -- callable JAX pytree.
 
@@ -150,9 +158,10 @@ class IsotropicSource(NamedTuple):
     The optional ``wavelength`` field (nm) is used by the simulator in
     wavelength mode to look up per-photon scatter/absorption from the medium.
     """
-    position: jnp.ndarray     # (3,)
-    intensity: jnp.ndarray    # scalar
-    wavelength: object = None # scalar nm, or None for broadband
+
+    position: jnp.ndarray  # (3,)
+    intensity: jnp.ndarray  # scalar
+    wavelength: object = None  # scalar nm, or None for broadband
 
     def __call__(self, n_photons, key, n_medium):
         return get_isotropic_rays(self.position, self.intensity, n_photons, key)
@@ -170,9 +179,10 @@ class IsotropicSourceRandom(NamedTuple):
     zero by construction rather than by fit quality. Use this for truth generation; keep the
     lattice for the forward model.
     """
-    position: jnp.ndarray     # (3,)
-    intensity: jnp.ndarray    # scalar
-    wavelength: object = None # scalar nm, or None for broadband
+
+    position: jnp.ndarray  # (3,)
+    intensity: jnp.ndarray  # scalar
+    wavelength: object = None  # scalar nm, or None for broadband
 
     def __call__(self, n_photons, key, n_medium):
         return get_isotropic_rays_random(self.position, self.intensity, n_photons, key)
@@ -186,20 +196,27 @@ class LaserSource(NamedTuple):
     The optional ``wavelength`` field (nm) is used by the simulator in
     wavelength mode to look up per-photon scatter/absorption from the medium.
     """
-    position: jnp.ndarray     # (3,)
-    intensity: jnp.ndarray    # scalar
-    direction: jnp.ndarray    # (3,), default [0, 0, -1]
-    fiber_NA: jnp.ndarray     # scalar, default 0.22
-    wavelength: object = None # scalar nm, or None for broadband
+
+    position: jnp.ndarray  # (3,)
+    intensity: jnp.ndarray  # scalar
+    direction: jnp.ndarray  # (3,), default [0, 0, -1]
+    fiber_NA: jnp.ndarray  # scalar, default 0.22
+    wavelength: object = None  # scalar nm, or None for broadband
 
     def __call__(self, n_photons, key, n_medium):
         return generate_laser_photons(
-            self.position, self.direction, self.intensity,
-            n_photons, key, n_medium, self.fiber_NA,
+            self.position,
+            self.direction,
+            self.intensity,
+            n_photons,
+            key,
+            n_medium,
+            self.fiber_NA,
         )
 
 
 # --- Factory helpers with sensible defaults ---
+
 
 def isotropic_source(position, intensity=1_000_000, wavelength=None):
     """Create an IsotropicSource with default intensity.
@@ -234,8 +251,7 @@ def isotropic_source_random(position, intensity=1_000_000, wavelength=None):
     )
 
 
-def laser_source(position, intensity=1_000_000, direction=None, fiber_NA=0.22,
-                 wavelength=None):
+def laser_source(position, intensity=1_000_000, direction=None, fiber_NA=0.22, wavelength=None):
     """Create a LaserSource with default direction (downward) and NA.
 
     Parameters

@@ -39,15 +39,18 @@ of a parameterisation:
 Anything answering all four can build its own forward and be fitted, which is the point of naming
 it.
 """
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from lucid.detector_params import (
-    DetectorParams, _flatten_detector_params, _nest_flat_kwargs,
+    DetectorParams,
+    _flatten_detector_params,
+    _nest_flat_kwargs,
 )
 
-__all__ = ['CalibrationParams', 'FieldParams']
+__all__ = ["CalibrationParams", "FieldParams"]
 
 
 class CalibrationParams:
@@ -71,12 +74,12 @@ class CalibrationParams:
     argument so that is visible at the call site rather than buried.
     """
 
-    def __init__(self, n_wavelengths, basis='rlogit', mie_scatter_length=1e6, g=0.9):
-        if basis not in ('rlogit', 'specdiff'):
+    def __init__(self, n_wavelengths, basis="rlogit", mie_scatter_length=1e6, g=0.9):
+        if basis not in ("rlogit", "specdiff"):
             raise ValueError(f"basis must be 'rlogit' or 'specdiff', got {basis!r}")
         self.W = int(n_wavelengths)
-        self.NG = 3 * self.W                     # index of the first reflection parameter
-        self.P = self.NG + 4                     # total free parameters
+        self.NG = 3 * self.W  # index of the first reflection parameter
+        self.P = self.NG + 4  # total free parameters
         self.basis = basis
         self.mie_scatter_length = mie_scatter_length
         self.g = g
@@ -89,16 +92,28 @@ class CalibrationParams:
         """
         NG = self.NG
         p = jnp.exp(theta)
-        if self.basis == 'rlogit':
-            Rw = jnp.exp(theta[NG]); fw = jax.nn.sigmoid(theta[NG + 1])
-            Rs = jnp.exp(theta[NG + 2]); fs = jax.nn.sigmoid(theta[NG + 3])
+        if self.basis == "rlogit":
+            Rw = jnp.exp(theta[NG])
+            fw = jax.nn.sigmoid(theta[NG + 1])
+            Rs = jnp.exp(theta[NG + 2])
+            fs = jax.nn.sigmoid(theta[NG + 3])
         else:
-            Rw = p[NG] + p[NG + 1]; fw = p[NG] / Rw
-            Rs = p[NG + 2] + p[NG + 3]; fs = p[NG + 2] / Rs
+            Rw = p[NG] + p[NG + 1]
+            fw = p[NG] / Rw
+            Rs = p[NG + 2] + p[NG + 3]
+            fs = p[NG + 2] / Rs
         return DetectorParams.from_flat(
-            scatter_length=p[3 * wl], mie_scatter_length=self.mie_scatter_length, g=self.g,
-            wall_reflection_rate=Rw, sensor_reflection_rate=Rs, wall_fspec=fw, sensor_fspec=fs,
-            absorption_length=p[3 * wl + 1], qe=p[3 * wl + 2], qe_corrections=gains)
+            scatter_length=p[3 * wl],
+            mie_scatter_length=self.mie_scatter_length,
+            g=self.g,
+            wall_reflection_rate=Rw,
+            sensor_reflection_rate=Rs,
+            wall_fspec=fw,
+            sensor_fspec=fs,
+            absorption_length=p[3 * wl + 1],
+            qe=p[3 * wl + 2],
+            qe_corrections=gains,
+        )
 
     # -- fit space -> reported quantities -----------------------------------------------------
     def to_real(self, theta):
@@ -109,9 +124,11 @@ class CalibrationParams:
         """
         NG = self.NG
         r = np.exp(np.asarray(theta[:NG]))
-        if self.basis == 'rlogit':
-            Rw = np.exp(theta[NG]); fw = 1 / (1 + np.exp(-theta[NG + 1]))
-            Rs = np.exp(theta[NG + 2]); fs = 1 / (1 + np.exp(-theta[NG + 3]))
+        if self.basis == "rlogit":
+            Rw = np.exp(theta[NG])
+            fw = 1 / (1 + np.exp(-theta[NG + 1]))
+            Rs = np.exp(theta[NG + 2])
+            fs = 1 / (1 + np.exp(-theta[NG + 3]))
             refl = [Rw * fw, Rw * (1 - fw), Rs * fs, Rs * (1 - fs)]
         else:
             refl = list(np.exp(np.asarray(theta[NG:])))
@@ -125,16 +142,24 @@ class CalibrationParams:
         ``absorption_length`` and ``qe``.
         """
         if len(per_wavelength) != self.W:
-            raise ValueError(f'expected {self.W} wavelength entries, got {len(per_wavelength)}')
+            raise ValueError(f"expected {self.W} wavelength entries, got {len(per_wavelength)}")
         opt = []
         for t in per_wavelength:
-            opt += [t['scatter_length'], t['absorption_length'], t['qe']]
-        if self.basis == 'rlogit':
+            opt += [t["scatter_length"], t["absorption_length"], t["qe"]]
+        if self.basis == "rlogit":
             _logit = lambda f: np.log(f / (1 - f))
             refl = [np.log(wall_r), _logit(wall_fspec), np.log(sensor_r), _logit(sensor_fspec)]
         else:
-            refl = list(np.log([wall_r * wall_fspec, wall_r * (1 - wall_fspec),
-                                sensor_r * sensor_fspec, sensor_r * (1 - sensor_fspec)]))
+            refl = list(
+                np.log(
+                    [
+                        wall_r * wall_fspec,
+                        wall_r * (1 - wall_fspec),
+                        sensor_r * sensor_fspec,
+                        sensor_r * (1 - sensor_fspec),
+                    ]
+                )
+            )
         return np.array(list(np.log(opt)) + refl)
 
 
@@ -164,13 +189,13 @@ class FieldParams:
 
     W = 1
 
-    def __init__(self, dp_true, fields, per_pmt_field='qe_corrections', n_sensors=None):
+    def __init__(self, dp_true, fields, per_pmt_field="qe_corrections", n_sensors=None):
         flat = {k: np.asarray(v) for k, v in _flatten_detector_params(dp_true).items()}
         missing = [f for f in fields if f not in flat]
         if missing:
-            raise KeyError(f'not DetectorParams leaf fields: {missing}')
+            raise KeyError(f"not DetectorParams leaf fields: {missing}")
         if per_pmt_field not in flat:
-            raise KeyError(f'per-PMT field {per_pmt_field!r} is not a DetectorParams leaf')
+            raise KeyError(f"per-PMT field {per_pmt_field!r} is not a DetectorParams leaf")
         self.fields = list(fields)
         self.per_pmt_field = per_pmt_field
         self.shapes = [(f, flat[f].shape) for f in self.fields]
@@ -186,7 +211,7 @@ class FieldParams:
         i = 0
         for f, shp in self.shapes:
             size = int(np.prod(shp)) if shp else 1
-            flat[f] = vals[i:i + size].reshape(shp)
+            flat[f] = vals[i : i + size].reshape(shp)
             i += size
         flat[self.per_pmt_field] = jnp.asarray(gains) * jnp.ones(self.NS)
         return _nest_flat_kwargs(flat)
@@ -197,8 +222,11 @@ class FieldParams:
 
     def theta_from_physical(self, dp=None):
         """``theta`` at the truth, or at another ``DetectorParams``: the natural start."""
-        flat = self._flat_true if dp is None else {
-            k: np.asarray(v) for k, v in _flatten_detector_params(dp).items()}
+        flat = (
+            self._flat_true
+            if dp is None
+            else {k: np.asarray(v) for k, v in _flatten_detector_params(dp).items()}
+        )
         parts = [np.asarray(flat[f], dtype=np.float64).ravel() for f in self.fields]
         vec = np.concatenate(parts) if parts else np.zeros(0)
         return np.log(np.clip(vec, 1e-12, None))

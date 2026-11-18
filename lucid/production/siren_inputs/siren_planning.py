@@ -22,18 +22,18 @@ import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-
 # Empirical time model fit from the v6 SIREN-input test (100 events/cell,
 # 1 km world box, 500 MeV..100 GeV on roma partition):
 #   t_per_event(E_MeV) ≈ 0.06 + 4.22e-4 * E_MeV   [seconds]
 # Override per-config via events_schedule.time_model if needed.
 DEFAULT_TIME_MODEL = {
-    "a_seconds_per_event":         0.06,
+    "a_seconds_per_event": 0.06,
     "b_seconds_per_event_per_mev": 4.22e-4,
 }
 
 
 # --- PhotonSim checkout discovery --------------------------------------------
+
 
 def is_complete_siren(root_path: Path) -> bool:
     """True iff the ROOT file exists AND has the OpticalPhotons TTree key."""
@@ -41,14 +41,14 @@ def is_complete_siren(root_path: Path) -> bool:
         return False
     try:
         import uproot
+
         with uproot.open(root_path) as f:
             return "OpticalPhotons" in f
     except Exception:
         return False
 
 
-def find_photonsim_dir(env: Dict[str, str], override: Optional[Path],
-                       script_dir: Path) -> Path:
+def find_photonsim_dir(env: Dict[str, str], override: Optional[Path], script_dir: Path) -> Path:
     """Locate the PhotonSim checkout that holds data/<m>/<p>/smax_fit.csv.
 
     Search order: explicit override, $PHOTONSIM_DEV_PATH (from user_paths.sh),
@@ -70,8 +70,8 @@ def find_photonsim_dir(env: Dict[str, str], override: Optional[Path],
 
 # --- s_max parametrisation ----------------------------------------------------
 
-def load_smax_row(photonsim_dir: Path, material: str, particle: str
-                  ) -> Tuple[dict, int]:
+
+def load_smax_row(photonsim_dir: Path, material: str, particle: str) -> Tuple[dict, int]:
     """Return (csv_row_dict, fit_min_mev) from smax_fit.csv. Raises if missing."""
     path = photonsim_dir / "data" / material / particle / "smax_fit.csv"
     if not path.is_file():
@@ -95,10 +95,10 @@ def eval_smax(row: dict, energy_mev: float) -> float:
     form = row["form"]
     if form == "A*E^B":
         A, B = float(row["A"]), float(row["B"])
-        return A * energy_mev ** B
+        return A * energy_mev**B
     if form == "smooth_two_power":
         a, b1, b2, E0 = (float(row[k]) for k in ("a", "b1", "b2", "E0"))
-        return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
+        return a * energy_mev**b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
     if form == "piecewise":
         # Two smooth_two_power pieces joined at e_join_mev with C⁰+C¹
         # continuity. Low piece in (a, b1, b2, E0); high piece in
@@ -108,19 +108,25 @@ def eval_smax(row: dict, energy_mev: float) -> float:
             a, b1, b2, E0 = (float(row[k]) for k in ("a", "b1", "b2", "E0"))
         else:
             a, b1, b2, E0 = (float(row[k]) for k in ("a_hi", "b1_hi", "b2_hi", "E0_hi"))
-        return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
+        return a * energy_mev**b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
     raise ValueError(f"unknown smax form: {form!r}")
 
 
 # --- Time-based split planning -----------------------------------------------
 
+
 def t_per_event(energy_mev: float, a_s: float, b_s_per_mev: float) -> float:
     return a_s + b_s_per_mev * energy_mev
 
 
-def split_plan_by_time(*, events_per_cell: int, energy_mev: int,
-                        target_seconds_per_job: Optional[float],
-                        a_s: float, b_s_per_mev: float) -> Tuple[int, int]:
+def split_plan_by_time(
+    *,
+    events_per_cell: int,
+    energy_mev: int,
+    target_seconds_per_job: Optional[float],
+    a_s: float,
+    b_s_per_mev: float,
+) -> Tuple[int, int]:
     """Return (n_jobs, events_per_job) for one cell.
 
     If `target_seconds_per_job` is None or the cell would fit in one job
@@ -143,10 +149,18 @@ def split_plan_by_time(*, events_per_cell: int, energy_mev: int,
 
 # --- Per-cell config emission ------------------------------------------------
 
-def write_per_cell_config(*, cell_dir: Path, material: str, particle: str,
-                          energy_mev: int, smax_mm: float,
-                          events_per_job: int, n_jobs: int,
-                          name: str) -> Path:
+
+def write_per_cell_config(
+    *,
+    cell_dir: Path,
+    material: str,
+    particle: str,
+    energy_mev: int,
+    smax_mm: float,
+    events_per_job: int,
+    n_jobs: int,
+    name: str,
+) -> Path:
     """Write the dataprod-style JSON config that lucid-run-job will read.
 
     The same config is reused by every sub-job in the cell — only the
@@ -157,22 +171,20 @@ def write_per_cell_config(*, cell_dir: Path, material: str, particle: str,
         "config_number": -1,
         "use_config_number": False,
         "name": name,
-        "description": (f"SIREN-input cell: {particle} @ {energy_mev} MeV in "
-                        f"{material}, s_max baked in for AngleDistanceNorm."),
-
+        "description": (
+            f"SIREN-input cell: {particle} @ {energy_mev} MeV in "
+            f"{material}, s_max baked in for AngleDistanceNorm."
+        ),
         "material": material,
         "energy_distribution": "monoenergetic",
         "energy_MeV": energy_mev,
-
         # SIREN-input invariants:
         "fixed_direction_z": True,
         "smax_mm": smax_mm,
         "store_individual_photons": False,
         "run_lucid": False,
         "disable_decays": True,
-
         "particles": [{"type": particle}],
-
         "n_jobs": int(n_jobs),
         "n_events_per_job": int(events_per_job),
     }
@@ -183,8 +195,8 @@ def write_per_cell_config(*, cell_dir: Path, material: str, particle: str,
 
 # --- Schedule parsing --------------------------------------------------------
 
-def parse_schedule(cfg: dict
-                   ) -> Tuple[int, List[Tuple[int, int]], Optional[float], float, float]:
+
+def parse_schedule(cfg: dict) -> Tuple[int, List[Tuple[int, int]], Optional[float], float, float]:
     """Extract (events_default, events_ranges, target_seconds, a, b)
     from a SIREN-input config.
 
@@ -224,9 +236,9 @@ def parse_schedule(cfg: dict
     return events_per_cell, ranges, target_s, a_s, b_s_per_mev
 
 
-def events_per_cell_for_energy(default_events: int,
-                               ranges: List[Tuple[int, int]],
-                               energy_mev: int) -> int:
+def events_per_cell_for_energy(
+    default_events: int, ranges: List[Tuple[int, int]], energy_mev: int
+) -> int:
     """Resolve per-cell event budget via the per-range schedule, falling
     back to ``default_events`` when no range matches."""
     for e_max, n in ranges:
@@ -237,31 +249,49 @@ def events_per_cell_for_energy(default_events: int,
 
 # --- Cell enumeration --------------------------------------------------------
 
+
 class Cell(tuple):
     """A planned (particle, energy, smax_mm, n_jobs, events_per_job) tuple."""
+
     __slots__ = ()
+
     def __new__(cls, particle, energy_mev, smax_mm, n_jobs, events_per_job):
-        return super().__new__(cls, (particle, energy_mev, smax_mm,
-                                     n_jobs, events_per_job))
+        return super().__new__(cls, (particle, energy_mev, smax_mm, n_jobs, events_per_job))
+
     @property
-    def particle(self) -> str: return self[0]
+    def particle(self) -> str:
+        return self[0]
+
     @property
-    def energy_mev(self) -> int: return self[1]
+    def energy_mev(self) -> int:
+        return self[1]
+
     @property
-    def smax_mm(self) -> float: return self[2]
+    def smax_mm(self) -> float:
+        return self[2]
+
     @property
-    def n_jobs(self) -> int: return self[3]
+    def n_jobs(self) -> int:
+        return self[3]
+
     @property
-    def events_per_job(self) -> int: return self[4]
+    def events_per_job(self) -> int:
+        return self[4]
 
 
-def build_cells(*, particles: List[str], energies: List[int],
-                photonsim_dir: Path, material: str,
-                events_per_cell: int,
-                events_per_cell_ranges: Optional[List[Tuple[int, int]]],
-                target_seconds_per_job: Optional[float],
-                a_s: float, b_s_per_mev: float,
-                include_extrapolated: bool) -> Tuple[List[Cell], List[str]]:
+def build_cells(
+    *,
+    particles: List[str],
+    energies: List[int],
+    photonsim_dir: Path,
+    material: str,
+    events_per_cell: int,
+    events_per_cell_ranges: Optional[List[Tuple[int, int]]],
+    target_seconds_per_job: Optional[float],
+    a_s: float,
+    b_s_per_mev: float,
+    include_extrapolated: bool,
+) -> Tuple[List[Cell], List[str]]:
     """Enumerate every (particle, energy) cell with its full plan.
 
     Returns (cells, skipped_messages). Energies below `fit_min_mev` are
@@ -279,15 +309,18 @@ def build_cells(*, particles: List[str], energies: List[int],
         row, fit_min = load_smax_row(photonsim_dir, material, particle)
         for energy in energies:
             if energy < fit_min and not include_extrapolated:
-                skipped.append(f"{particle} @ {energy} MeV "
-                               f"(< fit_min={fit_min}; pass --include-extrapolated to force)")
+                skipped.append(
+                    f"{particle} @ {energy} MeV "
+                    f"(< fit_min={fit_min}; pass --include-extrapolated to force)"
+                )
                 continue
             cell_budget = events_per_cell_for_energy(events_per_cell, ranges, energy)
             n_jobs, evt_per_job = split_plan_by_time(
-                events_per_cell=cell_budget, energy_mev=energy,
+                events_per_cell=cell_budget,
+                energy_mev=energy,
                 target_seconds_per_job=target_seconds_per_job,
-                a_s=a_s, b_s_per_mev=b_s_per_mev,
+                a_s=a_s,
+                b_s_per_mev=b_s_per_mev,
             )
-            cells.append(Cell(particle, energy, eval_smax(row, energy),
-                              n_jobs, evt_per_job))
+            cells.append(Cell(particle, energy, eval_smax(row, energy), n_jobs, evt_per_job))
     return cells, skipped

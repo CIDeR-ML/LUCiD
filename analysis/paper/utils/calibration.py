@@ -11,25 +11,26 @@ wavelengths, recovering the EFFECTIVE optical parameters at each wavelength
 (L_s(λ)=1/scatter_coeff, L_a(λ)=1/absorption_coeff, QE(λ)), fit as scalars. The recovered
 points trace out the water.json curves.
 """
+
 import os
 from pathlib import Path
 
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 
 from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
-from lucid.sources import laser_source, isotropic_source
-from lucid.wavelength.medium import make_medium, load_qe_curve
+from lucid.sources import isotropic_source, laser_source
+from lucid.wavelength.medium import load_qe_curve, make_medium
 
-_ROOT = str(Path(__file__).resolve().parents[3])          # <repo>/
+_ROOT = str(Path(__file__).resolve().parents[3])  # <repo>/
 
-GEOM = os.path.join(_ROOT, 'config/SK_like_geom_config.json')
-QE_PATH = os.path.join(_ROOT, 'config/pmt/SK_QE.json')
+GEOM = os.path.join(_ROOT, "config/SK_like_geom_config.json")
+QE_PATH = os.path.join(_ROOT, "config/pmt/SK_QE.json")
 
 # The SAME wavelength-dependent water model tracking uses (materials/water.json).
 _WLG = jnp.linspace(280, 650, 371)
-_MED = make_medium('water', wavelength_grid=_WLG)
+_MED = make_medium("water", wavelength_grid=_WLG)
 _QE = load_qe_curve(QE_PATH)
 
 # Specular/diffuse-mixture reflection truth (literature-anchored, ~400 nm):
@@ -38,9 +39,9 @@ _QE = load_qe_curve(QE_PATH)
 #   PMT face from water (glass+bialkali photocathode): total R~0.25, specular-dominated (Motta & Schonert
 #     NIM A539 (2005) 217; WCSim rgcff=0.32 / SKDETSIM ~0.21). f_s<1 keeps it a genuine mixture (micro-roughness).
 WALL_R_MIX, SENSOR_R_MIX = 0.05, 0.25
-WALL_FSPEC, SENSOR_FSPEC = 0.55, 0.90    # specular fraction (1-fspec diffuse)
+WALL_FSPEC, SENSOR_FSPEC = 0.55, 0.90  # specular fraction (1-fspec diffuse)
 WAVELENGTHS = [337, 375, 405, 445, 473]  # SK water-calibration laser wavelengths (arXiv:1307.0162)
-REP_WL = 405                             # representative wavelength
+REP_WL = 405  # representative wavelength
 
 _det = generate_detector(GEOM)
 NS = len(_det.all_points)
@@ -82,29 +83,52 @@ TRUTH_K = _tk / np.exp(np.mean(np.log(_tk)))
 #                  run does not depend on that default.
 #   truth_seed=0   the pseudo-data's seed, the same for every fit seed (keys: lucid.fitting.calib).
 CALIB = dict(
-    steps=1200, n_ph=1_000_000, k=12, grid=dict(n_cap=71, n_angular=223, n_height=76),
+    steps=1200,
+    n_ph=1_000_000,
+    k=12,
+    grid=dict(n_cap=71, n_angular=223, n_height=76),
     intensity=1e8,
-    btruth=8, n_forward_draws=1, jacobian_draws=8, refresh=20, polyak=50,
-    lam=0.01, mu=0.1, max_step=0.5, q_floor_frac=0.01,
-    gauge='log', basis='rlogit', mie_scatter_length=1e6, g=0.9,
-    pert=0.4, pert_ls=2.0, pert_refl=1.2,
+    btruth=8,
+    n_forward_draws=1,
+    jacobian_draws=8,
+    refresh=20,
+    polyak=50,
+    lam=0.01,
+    mu=0.1,
+    max_step=0.5,
+    q_floor_frac=0.01,
+    gauge="log",
+    basis="rlogit",
+    mie_scatter_length=1e6,
+    g=0.9,
+    pert=0.4,
+    pert_ls=2.0,
+    pert_refl=1.2,
     truth_seed=0,
 )
 CALIB_SEEDS = (0, 1, 2)
-POLYAK_PLOT_WINDOW = 150     # the window the FIGURE smooths with (see calib_plots.py)
+POLYAK_PLOT_WINDOW = 150  # the window the FIGURE smooths with (see calib_plots.py)
 
 # The 2D loss-geometry figure. The surface and the trajectories are built from this one dict, so
 # they share K / N_PH / NK_* by construction; lam/mu are the joint fit's, so the Gauss-Newton
 # panel shows the step the fit takes. At this setting no sensor has zero charge, so the surface is
 # linear in `intensity`: it moves only the colour-bar offset.
 LANDSCAPE = dict(
-    ngrid=51, hwf=0.55, k=8, n_ph=2_000_000, grid=dict(n_cap=100, n_angular=150, n_height=100),
-    intensity=1e8, nk_truth=8, nk_sim=4, lam=CALIB['lam'], mu=CALIB['mu'],
+    ngrid=51,
+    hwf=0.55,
+    k=8,
+    n_ph=2_000_000,
+    grid=dict(n_cap=100, n_angular=150, n_height=100),
+    intensity=1e8,
+    nk_truth=8,
+    nk_sim=4,
+    lam=CALIB["lam"],
+    mu=CALIB["mu"],
 )
 LANDSCAPE_SHARDS = 10
 # Required, not optional: JAX's default 0.75 leaves ~8.4 GiB of an 11.26 GiB card against a
 # 9.51 GiB peak, and every shard OOMs.
-LANDSCAPE_ENV = {'XLA_PYTHON_CLIENT_MEM_FRACTION': '0.95'}
+LANDSCAPE_ENV = {"XLA_PYTHON_CLIENT_MEM_FRACTION": "0.95"}
 
 
 def effective_truth(wl):
@@ -116,9 +140,16 @@ def effective_truth(wl):
 
 def _cal_sim(n_ph, k, grid):
     """The calibration forward: hard-step overlap, expected first-arrival hits, scalar mode."""
-    return setup_event_simulator(GEOM, n_ph, source='light_source', temperature=None, K=k,
-                                 wavelength_mode=False,
-                                 reflection_model='scalar_mix', **grid)
+    return setup_event_simulator(
+        GEOM,
+        n_ph,
+        source="light_source",
+        temperature=None,
+        K=k,
+        wavelength_mode=False,
+        reflection_model="scalar_mix",
+        **grid,
+    )
 
 
 def _laser_sources(intensity):
@@ -130,5 +161,6 @@ def _laser_sources(intensity):
     s = 10.0
     iso_pos = [[0, 0, 0], [s, 0, 0], [-s, 0, 0], [0, s, 0], [0, -s, 0], [0, 0, s], [0, 0, -s]]
     inten = float(intensity)
-    return ([laser_source(position=[0, 0, TOP], direction=[0, 0, -1], intensity=inten)]
-            + [isotropic_source(position=p, intensity=inten) for p in iso_pos])
+    return [laser_source(position=[0, 0, TOP], direction=[0, 0, -1], intensity=inten)] + [
+        isotropic_source(position=p, intensity=inten) for p in iso_pos
+    ]

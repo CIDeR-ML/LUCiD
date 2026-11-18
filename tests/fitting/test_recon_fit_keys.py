@@ -6,33 +6,41 @@ here on the analytic problem (no simulator): two events never share draws, so th
 event indices fit to different key-averaged minima; and an event's fit depends on its index alone,
 so it is bit-identical fitted alone or anywhere in any batch.
 """
+
 import numpy as np
 
-from tests.helpers.recon_analytic_model import AnalyticModel, _THETA_STAR, _U_START, _scale9
+from tests.helpers.recon_analytic_model import _THETA_STAR, _U_START, AnalyticModel, _scale9
 
 EVENT_SEED = 100003
 
 
 def _fit_key(event):
     from lucid.sources.seed_utils import derive_event_keys
-    return derive_event_keys(EVENT_SEED, 0, event)['fit_key']
+
+    return derive_event_keys(EVENT_SEED, 0, event)["fit_key"]
 
 
 def _fit_events(events):
     """Fit the same observables at each event index, in the given order."""
     from dataclasses import replace
+
     from lucid.fitting import FIT_RECIPE, fit_track
+
     fit = replace(FIT_RECIPE, nkeys=3, steps=20)
     model = AnalyticModel()
     start = _THETA_STAR + _scale9() * _U_START
     oc = ot = np.zeros(12)
-    return {ev: np.asarray(fit_track(model, oc, ot, start, fit, key=_fit_key(ev))[0])
-            for ev in events}
+    return {
+        ev: np.asarray(fit_track(model, oc, ot, start, fit, key=_fit_key(ev))[0]) for ev in events
+    }
 
 
 def test_no_two_events_share_a_fit_key():
     from lucid.fitting import FIT_RECIPE
-    keys = [tuple(np.asarray(k).tolist()) for ev in range(20) for k in FIT_RECIPE.keys(_fit_key(ev))]
+
+    keys = [
+        tuple(np.asarray(k).tolist()) for ev in range(20) for k in FIT_RECIPE.keys(_fit_key(ev))
+    ]
     assert len(set(keys)) == len(keys) == 20 * FIT_RECIPE.nkeys
 
 

@@ -11,6 +11,7 @@ mention is still a path that will not exist on the next machine.
 
 Usage: shell_header_check.py FILE [FILE ...]   (a pre-commit `local` hook)
 """
+
 import re
 import sys
 

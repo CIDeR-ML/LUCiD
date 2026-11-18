@@ -24,13 +24,30 @@ problem can hold both policies, so only the problem holds keys.
 The loop applies the step and carries the iterate in float32 for both problems.
 """
 
-__all__ = ['gauss_newton', 'gauss_newton_tx']
+__all__ = ["gauss_newton", "gauss_newton_tx"]
 
 
-def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
-                 lr=1.0, lr_final=None, scale=None,
-                 refresh=1, refresh_final=None, refresh_switch=0.5,
-                 readout='final', polyak=0, reject_nonfinite=False, fix=(), on_step=None):
+def gauss_newton(
+    problem,
+    theta0,
+    steps,
+    *,
+    lam,
+    mu,
+    max_step=None,
+    jitter=0.0,
+    lr=1.0,
+    lr_final=None,
+    scale=None,
+    refresh=1,
+    refresh_final=None,
+    refresh_switch=0.5,
+    readout="final",
+    polyak=0,
+    reject_nonfinite=False,
+    fix=(),
+    on_step=None,
+):
     """Run the damped Gauss-Newton loop.
 
     Parameters
@@ -86,18 +103,30 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
     Returns ``dict(theta, history, gnorm, loss, n_steps)``. ``history`` and ``gnorm`` INCLUDE the
     starting point, so they have ``steps + 1`` entries; ``loss`` has ``steps``.
     """
-    if readout not in ('final', 'polyak', 'ming'):
+    if readout not in ("final", "polyak", "ming"):
         raise ValueError(f"readout must be 'final', 'polyak' or 'ming', got {readout!r}")
     # This is the damped-Gauss-Newton configuration of the shared driver `minimize`, stepping with
     # `gauss_newton_tx`.
     from lucid.fitting.minimize import minimize as _minimize
+
     tx = gauss_newton_tx(lam, mu, jitter=jitter, lr=lr, lr_final=lr_final, steps=steps)
     return _minimize(
-        problem, theta0, steps, tx,
-        needs_metric=True, scale=scale, max_step=max_step,
-        refresh=refresh, refresh_final=refresh_final, refresh_switch=refresh_switch,
-        readout=readout, polyak=polyak, reject_nonfinite=reject_nonfinite,
-        fix=fix, on_step=on_step)
+        problem,
+        theta0,
+        steps,
+        tx,
+        needs_metric=True,
+        scale=scale,
+        max_step=max_step,
+        refresh=refresh,
+        refresh_final=refresh_final,
+        refresh_switch=refresh_switch,
+        readout=readout,
+        polyak=polyak,
+        reject_nonfinite=reject_nonfinite,
+        fix=fix,
+        on_step=on_step,
+    )
 
 
 def gauss_newton_tx(lam, mu, *, jitter=0.0, lr=1.0, lr_final=None, steps=1):
@@ -107,6 +136,8 @@ def gauss_newton_tx(lam, mu, *, jitter=0.0, lr=1.0, lr_final=None, steps=1):
 
     :func:`lucid.fitting.calibrate.calibrate` runs it by default.
     """
-    from lucid.fitting.transforms import damped_gauss_newton, annealed_learning_rate
-    return damped_gauss_newton(lam, mu, learning_rate=annealed_learning_rate(lr, lr_final, steps),
-                               jitter=jitter)
+    from lucid.fitting.transforms import annealed_learning_rate, damped_gauss_newton
+
+    return damped_gauss_newton(
+        lam, mu, learning_rate=annealed_learning_rate(lr, lr_final, steps), jitter=jitter
+    )

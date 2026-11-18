@@ -48,7 +48,6 @@ from pathlib import Path
 
 from lucid.production.qa.job_log import parse_job_out
 
-
 # ---------- sacct enrichment ------------------------------------------------
 
 
@@ -62,9 +61,12 @@ def fetch_sacct(slurm_ids: list[int]) -> dict[int, dict]:
     if not slurm_ids:
         return {}
     cmd = [
-        "sacct", "-j", ",".join(str(i) for i in slurm_ids),
+        "sacct",
+        "-j",
+        ",".join(str(i) for i in slurm_ids),
         "--format=JobID,Elapsed,MaxRSS,State,ExitCode",
-        "--parsable2", "--noheader",
+        "--parsable2",
+        "--noheader",
     ]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -215,9 +217,9 @@ def combine_config(config_dir: Path, n_events_per_job_hint: int | None) -> dict:
         j["sacct"] = sacct_map.get(j["slurm_id"]) if j["slurm_id"] is not None else None
 
     pooled_event = [t for j in jobs for t in j["lucid_event_total_s"]]
-    pooled_save  = [t for j in jobs for t in j["lucid_batch_save_s"]]
-    job_walls    = [j["job_wall_s"] for j in jobs if j["job_wall_s"] is not None]
-    ps_elapsed   = [j["photonsim_elapsed_s"] for j in jobs if j["photonsim_elapsed_s"] is not None]
+    pooled_save = [t for j in jobs for t in j["lucid_batch_save_s"]]
+    job_walls = [j["job_wall_s"] for j in jobs if j["job_wall_s"] is not None]
+    ps_elapsed = [j["photonsim_elapsed_s"] for j in jobs if j["photonsim_elapsed_s"] is not None]
     genie_elapsed = [j["genie_elapsed_s"] for j in jobs if j.get("genie_elapsed_s") is not None]
 
     # Per-job "leftover" = job_wall − GENIE − PhotonSim − Σevent_total − Σbatch_save.
@@ -232,13 +234,17 @@ def combine_config(config_dir: Path, n_events_per_job_hint: int | None) -> dict:
         ev_sum = sum(j["lucid_event_total_s"])
         sv_sum = sum(j["lucid_batch_save_s"])
         ge = j.get("genie_elapsed_s") or 0.0
-        leftover_per_job.append(
-            j["job_wall_s"] - ge - j["photonsim_elapsed_s"] - ev_sum - sv_sum
-        )
-    sacct_walls  = [j["sacct"]["elapsed_s"] for j in jobs
-                    if j.get("sacct") and j["sacct"].get("elapsed_s") is not None]
-    rss_mb       = [j["sacct"]["maxrss_mb"] for j in jobs
-                    if j.get("sacct") and j["sacct"].get("maxrss_mb") is not None]
+        leftover_per_job.append(j["job_wall_s"] - ge - j["photonsim_elapsed_s"] - ev_sum - sv_sum)
+    sacct_walls = [
+        j["sacct"]["elapsed_s"]
+        for j in jobs
+        if j.get("sacct") and j["sacct"].get("elapsed_s") is not None
+    ]
+    rss_mb = [
+        j["sacct"]["maxrss_mb"]
+        for j in jobs
+        if j.get("sacct") and j["sacct"].get("maxrss_mb") is not None
+    ]
 
     # Per-event PhotonSim avg, computed per job then summarized across jobs.
     n_per_job = n_events_per_job_hint
@@ -248,8 +254,8 @@ def combine_config(config_dir: Path, n_events_per_job_hint: int | None) -> dict:
 
     # Output size + per-event bytes (pooled across jobs).
     sizes = measure_output_sizes(config_dir)
-    n_events_total = len(pooled_event) if pooled_event else (
-        len(jobs) * n_per_job if n_per_job else 0
+    n_events_total = (
+        len(pooled_event) if pooled_event else (len(jobs) * n_per_job if n_per_job else 0)
     )
     if n_events_total:
         sizes["bytes_per_event_total"] = sizes["h5_total_bytes"] / n_events_total
@@ -266,18 +272,14 @@ def combine_config(config_dir: Path, n_events_per_job_hint: int | None) -> dict:
     for j in jobs:
         sacct_state = (j.get("sacct") or {}).get("state")
         if sacct_state and sacct_state != "COMPLETED":
-            incomplete_reasons.append(
-                f"job_{j['job_index']:06d}: sacct state={sacct_state}"
-            )
+            incomplete_reasons.append(f"job_{j['job_index']:06d}: sacct state={sacct_state}")
         elif not sacct_state and not j["lucid_done"]:
             # No sacct evidence either way — fall back to the stdout marker.
             incomplete_reasons.append(
                 f"job_{j['job_index']:06d}: no 'Successfully wrote' marker (and sacct unavailable)"
             )
         if j["photonsim_rc"] not in (0, None):
-            incomplete_reasons.append(
-                f"job_{j['job_index']:06d}: PhotonSim rc={j['photonsim_rc']}"
-            )
+            incomplete_reasons.append(f"job_{j['job_index']:06d}: PhotonSim rc={j['photonsim_rc']}")
 
     return {
         "config_dir": str(config_dir),
@@ -286,15 +288,15 @@ def combine_config(config_dir: Path, n_events_per_job_hint: int | None) -> dict:
         "n_events_total_observed": len(pooled_event),
         "incomplete_reasons": incomplete_reasons,
         "timing": {
-            "job_wall_s":            stat_summary(job_walls),
-            "sacct_wall_s":          stat_summary(sacct_walls),
-            "genie_elapsed_s":       stat_summary(genie_elapsed),
-            "photonsim_elapsed_s":   stat_summary(ps_elapsed),
+            "job_wall_s": stat_summary(job_walls),
+            "sacct_wall_s": stat_summary(sacct_walls),
+            "genie_elapsed_s": stat_summary(genie_elapsed),
+            "photonsim_elapsed_s": stat_summary(ps_elapsed),
             "photonsim_per_event_s": stat_summary(per_job_ps_per_event),
-            "lucid_event_total_s":   stat_summary(pooled_event),
-            "lucid_batch_save_s":    stat_summary(pooled_save),
+            "lucid_event_total_s": stat_summary(pooled_event),
+            "lucid_batch_save_s": stat_summary(pooled_save),
             "leftover_init_warmup_s": stat_summary(leftover_per_job),
-            "sacct_maxrss_mb":       stat_summary(rss_mb),
+            "sacct_maxrss_mb": stat_summary(rss_mb),
         },
         "sizes": sizes,
         "jobs": jobs,
@@ -327,7 +329,8 @@ def _fmt_stat(s, *, kind="s", show="mean_minmax"):
     if show == "mean_minmax":
         return f"{_fmt_n(s['mean'], kind)} ({_fmt_n(s['min'], kind)} / {_fmt_n(s['max'], kind)})"
     if show == "mean_p":
-        p50 = s.get("p50"); p95 = s.get("p95")
+        p50 = s.get("p50")
+        p95 = s.get("p95")
         return f"{_fmt_n(s['mean'], kind)} (p50 {_fmt_n(p50, kind)}, p95 {_fmt_n(p95, kind)})"
     return _fmt_n(s["mean"], kind)
 
@@ -337,22 +340,28 @@ def write_markdown(report: dict, out_md: Path) -> None:
     lines.append(f"# Dataprod metrics — {report['meta']['root']}")
     lines.append(f"_generated {report['meta']['timestamp']}_")
     lines.append("")
-    lines.append("Per-job stage walls are summarized as **mean (min / max)** "
-                 "across the N jobs of each config. LUCiD per-event timings "
-                 "are **pooled across all events of all jobs**.")
+    lines.append(
+        "Per-job stage walls are summarized as **mean (min / max)** "
+        "across the N jobs of each config. LUCiD per-event timings "
+        "are **pooled across all events of all jobs**."
+    )
     lines.append("")
-    lines.append("**`leftover` column** = `job_wall − GENIE − PhotonSim − "
-                 "Σ(event_total) − Σ(batch_save)`. With GENIE and PhotonSim "
-                 "now self-reporting their elapsed wall, this column is "
-                 "purely **LUCiD init + JAX JIT warmup** (`_warmup_buckets` "
-                 "compiles each kernel once at startup, ~80–120 s on CPU) "
-                 "plus a tiny amount of subprocess/Python overhead.")
+    lines.append(
+        "**`leftover` column** = `job_wall − GENIE − PhotonSim − "
+        "Σ(event_total) − Σ(batch_save)`. With GENIE and PhotonSim "
+        "now self-reporting their elapsed wall, this column is "
+        "purely **LUCiD init + JAX JIT warmup** (`_warmup_buckets` "
+        "compiles each kernel once at startup, ~80–120 s on CPU) "
+        "plus a tiny amount of subprocess/Python overhead."
+    )
     lines.append("")
 
     # Timing table
     lines.append("## Timing")
     lines.append("")
-    lines.append("| config | jobs | events | job wall (s) | GENIE elapsed (s) | PhotonSim elapsed (s) | PhotonSim/event (s) | LUCiD/event (s) | leftover (s) | sacct MaxRSS (MB) |")
+    lines.append(
+        "| config | jobs | events | job wall (s) | GENIE elapsed (s) | PhotonSim elapsed (s) | PhotonSim/event (s) | LUCiD/event (s) | leftover (s) | sacct MaxRSS (MB) |"
+    )
     lines.append("|---|---:|---:|---|---|---|---|---|---|---|")
     for cfg, data in report["configs"].items():
         if "error" in data:
@@ -375,7 +384,9 @@ def write_markdown(report: dict, out_md: Path) -> None:
     # Sizes table
     lines.append("## Output size")
     lines.append("")
-    lines.append("| config | total H5 (MiB) | sensor (MiB) | hits (MiB) | step (MiB) | labl (MiB) | bytes / event |")
+    lines.append(
+        "| config | total H5 (MiB) | sensor (MiB) | hits (MiB) | step (MiB) | labl (MiB) | bytes / event |"
+    )
     lines.append("|---|---:|---:|---:|---:|---:|---:|")
     for cfg, data in report["configs"].items():
         if "error" in data:
@@ -396,8 +407,7 @@ def write_markdown(report: dict, out_md: Path) -> None:
 
     # Incomplete-job warnings
     any_incomplete = any(
-        data.get("incomplete_reasons") for data in report["configs"].values()
-        if "error" not in data
+        data.get("incomplete_reasons") for data in report["configs"].values() if "error" not in data
     )
     if any_incomplete:
         lines.append("## Incomplete jobs")
@@ -438,17 +448,28 @@ def main(argv=None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--config-dir", type=Path,
-                   help="Path to a single config_NNNNNN/ directory.")
-    g.add_argument("--base-dir", type=Path,
-                   help="Path under which config_NNNNNN/ live "
-                        "(e.g. <out>/SK_like).")
-    p.add_argument("--out-json", type=Path, default=None,
-                   help="JSON report path. Default: <base>/metrics_report.json.")
-    p.add_argument("--out-md", type=Path, default=None,
-                   help="Markdown report path. Default: <base>/metrics_report.md.")
-    p.add_argument("--n-events-per-job", type=int, default=None,
-                   help="Override n_events_per_job hint (defaults to README).")
+    g.add_argument("--config-dir", type=Path, help="Path to a single config_NNNNNN/ directory.")
+    g.add_argument(
+        "--base-dir", type=Path, help="Path under which config_NNNNNN/ live (e.g. <out>/SK_like)."
+    )
+    p.add_argument(
+        "--out-json",
+        type=Path,
+        default=None,
+        help="JSON report path. Default: <base>/metrics_report.json.",
+    )
+    p.add_argument(
+        "--out-md",
+        type=Path,
+        default=None,
+        help="Markdown report path. Default: <base>/metrics_report.md.",
+    )
+    p.add_argument(
+        "--n-events-per-job",
+        type=int,
+        default=None,
+        help="Override n_events_per_job hint (defaults to README).",
+    )
     args = p.parse_args(argv)
 
     if args.config_dir:
@@ -485,7 +506,7 @@ def main(argv=None) -> int:
             report["configs"][name] = {"error": f"{type(e).__name__}: {e}"}
 
     out_json = args.out_json or (report_root / "metrics_report.json")
-    out_md   = args.out_md   or (report_root / "metrics_report.md")
+    out_md = args.out_md or (report_root / "metrics_report.md")
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(report, indent=2, default=str))
     write_markdown(report, out_md)
@@ -501,14 +522,16 @@ def main(argv=None) -> int:
         t = data["timing"]
         s = data["sizes"]
         wall = t["job_wall_s"]["mean"] if t["job_wall_s"] else None
-        ps   = t["photonsim_elapsed_s"]["mean"] if t["photonsim_elapsed_s"] else None
-        ev   = t["lucid_event_total_s"]
-        bpe  = s.get("bytes_per_event_total")
-        print(f"  {cfg}: jobs={data['n_jobs']} events={data['n_events_total_observed']}  "
-              f"job_wall_mean={_fmt_n(wall)}s  ps_mean={_fmt_n(ps)}s  "
-              f"lucid/ev={_fmt_n(ev['mean']) if ev else '—'}s  "
-              f"out={_fmt_n(s['h5_total_bytes'], 'MB-bytes')} MiB  "
-              f"({_fmt_n(bpe, 'B') if bpe else '—'} B/ev)")
+        ps = t["photonsim_elapsed_s"]["mean"] if t["photonsim_elapsed_s"] else None
+        ev = t["lucid_event_total_s"]
+        bpe = s.get("bytes_per_event_total")
+        print(
+            f"  {cfg}: jobs={data['n_jobs']} events={data['n_events_total_observed']}  "
+            f"job_wall_mean={_fmt_n(wall)}s  ps_mean={_fmt_n(ps)}s  "
+            f"lucid/ev={_fmt_n(ev['mean']) if ev else '—'}s  "
+            f"out={_fmt_n(s['h5_total_bytes'], 'MB-bytes')} MiB  "
+            f"({_fmt_n(bpe, 'B') if bpe else '—'} B/ev)"
+        )
 
     return 0
 

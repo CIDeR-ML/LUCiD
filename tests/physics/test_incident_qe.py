@@ -5,6 +5,7 @@ reduce it a second time: a deposited photon converts at QE / (1 - R0). A pencil 
 PMT of the tiny detector (``tests/helpers/tiny.py``), through water made transparent and with a
 single transport step, isolates that encounter.
 """
+
 import jax
 import numpy as np
 import pytest
@@ -18,9 +19,11 @@ N, QE = tiny.N, tiny.QE
 def beam(tiny_detector):
     """A pencil beam from the axis onto a mid-height barrel PMT, at normal incidence."""
     from lucid.sources import laser_source
+
     target, centre, out = tiny.barrel_target(tiny_detector)
-    source = laser_source(position=[0.0, 0.0, centre[2]], direction=out.tolist(),
-                          intensity=N, fiber_NA=1e-6)
+    source = laser_source(
+        position=[0.0, 0.0, centre[2]], direction=out.tolist(), intensity=N, fiber_NA=1e-6
+    )
     return target, source
 
 
@@ -33,7 +36,7 @@ def _target_charge(sim, beam, sensor_rate):
     target, source = beam
     charges, _ = sim(source, _params(sim, sensor_rate), jax.random.PRNGKey(3))
     charges = np.asarray(charges)
-    assert charges[target] > 0.999 * charges.sum()      # the beam lands on the target
+    assert charges[target] > 0.999 * charges.sum()  # the beam lands on the target
     return float(charges[target])
 
 
@@ -46,7 +49,8 @@ def test_expected_charge_is_qe_whatever_the_sensor_reflects(tiny_sim, beam):
 def test_direct_charge_gradient_ignores_the_sensor_reflectance(tiny_sim, beam):
     target, source = beam
     grad = jax.grad(lambda dp: tiny_sim(source, dp, jax.random.PRNGKey(3))[0][target])(
-        _params(tiny_sim, 0.25))
+        _params(tiny_sim, 0.25)
+    )
     assert abs(float(grad.reflection.sensor_reflection_rate)) < 1e-4 * N * QE
     np.testing.assert_allclose(float(grad.response.qe), N, rtol=1e-3)
 
@@ -58,7 +62,7 @@ def test_sampled_detection_is_qe_whatever_the_sensor_reflects(tiny_sampled_sim, 
 
 
 def test_angular_model_detects_qe_at_normal_incidence(beam):
-    sim = tiny.simulator(reflection_model='angular')
+    sim = tiny.simulator(reflection_model="angular")
     np.testing.assert_allclose(_target_charge(sim, beam, 0.0), N * QE, rtol=1e-3)
 
 

@@ -15,38 +15,40 @@ Plotly image export needs the kaleido env layered on; run inside the container a
     APPTAINERENV_PYTHONUSERBASE=<paths.S3DF_ENV_BASE> apptainer exec ... \
         /opt/conda/bin/python3 analysis/paper/fig_detector_gallery.py
 """
+
 import argparse
 import sys
 from pathlib import Path
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[2]        # LUCiD/
+REPO_ROOT = Path(__file__).resolve().parents[2]  # LUCiD/
 sys.path.insert(0, str(REPO_ROOT))
-from analysis.paper.utils import paths, provenance      # noqa: E402
+from analysis.paper.utils import paths, provenance  # noqa: E402
 
-CONFIG = REPO_ROOT / 'config'
-FIGURE = 'detector_gallery'
-SURFACE = 'black'          # detector shell colour of the plotly panels
-FILL = 0.82                # fraction of a montage cell a panel fills
+CONFIG = REPO_ROOT / "config"
+FIGURE = "detector_gallery"
+SURFACE = "black"  # detector shell colour of the plotly panels
+FILL = 0.82  # fraction of a montage cell a panel fills
 
 # (config, scale-bar length [m], label, zoom multiplier)
 DISC_DETS = [
-    ('SK_like_geom_config.json', 10.0, '10 m', 1.0),   # cylinder
-    ('JUNO_geom_config.json',    10.0, '10 m', 1.0),   # sphere
-    ('MidBox_geom_config.json',  10.0, '10 m', 0.8),   # box (zoomed out 20%)
+    ("SK_like_geom_config.json", 10.0, "10 m", 1.0),  # cylinder
+    ("JUNO_geom_config.json", 10.0, "10 m", 1.0),  # sphere
+    ("MidBox_geom_config.json", 10.0, "10 m", 0.8),  # box (zoomed out 20%)
 ]
-TELE_CFG = 'IceCube86_full_geom_config.json'
-TELE_BAR = (200.0, '200 m', 1.0)
+TELE_CFG = "IceCube86_full_geom_config.json"
+TELE_BAR = (200.0, "200 m", 1.0)
 
 
 def _panels_dir():
-    return paths.data_dir(FIGURE, 'local')
+    return paths.data_dir(FIGURE, "local")
 
 
 # ----------------------------------------------------------------------------- render
 def _hextent(cfg):
     from lucid.geometry import generate_detector
+
     pts = np.asarray(generate_detector(str(CONFIG / cfg)).all_points)
     return max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1]))
 
@@ -54,23 +56,35 @@ def _hextent(cfg):
 def _disc_png(cfg, out_png):
     from lucid.geometry import generate_detector
     from lucid.visualization import event_display_3d
+
     det = generate_detector(str(CONFIG / cfg))
     n = len(det.all_points)
     event_display_3d(
-        det, np.arange(n), np.ones(n), np.zeros(n),
-        show_all_sensors=True, log_scale=False, show_colorbar=False,
-        dark_theme=False, plot_time=False, colorscale='plasma',
-        surface_color=SURFACE, figname=out_png)
+        det,
+        np.arange(n),
+        np.ones(n),
+        np.zeros(n),
+        show_all_sensors=True,
+        log_scale=False,
+        show_colorbar=False,
+        dark_theme=False,
+        plot_time=False,
+        colorscale="plasma",
+        surface_color=SURFACE,
+        figname=out_png,
+    )
     return out_png
 
 
 def _telescope_png(out_png, margin=30.0, zmargin=40.0, elev=18, azim=30, msize=10.0):
     """IceCube DOMs inside a translucent icy prism following the string footprint."""
     import matplotlib
-    matplotlib.use('Agg')
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
     from scipy.spatial import ConvexHull
+
     from lucid.geometry import generate_detector
 
     pts = np.asarray(generate_detector(str(CONFIG / TELE_CFG)).all_points)
@@ -84,84 +98,99 @@ def _telescope_png(out_png, margin=30.0, zmargin=40.0, elev=18, azim=30, msize=1
     M = len(poly)
     faces = [bot, top] + [[bot[i], bot[(i + 1) % M], top[(i + 1) % M], top[i]] for i in range(M)]
 
-    fig = plt.figure(figsize=(7, 7), facecolor='white')
-    ax = fig.add_subplot(111, projection='3d', facecolor='white')
-    ax.set_proj_type('persp')
+    fig = plt.figure(figsize=(7, 7), facecolor="white")
+    ax = fig.add_subplot(111, projection="3d", facecolor="white")
+    ax.set_proj_type("persp")
     try:
         ax.set_computed_zorder(False)
     except Exception:
         pass
-    prism = Poly3DCollection(faces, facecolors='#c9e0e9', edgecolors='none', zorder=0)
+    prism = Poly3DCollection(faces, facecolors="#c9e0e9", edgecolors="none", zorder=0)
     prism.set_alpha(0.15)
     ax.add_collection3d(prism)
-    ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], s=msize,
-               c=[matplotlib.colormaps['plasma'](0.5)], marker='o',
-               edgecolors='black', linewidths=0.5, depthshade=False, zorder=5)
+    ax.scatter(
+        pts[:, 0],
+        pts[:, 1],
+        pts[:, 2],
+        s=msize,
+        c=[matplotlib.colormaps["plasma"](0.5)],
+        marker="o",
+        edgecolors="black",
+        linewidths=0.5,
+        depthshade=False,
+        zorder=5,
+    )
     ax.set_box_aspect([np.ptp(pts[:, 0]), np.ptp(pts[:, 1]), np.ptp(pts[:, 2]) + 2 * zmargin])
     ax.set_axis_off()
     ax.view_init(elev=elev, azim=azim)
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    fig.savefig(out_png, dpi=170, bbox_inches='tight', facecolor='white')
+    fig.savefig(out_png, dpi=170, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    print(f'telescope: {len(pts)} DOMs')
+    print(f"telescope: {len(pts)} DOMs")
     return out_png
 
 
 def generate_data():
     d = _panels_dir()
     for cfg, *_ in DISC_DETS:
-        name = cfg.split('_geom')[0]
-        _disc_png(cfg, str(d / f'panel_{name}.png'))
-        print(f'disc: {name}')
-    _telescope_png(str(d / 'panel_telescope.png'))
+        name = cfg.split("_geom")[0]
+        _disc_png(cfg, str(d / f"panel_{name}.png"))
+        print(f"disc: {name}")
+    _telescope_png(str(d / "panel_telescope.png"))
 
 
 # --------------------------------------------------------------------------- montage
 def _load_rgb(p):
     from PIL import Image
-    im = Image.open(p).convert('RGBA')
-    bg = Image.new('RGBA', im.size, (255, 255, 255, 255))
+
+    im = Image.open(p).convert("RGBA")
+    bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
     bg.alpha_composite(im)
-    return bg.convert('RGB')
+    return bg.convert("RGB")
 
 
 def _autocrop(im, pad=25):
     from PIL import Image, ImageChops
-    bbox = ImageChops.difference(im, Image.new('RGB', im.size, 'white')).getbbox()
+
+    bbox = ImageChops.difference(im, Image.new("RGB", im.size, "white")).getbbox()
     if bbox:
         l, t, r, b = bbox
-        im = im.crop((max(0, l - pad), max(0, t - pad),
-                      min(im.width, r + pad), min(im.height, b + pad)))
+        im = im.crop(
+            (max(0, l - pad), max(0, t - pad), min(im.width, r + pad), min(im.height, b + pad))
+        )
     return im
 
 
 def _scalebar(canvas, xc, y, bar_px, label, font, cap_px, lw=5):
     from PIL import ImageDraw
+
     d = ImageDraw.Draw(canvas)
     x0, x1 = xc - bar_px / 2, xc + bar_px / 2
-    d.line([(x0, y), (x1, y)], fill='black', width=lw)
+    d.line([(x0, y), (x1, y)], fill="black", width=lw)
     for xe in (x0, x1):
-        d.line([(xe, y - cap_px), (xe, y + cap_px)], fill='black', width=lw)
+        d.line([(xe, y - cap_px), (xe, y + cap_px)], fill="black", width=lw)
     tb = d.textbbox((0, 0), label, font=font)
-    d.text((xc - (tb[2] - tb[0]) / 2, y + cap_px + 8), label, fill='black', font=font)
+    d.text((xc - (tb[2] - tb[0]) / 2, y + cap_px + 8), label, fill="black", font=font)
 
 
 def plot_results(out):
     import matplotlib
     from PIL import Image, ImageFont
+
     d = _panels_dir()
     panels = []
     for cfg, L, lab, zm in DISC_DETS:
         panels.append((d / f"panel_{cfg.split('_geom')[0]}.png", _hextent(cfg), L, lab, zm))
-    panels.append((d / 'panel_telescope.png', _hextent(TELE_CFG), *TELE_BAR))
+    panels.append((d / "panel_telescope.png", _hextent(TELE_CFG), *TELE_BAR))
 
     cells = [(_autocrop(_load_rgb(p)), ext, L, lab, zm) for p, ext, L, lab, zm in panels]
     cw = max(c.width for c, *_ in cells)
     ch = max(c.height for c, *_ in cells)
-    font = ImageFont.truetype(f'{matplotlib.get_data_path()}/fonts/ttf/DejaVuSerif.ttf',
-                              int(ch * 0.052))
+    font = ImageFont.truetype(
+        f"{matplotlib.get_data_path()}/fonts/ttf/DejaVuSerif.ttf", int(ch * 0.052)
+    )
     cap_px, bmar = int(0.012 * ch), int(0.13 * ch)
-    canvas = Image.new('RGB', (2 * cw, 2 * ch), 'white')
+    canvas = Image.new("RGB", (2 * cw, 2 * ch), "white")
     for k, (c, ext, L, lab, zm) in enumerate(cells):
         row, col = divmod(k, 2)
         sc = min(cw / c.width, (ch - bmar) / c.height) * FILL * zm
@@ -170,24 +199,37 @@ def plot_results(out):
         px = col * cw + (cw - nw) // 2
         py = row * ch + (ch - bmar) - nh
         canvas.paste(c, (px, py))
-        _scalebar(canvas, px + nw / 2, row * ch + (ch - bmar) + int(0.03 * ch),
-                  L * nw / ext, lab, font, cap_px)
-    out = Path(out); out.mkdir(parents=True, exist_ok=True)
-    base = out / 'detector_gallery'
-    canvas.save(f'{base}.png')
-    import matplotlib.pyplot as plt                          # PDF via mpl (PIL lacks the JPEG codec)
-    fig = plt.figure(figsize=(canvas.width / 200, canvas.height / 200), dpi=200, facecolor='white')
-    ax = fig.add_axes([0, 0, 1, 1]); ax.imshow(np.asarray(canvas)); ax.axis('off')
-    fig.savefig(f'{base}.pdf', facecolor='white'); plt.close(fig)
-    print(f'wrote {base}.pdf (+png)  ({canvas.width}x{canvas.height})')
+        _scalebar(
+            canvas,
+            px + nw / 2,
+            row * ch + (ch - bmar) + int(0.03 * ch),
+            L * nw / ext,
+            lab,
+            font,
+            cap_px,
+        )
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    base = out / "detector_gallery"
+    canvas.save(f"{base}.png")
+    import matplotlib.pyplot as plt  # PDF via mpl (PIL lacks the JPEG codec)
+
+    fig = plt.figure(figsize=(canvas.width / 200, canvas.height / 200), dpi=200, facecolor="white")
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(np.asarray(canvas))
+    ax.axis("off")
+    fig.savefig(f"{base}.pdf", facecolor="white")
+    plt.close(fig)
+    print(f"wrote {base}.pdf (+png)  ({canvas.width}x{canvas.height})")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--generate-data', action='store_true', help='render the four panels')
-    ap.add_argument('--plot-results', action='store_true', help='montage existing panels')
-    ap.add_argument('--out', default=None)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--generate-data", action="store_true", help="render the four panels")
+    ap.add_argument("--plot-results", action="store_true", help="montage existing panels")
+    ap.add_argument("--out", default=None)
     a = ap.parse_args()
     both = not (a.generate_data or a.plot_results)
     if a.generate_data or both:
@@ -199,5 +241,5 @@ def main():
         provenance.write_run_record(out, __file__, a)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

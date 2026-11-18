@@ -46,16 +46,16 @@ def create_string_propagator(
     n_dom_snap = 2  # bracket pair — always sufficient for straight strings
     n_closest = min(n_closest, detector.n_str)  # guard for small test geometries
     tables = detector.get_jax_tables()
-    string_anchors = tables['string_anchors']
-    string_axes = tables['string_axes']
-    dom_s_offsets = tables['dom_s_offsets']
-    dom_global_ids = tables['dom_global_ids']
+    string_anchors = tables["string_anchors"]
+    string_axes = tables["string_axes"]
+    dom_s_offsets = tables["dom_s_offsets"]
+    dom_global_ids = tables["dom_global_ids"]
 
     sensor_positions = jnp.array(detector.all_points)
     n_str = detector.n_str
     max_dom = dom_s_offsets.shape[1]
 
-    env_r_sq = detector.envelope_radius ** 2
+    env_r_sq = detector.envelope_radius**2
     env_z_min = detector.envelope_z_min
     env_z_max = detector.envelope_z_max
 
@@ -68,7 +68,7 @@ def create_string_propagator(
 
     # Vertical specialization
     axes_np = np.array(string_axes)
-    vertical = bool(np.allclose(axes_np, np.array([0., 0., 1.]), atol=1e-3))
+    vertical = bool(np.allclose(axes_np, np.array([0.0, 0.0, 1.0]), atol=1e-3))
 
     ax0, ax1, ax2 = string_anchors[:, 0], string_anchors[:, 1], string_anchors[:, 2]
     if not vertical:
@@ -76,9 +76,11 @@ def create_string_propagator(
 
     _snap_offsets = jnp.arange(n_dom_snap)
 
-    print(f"String propagator: {n_str} strings, {detector.n_sensors} DOMs, "
-          f"n_closest={n_closest}, n_dom_snap={n_dom_snap}, n_cand={n_cand}"
-          f"{', vertical=ON' if vertical else ''}")
+    print(
+        f"String propagator: {n_str} strings, {detector.n_sensors} DOMs, "
+        f"n_closest={n_closest}, n_dom_snap={n_dom_snap}, n_cand={n_cand}"
+        f"{', vertical=ON' if vertical else ''}"
+    )
 
     @jax.jit
     def propagate_fn(photon_origins, photon_directions):
@@ -110,7 +112,9 @@ def create_string_propagator(
             dxy_sq = d0**2 + d1**2
             w0 = o0[:, None] - ax0[None, :]
             w1 = o1[:, None] - ax1[None, :]
-            origin_xy = jnp.sqrt(w0**2 + w1**2 + 1e-18)   # eps INSIDE sqrt: finite grad when a scattered photon lands on a string's xy axis (0/0 otherwise)
+            origin_xy = jnp.sqrt(
+                w0**2 + w1**2 + 1e-18
+            )  # eps INSIDE sqrt: finite grad when a scattered photon lands on a string's xy axis (0/0 otherwise)
             scalar_triple = d1[:, None] * w0 - d0[:, None] * w1
             line_dist = jnp.abs(scalar_triple) / jnp.sqrt(dxy_sq[:, None] + 1e-18)
             wd_cross = d0[:, None] * w0 + d1[:, None] * w1
@@ -130,7 +134,9 @@ def create_string_propagator(
             dd_g = jnp.sum(photon_directions**2, axis=1)
             da_g = jnp.sum(photon_directions[:, None, :] * string_axes[None, :, :], axis=-1)
             wa_g = jnp.sum(jnp.stack([w0, w1, w2], axis=-1) * string_axes[None, :, :], axis=-1)
-            wd_g = jnp.sum(jnp.stack([w0, w1, w2], axis=-1) * photon_directions[:, None, :], axis=-1)
+            wd_g = jnp.sum(
+                jnp.stack([w0, w1, w2], axis=-1) * photon_directions[:, None, :], axis=-1
+            )
             denom_g = dd_g[:, None] - da_g**2 + 1e-9
             t_ray_all = (da_g * wa_g - wd_g) / denom_g
             origin_perp = jnp.sqrt(jnp.maximum(w0**2 + w1**2 + w2**2 - wa_g**2, 0.0))
@@ -144,9 +150,11 @@ def create_string_propagator(
         if vertical:
             dd = dxy_sq + d2**2
             sel_wa = o2[:, None] - ax2[top_idx]
-            sel_wd = ((o0[:, None] - ax0[top_idx]) * d0[:, None] +
-                      (o1[:, None] - ax1[top_idx]) * d1[:, None] +
-                      sel_wa * d2[:, None])
+            sel_wd = (
+                (o0[:, None] - ax0[top_idx]) * d0[:, None]
+                + (o1[:, None] - ax1[top_idx]) * d1[:, None]
+                + sel_wa * d2[:, None]
+            )
             sel_denom = dxy_sq[:, None] + 1e-9
             sel_s = (sel_wa * dd[:, None] - sel_wd * d2[:, None]) / sel_denom
         else:
@@ -172,7 +180,9 @@ def create_string_propagator(
         # ── 5. Ray-DOM closest approach ──
         cand_pos = sensor_positions[cand_ids]
         oc = photon_origins[:, None, :] - cand_pos
-        d_norm = photon_directions / (jnp.linalg.norm(photon_directions, axis=1, keepdims=True) + 1e-10)
+        d_norm = photon_directions / (
+            jnp.linalg.norm(photon_directions, axis=1, keepdims=True) + 1e-10
+        )
         t_closest = -jnp.sum(oc * d_norm[:, None, :], axis=-1)
         t_clamped = jnp.maximum(t_closest, 0.0)
         closest_pts = photon_origins[:, None, :] + t_clamped[:, :, None] * d_norm[:, None, :]
@@ -219,12 +229,12 @@ def create_string_propagator(
         # Cap hits must be within the barrel radius
         cap_top_pt = photon_origins + t_top[:, None] * photon_directions
         cap_bot_pt = photon_origins + t_bot[:, None] * photon_directions
-        t_top = jnp.where(cap_top_pt[:, 0]**2 + cap_top_pt[:, 1]**2 <= env_r_sq, t_top, 1e10)
-        t_bot = jnp.where(cap_bot_pt[:, 0]**2 + cap_bot_pt[:, 1]**2 <= env_r_sq, t_bot, 1e10)
-        t_env = jnp.minimum(jnp.minimum(
-            jnp.where(t_barrel > 0, t_barrel, 1e10),
-            jnp.where(t_top > 0, t_top, 1e10)),
-            jnp.where(t_bot > 0, t_bot, 1e10))
+        t_top = jnp.where(cap_top_pt[:, 0] ** 2 + cap_top_pt[:, 1] ** 2 <= env_r_sq, t_top, 1e10)
+        t_bot = jnp.where(cap_bot_pt[:, 0] ** 2 + cap_bot_pt[:, 1] ** 2 <= env_r_sq, t_bot, 1e10)
+        t_env = jnp.minimum(
+            jnp.minimum(jnp.where(t_barrel > 0, t_barrel, 1e10), jnp.where(t_top > 0, t_top, 1e10)),
+            jnp.where(t_bot > 0, t_bot, 1e10),
+        )
         env_pts = photon_origins + t_env[:, None] * photon_directions
         env_normals_xy = env_pts[:, :2]
         env_norm_len = jnp.linalg.norm(env_normals_xy, axis=1, keepdims=True) + 1e-10
@@ -235,21 +245,26 @@ def create_string_propagator(
 
         # ── Pack output (transpose to match shared propagator: slot-first) ──
         result = {
-            'sensor_weights': ov.T,                               # (n_cand, n_rays)
-            'sensor_indices': cand_ids.T,                         # (n_cand, n_rays)
-            'sensor_distances': t_clamped.T[:, :, None],          # (n_cand, n_rays, 1)
-            'positions': positions,                                # (n_rays, 3)
-            'normals': normals,                                    # (n_rays, 3)
-            'inside_sensor': has_weight.T,                         # (n_cand, n_rays)
-            'per_sensor_positions': closest_pts.transpose(1, 0, 2),  # (n_cand, n_rays, 3)
-            'sensor_normals': sensor_normals.transpose(1, 0, 2),     # (n_cand, n_rays, 3)
-            'envelope_exit_t': t_env,                              # (n_rays,)
+            "sensor_weights": ov.T,  # (n_cand, n_rays)
+            "sensor_indices": cand_ids.T,  # (n_cand, n_rays)
+            "sensor_distances": t_clamped.T[:, :, None],  # (n_cand, n_rays, 1)
+            "positions": positions,  # (n_rays, 3)
+            "normals": normals,  # (n_rays, 3)
+            "inside_sensor": has_weight.T,  # (n_cand, n_rays)
+            "per_sensor_positions": closest_pts.transpose(1, 0, 2),  # (n_cand, n_rays, 3)
+            "sensor_normals": sensor_normals.transpose(1, 0, 2),  # (n_cand, n_rays, 3)
+            "envelope_exit_t": t_env,  # (n_rays,)
         }
 
         if single:
-            result = jax.tree.map(lambda x: x.squeeze(1) if x.ndim > 1 and x.shape[1] == 1
-                                  else (x.squeeze(0) if x.ndim > 0 and x.shape[0] == 1 else x),
-                                  result)
+            result = jax.tree.map(
+                lambda x: (
+                    x.squeeze(1)
+                    if x.ndim > 1 and x.shape[1] == 1
+                    else (x.squeeze(0) if x.ndim > 0 and x.shape[0] == 1 else x)
+                ),
+                result,
+            )
             # For single ray, shapes collapse: (n_cand,1) → (n_cand,), (1,3) → (3,)
 
         return result

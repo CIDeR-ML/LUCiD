@@ -14,14 +14,15 @@ Handles straight and curved strings via fitted-axis approach:
   - Ray-DOM distance: exact (uses actual DOM positions)
 """
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-from functools import partial
 
+from lucid.geometry.string_sizing import auto_n_dom_snap
 from lucid.overlap import create_overlap_prob
 from lucid.simulation.optics import solve_rayleigh_inverse_cdf
-from lucid.geometry.string_sizing import auto_n_dom_snap
 
 
 def create_fast_string_simulator(
@@ -52,12 +53,12 @@ def create_fast_string_simulator(
         DOMs per selected string. None → auto from curvature.
     """
     tables = detector.get_jax_tables()
-    string_anchors = tables['string_anchors']
-    string_axes = tables['string_axes']
-    dom_s_offsets = tables['dom_s_offsets']       # (n_str, max_dom), sorted, +inf padded
-    dom_global_ids = tables['dom_global_ids']     # (n_str, max_dom), -1 padded
-    string_s_min = tables['string_s_min']
-    string_s_max = tables['string_s_max']
+    string_anchors = tables["string_anchors"]
+    string_axes = tables["string_axes"]
+    dom_s_offsets = tables["dom_s_offsets"]  # (n_str, max_dom), sorted, +inf padded
+    dom_global_ids = tables["dom_global_ids"]  # (n_str, max_dom), -1 padded
+    string_s_min = tables["string_s_min"]
+    string_s_max = tables["string_s_max"]
 
     sensor_positions = jnp.array(detector.all_points)
     n_str = detector.n_str
@@ -66,13 +67,14 @@ def create_fast_string_simulator(
 
     n_dom_per_str = jnp.array(detector.n_dom_per_str_np)
 
-    env_r_sq = detector.envelope_radius ** 2
+    env_r_sq = detector.envelope_radius**2
     env_z_min = detector.envelope_z_min
     env_z_max = detector.envelope_z_max
 
     curv_max = float(detector.string_curv.max())
-    mean_dz = float(np.median(np.diff(
-        np.sort(detector.dom_s_offsets[0, :detector.n_dom_per_str_np[0]]))))
+    mean_dz = float(
+        np.median(np.diff(np.sort(detector.dom_s_offsets[0, : detector.n_dom_per_str_np[0]])))
+    )
 
     # Auto-derive n_dom_snap from curvature
     if n_dom_snap is None:
@@ -92,7 +94,7 @@ def create_fast_string_simulator(
 
     # Detect vertical strings (all axes ≈ [0,0,1])
     axes_np = np.array(string_axes)
-    vertical = bool(np.allclose(axes_np, np.array([0., 0., 1.]), atol=1e-3))
+    vertical = bool(np.allclose(axes_np, np.array([0.0, 0.0, 1.0]), atol=1e-3))
 
     ax0, ax1, ax2 = string_axes[:, 0], string_axes[:, 1], string_axes[:, 2]
     anch0, anch1, anch2 = string_anchors[:, 0], string_anchors[:, 1], string_anchors[:, 2]
@@ -100,14 +102,16 @@ def create_fast_string_simulator(
     # Static arange for DOM snap window
     _snap_offsets = jnp.arange(n_dom_snap)
 
-    print(f"Fast string simulator: {n_str} strings, {n_sensors} DOMs, "
-          f"n_closest={n_closest}, n_dom_snap={n_dom_snap}, n_cand={n_cand}")
+    print(
+        f"Fast string simulator: {n_str} strings, {n_sensors} DOMs, "
+        f"n_closest={n_closest}, n_dom_snap={n_dom_snap}, n_cand={n_cand}"
+    )
     if vertical:
-        print(f"  Vertical specialization: ON")
+        print("  Vertical specialization: ON")
     if curv_max > 0:
         print(f"  Max curvature: {curv_max:.2f}m (mean_dz={mean_dz:.1f}m)")
 
-    @partial(jax.jit, static_argnames=('K',))
+    @partial(jax.jit, static_argnames=("K",))
     def simulate(origins, directions, weights, K, key):
         """Run full string simulation for one event.
 
@@ -127,10 +131,8 @@ def create_fast_string_simulator(
         n = origins.shape[0]
 
         def bounds_check(pos):
-            xy_sq = pos[..., 0]**2 + pos[..., 1]**2
-            return ((xy_sq <= env_r_sq) &
-                    (pos[..., 2] >= env_z_min) &
-                    (pos[..., 2] <= env_z_max))
+            xy_sq = pos[..., 0] ** 2 + pos[..., 1] ** 2
+            return (xy_sq <= env_r_sq) & (pos[..., 2] >= env_z_min) & (pos[..., 2] <= env_z_max)
 
         def envelope_exit(pos, dirs):
             ox, oy, oz = pos[:, 0], pos[:, 1], pos[:, 2]
@@ -166,7 +168,8 @@ def create_fast_string_simulator(
             t_vec = jnp.where(
                 jnp.abs(z[:, 0:1]) < 0.9,
                 jnp.broadcast_to(jnp.array([1.0, 0.0, 0.0]), z.shape),
-                jnp.broadcast_to(jnp.array([0.0, 1.0, 0.0]), z.shape))
+                jnp.broadcast_to(jnp.array([0.0, 1.0, 0.0]), z.shape),
+            )
             x = jnp.cross(t_vec, z)
             x = x / (jnp.linalg.norm(x, axis=1, keepdims=True) + 1e-10)
             y = jnp.cross(z, x)
@@ -223,8 +226,7 @@ def create_fast_string_simulator(
                 denom_g = dd_g[:, None] - da_g**2 + 1e-9
                 t_ray_all = (da_g * wa_g - wd_g) / denom_g
 
-                origin_perp = jnp.sqrt(jnp.maximum(
-                    w0**2 + w1**2 + w2**2 - wa_g**2, 0.0))
+                origin_perp = jnp.sqrt(jnp.maximum(w0**2 + w1**2 + w2**2 - wa_g**2, 0.0))
                 use_skew = (t_ray_all > 0) & (cross_sq > 1e-6)
                 dist_all = jnp.where(use_skew, line_dist, origin_perp)
 
@@ -235,9 +237,11 @@ def create_fast_string_simulator(
             if vertical:
                 dd = dxy_sq + d2**2
                 sel_wa = o2[:, None] - anch2[top_idx]
-                sel_wd = ((o0[:, None] - anch0[top_idx]) * d0[:, None] +
-                          (o1[:, None] - anch1[top_idx]) * d1[:, None] +
-                          sel_wa * d2[:, None])
+                sel_wd = (
+                    (o0[:, None] - anch0[top_idx]) * d0[:, None]
+                    + (o1[:, None] - anch1[top_idx]) * d1[:, None]
+                    + sel_wa * d2[:, None]
+                )
                 sel_denom = dxy_sq[:, None] + 1e-9
                 sel_s = (sel_wa * dd[:, None] - sel_wd * d2[:, None]) / sel_denom
             else:
@@ -262,9 +266,7 @@ def create_fast_string_simulator(
             dom_local = k_start[:, :, None] + _snap_offsets[None, None, :]  # (n, nc, nds)
             dom_local = jnp.clip(dom_local, 0, max_dom - 1)
 
-            cand_ids = dom_global_ids[
-                top_idx[:, :, None], dom_local
-            ].reshape(n, n_cand)
+            cand_ids = dom_global_ids[top_idx[:, :, None], dom_local].reshape(n, n_cand)
 
             # ── 5. Ray-DOM closest approach (RAY distance, clamped t≥0) ──
             cand_pos = sensor_positions[cand_ids]
@@ -273,8 +275,7 @@ def create_fast_string_simulator(
             t_closest = -jnp.sum(oc * d_norm[:, None, :], axis=-1)
             t_clamped = jnp.maximum(t_closest, 0.0)
             closest_pts = safe_pos[:, None, :] + t_clamped[:, :, None] * d_norm[:, None, :]
-            perp_dist = jnp.sqrt(
-                jnp.sum((closest_pts - cand_pos)**2, axis=-1) + 1e-18)
+            perp_dist = jnp.sqrt(jnp.sum((closest_pts - cand_pos) ** 2, axis=-1) + 1e-18)
 
             # ── 6. Overlap + volume step ──
             ov_weights = overlap_fn(perp_dist)
@@ -316,13 +317,17 @@ def create_fast_string_simulator(
             return (new_pos, new_dir, new_times, new_survival, dom_q, dom_tw, key), None
 
         init = (
-            origins, directions,
-            jnp.zeros(n), jnp.ones(n),
-            jnp.zeros(n_sensors), jnp.zeros(n_sensors),
+            origins,
+            directions,
+            jnp.zeros(n),
+            jnp.ones(n),
+            jnp.zeros(n_sensors),
+            jnp.zeros(n_sensors),
             key,
         )
         (_, _, _, _, dom_charges, dom_time_weighted, _), _ = jax.lax.scan(
-            step_fn, init, jnp.arange(K))
+            step_fn, init, jnp.arange(K)
+        )
 
         return dom_charges, dom_time_weighted
 

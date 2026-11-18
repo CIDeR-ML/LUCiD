@@ -17,6 +17,7 @@ per-file migration (``((COUNT++))`` returns 1 when the result is 0, and an
 unguarded ``$OUTPUT_BASE_PATH`` aborts under ``-u``), not something to assert
 into existence here.
 """
+
 import os
 import re
 import shutil
@@ -24,8 +25,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from tests.helpers.paths import REPO
 
+from tests.helpers.paths import REPO
 
 # Scripts this unit rewrote. Each entry is
 # (path, delete-enabling flag, argv that selects something to delete).
@@ -72,8 +73,17 @@ def job_dir(tmp_path):
     """
     cell = tmp_path / "config_000001" / "1000MeV"
     cell.mkdir(parents=True)
-    for name in ("out.root", "a.h5", "b.h5", "job-1.out", "job-1.err",
-                 "job-2 with space.out", "run.mac", "run.sh", "run.sbatch"):
+    for name in (
+        "out.root",
+        "a.h5",
+        "b.h5",
+        "job-1.out",
+        "job-1.err",
+        "job-2 with space.out",
+        "run.mac",
+        "run.sh",
+        "run.sbatch",
+    ):
         (cell / name).touch()
     rootonly = tmp_path / "config_000001" / "rootonly"
     rootonly.mkdir(parents=True)
@@ -85,8 +95,11 @@ def _n_files(root: Path) -> int:
     return sum(1 for p in root.rglob("*") if p.is_file())
 
 
-@pytest.mark.parametrize("script,execute_flag,select", DELETING_SCRIPTS,
-                         ids=[Path(p).name for p, _, _ in DELETING_SCRIPTS])
+@pytest.mark.parametrize(
+    "script,execute_flag,select",
+    DELETING_SCRIPTS,
+    ids=[Path(p).name for p, _, _ in DELETING_SCRIPTS],
+)
 def test_deleting_script_is_dry_run_by_default(script, execute_flag, select, job_dir):
     """Without its execute flag the script deletes nothing and still exits 0."""
     before = _n_files(job_dir)
@@ -94,11 +107,15 @@ def test_deleting_script_is_dry_run_by_default(script, execute_flag, select, job
     r = _run(_argv(script, job_dir, select))
     assert r.returncode == 0, r.stderr
     assert _n_files(job_dir) == before, (
-        f"{script} deleted files with no {execute_flag}:\n{r.stdout}")
+        f"{script} deleted files with no {execute_flag}:\n{r.stdout}"
+    )
 
 
-@pytest.mark.parametrize("script,execute_flag,select", DELETING_SCRIPTS,
-                         ids=[Path(p).name for p, _, _ in DELETING_SCRIPTS])
+@pytest.mark.parametrize(
+    "script,execute_flag,select",
+    DELETING_SCRIPTS,
+    ids=[Path(p).name for p, _, _ in DELETING_SCRIPTS],
+)
 def test_execute_flag_exists_and_deletes(script, execute_flag, select, job_dir):
     """The flag the help text names really is wired to the deletion path.
 
@@ -109,11 +126,15 @@ def test_execute_flag_exists_and_deletes(script, execute_flag, select, job_dir):
     r = _run(_argv(script, job_dir, select, execute_flag))
     assert r.returncode == 0, r.stderr
     assert _n_files(job_dir) < before, (
-        f"{script} {execute_flag} deleted nothing:\n{r.stdout}\n{r.stderr}")
+        f"{script} {execute_flag} deleted nothing:\n{r.stdout}\n{r.stderr}"
+    )
 
 
-@pytest.mark.parametrize("script,execute_flag,select", DELETING_SCRIPTS,
-                         ids=[Path(p).name for p, _, _ in DELETING_SCRIPTS])
+@pytest.mark.parametrize(
+    "script,execute_flag,select",
+    DELETING_SCRIPTS,
+    ids=[Path(p).name for p, _, _ in DELETING_SCRIPTS],
+)
 def test_deleting_script_refuses_an_unset_target(script, execute_flag, select, job_dir):
     """No target path, and an explicitly empty one, are both errors.
 
@@ -122,18 +143,22 @@ def test_deleting_script_refuses_an_unset_target(script, execute_flag, select, j
     developer's absolute path on a shared filesystem.
     """
     before = _n_files(job_dir)
-    for argv in ([str(REPO / script), *select, execute_flag],
-                 [str(REPO / script), TARGET_FLAG[script], "", *select, execute_flag]):
+    for argv in (
+        [str(REPO / script), *select, execute_flag],
+        [str(REPO / script), TARGET_FLAG[script], "", *select, execute_flag],
+    ):
         r = _run(argv)
         assert r.returncode != 0, f"{script} accepted {argv[1:]!r}:\n{r.stdout}"
         assert "required" in (r.stdout + r.stderr).lower()
     assert _n_files(job_dir) == before
 
 
-@pytest.mark.parametrize("script,execute_flag,select", DELETING_SCRIPTS,
-                         ids=[Path(p).name for p, _, _ in DELETING_SCRIPTS])
-def test_help_does_not_claim_a_default_the_code_does_not_set(script, execute_flag,
-                                                             select, job_dir):
+@pytest.mark.parametrize(
+    "script,execute_flag,select",
+    DELETING_SCRIPTS,
+    ids=[Path(p).name for p, _, _ in DELETING_SCRIPTS],
+)
+def test_help_does_not_claim_a_default_the_code_does_not_set(script, execute_flag, select, job_dir):
     """S7: the ``-h`` text's dry-run claim matches what a no-flag run does.
 
     cleanup_jobs.sh's ``-h`` said "By default, this runs in dry-run mode. Files
@@ -185,10 +210,18 @@ def test_touched_script_is_shellcheck_clean(script):
     """
     sc = os.environ.get("SHELLCHECK_BIN") or shutil.which("shellcheck")
     if not sc:
-        pytest.skip("shellcheck not installed; set SHELLCHECK_BIN or use "
-                    "the shellcheck-py pre-commit hook")
-    r = _run([sc, "--severity=warning", "--external-sources",
-              "--exclude=SC1090,SC1091", str(REPO / script)])
+        pytest.skip(
+            "shellcheck not installed; set SHELLCHECK_BIN or use the shellcheck-py pre-commit hook"
+        )
+    r = _run(
+        [
+            sc,
+            "--severity=warning",
+            "--external-sources",
+            "--exclude=SC1090,SC1091",
+            str(REPO / script),
+        ]
+    )
     assert r.returncode == 0, r.stdout
 
 
@@ -207,16 +240,19 @@ def container_hop(tmp_path):
     bin_dir.mkdir()
     (bin_dir / "apptainer").write_text(
         '#!/bin/bash\necho "ARGV $*"\n'
-        f'echo "[PREPARED] {tmp_path}/a.sbatch"\necho "[PREPARED] {tmp_path}/bad.sbatch"\n')
+        f'echo "[PREPARED] {tmp_path}/a.sbatch"\necho "[PREPARED] {tmp_path}/bad.sbatch"\n'
+    )
     (bin_dir / "sbatch").write_text(
-        f'#!/bin/bash\necho "$1" >> {tmp_path}/submitted\n[[ "$1" != *bad* ]]\n')
+        f'#!/bin/bash\necho "$1" >> {tmp_path}/submitted\n[[ "$1" != *bad* ]]\n'
+    )
     for f in bin_dir.iterdir():
         f.chmod(0o755)
     (tmp_path / "image.sif").touch()
     (platform / "user_paths.sh").write_text(
         f'export LUCID_IMAGE_PATH="{tmp_path}/image.sif"\n'
         f'export APPTAINER_BIN="{bin_dir}/apptainer"\n'
-        f'export CLUSTER_SUBMIT_CMD="{bin_dir}/sbatch"\n')
+        f'export CLUSTER_SUBMIT_CMD="{bin_dir}/sbatch"\n'
+    )
     return shim, tmp_path
 
 
@@ -244,6 +280,7 @@ def test_container_hop_submits_only_with_submit(container_hop):
 # live here so the changes do not ship untested (conventions.md T8); the
 # hand-off to move them is in this unit's report.
 
+
 def test_train_siren_requires_an_output_dir():
     """SIR-22: the default --output-dir was the shipped-model directory.
 
@@ -254,7 +291,9 @@ def test_train_siren_requires_an_output_dir():
     """
     import sys
 
-    r = _run([sys.executable, "-m", "lucid.siren.training.train",
-              "--h5-path", "photon_lookup_table.h5"], cwd=REPO)
+    r = _run(
+        [sys.executable, "-m", "lucid.siren.training.train", "--h5-path", "photon_lookup_table.h5"],
+        cwd=REPO,
+    )
     assert r.returncode != 0
     assert "--output-dir" in r.stderr

@@ -1,13 +1,14 @@
 """Tests for the wavelength module (Phase 5)."""
-import jax.numpy as jnp
-import numpy.testing as npt
 
 import os
 
-from lucid.wavelength.medium import make_medium, load_qe_curve
+import jax.numpy as jnp
+import numpy.testing as npt
+
+from lucid.wavelength.medium import load_qe_curve, make_medium
 from tests.helpers.paths import REPO
 
-_SK_QE_PATH = os.path.join(REPO, 'config', 'pmt', 'SK_QE.json')
+_SK_QE_PATH = os.path.join(REPO, "config", "pmt", "SK_QE.json")
 
 
 class TestMediumProperties:
@@ -33,11 +34,11 @@ class TestMediumProperties:
         assert m.mie_scatter_coeff.shape == (50,)
         assert m.mie_asymmetry == 0.95
 
-
     def test_unknown_material_raises(self):
         # water/ice/wbls are now real materials (multi-material merge); a material with
         # no config/materials/<name>.json still raises.
         import pytest  # noqa: F811
+
         with pytest.raises(ValueError, match="No material config"):
             make_medium("unobtainium")
 
@@ -87,5 +88,6 @@ class TestLaserWavelength:
 
     def test_laser_wavelength_field(self):
         from lucid.sources import laser_source
-        assert float(laser_source(position=[0., 0., 0.], wavelength=405.0).wavelength) == 405.0
-        assert laser_source(position=[0., 0., 0.]).wavelength is None
+
+        assert float(laser_source(position=[0.0, 0.0, 0.0], wavelength=405.0).wavelength) == 405.0
+        assert laser_source(position=[0.0, 0.0, 0.0]).wavelength is None

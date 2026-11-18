@@ -34,8 +34,8 @@ Buffer sizes follow from L_max + the spatial-hash cell size:
     max_dom_per_segment   = max_str_per_segment * n_dom_snap
 """
 
-from typing import NamedTuple
 import math
+from typing import NamedTuple
 
 
 class StringSizingResult(NamedTuple):
@@ -56,6 +56,7 @@ class StringSizingResult(NamedTuple):
     eps_K : float                 K-iteration weight floor target
     p_scat : float                per-iteration scatter survival
     """
+
     L_max: float
     N_lambda: float
     cell_size: float

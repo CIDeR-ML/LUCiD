@@ -6,12 +6,13 @@ barrel's height, a cap sensor at z = +-H/2 with its disk inside the cap, a spher
 (the first and last positions, the placed count) record the algorithm's output so a change to it
 is seen; they are regression pins, not physics.
 """
+
 import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
-
 import pytest
-from lucid.geometry import generate_detector, Cylinder, Sphere, Box
+
+from lucid.geometry import Box, Cylinder, Sphere, generate_detector
 
 # Slow by behaviour: builds the WCTE_like, JUNO and nuSCOPE detectors.
 pytestmark = pytest.mark.slow
@@ -109,12 +110,14 @@ class TestBoundsCheck:
     def test_cylinder_bounds(self, cylinder_detector):
         """Inside/outside against the cylinder's own radius and half-height, barrel and caps."""
         det = cylinder_detector
-        pts = jnp.array([
-            [0.0, 0.0, 0.0],                        # center: inside
-            [10.0, 10.0, 10.0],                     # far away: outside
-            [det.r - 0.1, 0.0, 0.0],                # just inside the barrel
-            [det.r + 0.1, 0.0, 0.0],                # just outside the barrel
-            [0.0, 0.0, det.H / 2 - 0.01],           # just inside the cap
-            [0.0, 0.0, det.H / 2 + 0.01],           # just outside the cap
-        ])
+        pts = jnp.array(
+            [
+                [0.0, 0.0, 0.0],  # center: inside
+                [10.0, 10.0, 10.0],  # far away: outside
+                [det.r - 0.1, 0.0, 0.0],  # just inside the barrel
+                [det.r + 0.1, 0.0, 0.0],  # just outside the barrel
+                [0.0, 0.0, det.H / 2 - 0.01],  # just inside the cap
+                [0.0, 0.0, det.H / 2 + 0.01],  # just outside the cap
+            ]
+        )
         npt.assert_array_equal(det.bounds_check(pts), [True, False, True, False, True, False])

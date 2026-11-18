@@ -40,13 +40,14 @@ The dimensionless ``s/s_max`` coordinate is converted to a physical distance
 ``s = (s/s_max)·s_max(E)`` along the track.
 """
 
-import jax
-import jax.numpy as jnp
-from jax import random, jit
 from functools import partial
 
+import jax
+import jax.numpy as jnp
+from jax import jit, random
+
 from lucid.siren.emitter import density
-from lucid.utils import normalize, create_local_frame
+from lucid.utils import create_local_frame, normalize
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -120,7 +121,7 @@ def draw_bins(grid_w, u):
     Returns ``(bin_idx, mass)``.
     """
     cw = jax.lax.cummax(jnp.cumsum(grid_w))
-    idx = jnp.clip(jnp.searchsorted(cw, u, side='right'), 0, grid_w.shape[0] - 1)
+    idx = jnp.clip(jnp.searchsorted(cw, u, side="right"), 0, grid_w.shape[0] - 1)
     return idx, cw[idx] - jnp.where(idx > 0, cw[jnp.maximum(idx - 1, 0)], 0.0)
 
 
@@ -140,17 +141,14 @@ def make_cherenkov_surrogate_fn(emitter):
     s_edges = jnp.linspace(emitter.lo[2], emitter.hi[2], g + 1)
     a_centers = 0.5 * (a_edges[:-1] + a_edges[1:])
     s_centers = 0.5 * (s_edges[:-1] + s_edges[1:])
-    a_bin_w = (float(a_centers[1] - a_centers[0]) if g > 1
-               else float(emitter.hi[1] - emitter.lo[1]))
-    s_bin_w = (float(s_centers[1] - s_centers[0]) if g > 1
-               else float(emitter.hi[2] - emitter.lo[2]))
-    AA, SS = jnp.meshgrid(a_centers, s_centers, indexing='ij')
-    grid_angle = AA.ravel()      # (g*g,) bin-center angles
-    grid_s = SS.ravel()          # (g*g,) bin-center s/s_max
+    a_bin_w = float(a_centers[1] - a_centers[0]) if g > 1 else float(emitter.hi[1] - emitter.lo[1])
+    s_bin_w = float(s_centers[1] - s_centers[0]) if g > 1 else float(emitter.hi[2] - emitter.lo[2])
+    AA, SS = jnp.meshgrid(a_centers, s_centers, indexing="ij")
+    grid_angle = AA.ravel()  # (g*g,) bin-center angles
+    grid_s = SS.ravel()  # (g*g,) bin-center s/s_max
 
     @partial(jax.jit, static_argnums=(3,))
-    def cherenkov_get_rays(track_origin, track_direction,
-                           energy, Nphot, model_params, key):
+    def cherenkov_get_rays(track_origin, track_direction, energy, Nphot, model_params, key):
         pick_key, jit_key, cone_key = random.split(key, 3)
 
         # --- pass 1: SIREN on the bin-center grid ---
@@ -169,8 +167,7 @@ def make_cherenkov_surrogate_fn(emitter):
         # — rays in the same bin land in different jitter strata; sub-bin
         # coverage of the Nphot rays is uniform rather than randomly
         # clustered.
-        jit_a, jit_s = latin_hypercube_2d(
-            jit_key, Nphot, -0.5, 0.5, -0.5, 0.5)
+        jit_a, jit_s = latin_hypercube_2d(jit_key, Nphot, -0.5, 0.5, -0.5, 0.5)
         angle = grid_angle[bin_idx] + jit_a * a_bin_w
         s_over_smax = grid_s[bin_idx] + jit_s * s_bin_w
 
@@ -188,12 +185,12 @@ def make_cherenkov_surrogate_fn(emitter):
 
         # s/s_max -> physical distance along the track.
         ranges_m = emitter.along_track_m(s_over_smax, energy)
-        ray_origins = (track_origin[None, :]
-                       + ranges_m[:, None] * normalize(track_direction)[None, :])
+        ray_origins = (
+            track_origin[None, :] + ranges_m[:, None] * normalize(track_direction)[None, :]
+        )
 
         # Photons emitted on a cone at the SIREN-predicted opening angle.
-        ray_vectors = generate_random_cone_vectors(
-            track_direction, angle, Nphot, cone_key)
+        ray_vectors = generate_random_cone_vectors(track_direction, angle, Nphot, cone_key)
 
         # Shape (SIREN, normalised to a PMF) x absolute scale (N_photons(E)).
         # sum(intensities) == N_photons(E) by construction.
@@ -222,11 +219,9 @@ def _sample_isotropic(key, n):
     """
     u_cos, u_phi = latin_hypercube_2d(key, n, 0.0, 1.0, 0.0, 1.0)
     cos_theta = 2.0 * u_cos - 1.0
-    sin_theta = jnp.sqrt(jnp.maximum(1.0 - cos_theta ** 2, 0.0))
+    sin_theta = jnp.sqrt(jnp.maximum(1.0 - cos_theta**2, 0.0))
     phi = 2.0 * jnp.pi * u_phi
-    return jnp.stack([sin_theta * jnp.cos(phi),
-                      sin_theta * jnp.sin(phi),
-                      cos_theta], axis=1)
+    return jnp.stack([sin_theta * jnp.cos(phi), sin_theta * jnp.sin(phi), cos_theta], axis=1)
 
 
 def _sample_hypoexp(key, n, tau_rise, tau_fall):
@@ -255,12 +250,10 @@ def _moyal_pdf(x, loc, scale):
     see :func:`_build_moyal_inverse_cdf`.
     """
     z = (x - loc) / scale
-    return (1.0 / (scale * jnp.sqrt(2.0 * jnp.pi))) * jnp.exp(
-        -0.5 * (z + jnp.exp(-z)))
+    return (1.0 / (scale * jnp.sqrt(2.0 * jnp.pi))) * jnp.exp(-0.5 * (z + jnp.exp(-z)))
 
 
-def _build_moyal_inverse_cdf(lambda_min, lambda_max, moyal_loc, moyal_scale,
-                              n_knots: int = 512):
+def _build_moyal_inverse_cdf(lambda_min, lambda_max, moyal_loc, moyal_scale, n_knots: int = 512):
     """Precompute the inverse CDF of the Moyal distribution truncated to
     ``[lambda_min, lambda_max]``.
 
@@ -275,14 +268,14 @@ def _build_moyal_inverse_cdf(lambda_min, lambda_max, moyal_loc, moyal_scale,
     pdf = _moyal_pdf(lambda_grid, moyal_loc, moyal_scale)
     # Cumulative trapezoidal integral
     bw = lambda_grid[1:] - lambda_grid[:-1]
-    cdf = jnp.concatenate([jnp.array([0.0]),
-                           jnp.cumsum(0.5 * (pdf[:-1] + pdf[1:]) * bw)])
+    cdf = jnp.concatenate([jnp.array([0.0]), jnp.cumsum(0.5 * (pdf[:-1] + pdf[1:]) * bw)])
     cdf = cdf / cdf[-1]
     return cdf, lambda_grid
 
 
-def make_scintillation_surrogate_fn(emitter, scint_lambda_min, scint_lambda_max,
-                                    moyal_loc: float, moyal_scale: float):
+def make_scintillation_surrogate_fn(
+    emitter, scint_lambda_min, scint_lambda_max, moyal_loc: float, moyal_scale: float
+):
     """Build the jitted scintillation ray generator for a dE/dx
     :class:`~lucid.siren.emitter.Emitter`.
 
@@ -345,43 +338,54 @@ def make_scintillation_surrogate_fn(emitter, scint_lambda_min, scint_lambda_max,
     s_edges = jnp.linspace(emitter.lo[2], emitter.hi[2], g + 1)
     d_centers = 0.5 * (d_edges[:-1] + d_edges[1:])
     s_centers = 0.5 * (s_edges[:-1] + s_edges[1:])
-    DD, SS = jnp.meshgrid(d_centers, s_centers, indexing='ij')
-    grid_dedx = DD.ravel()       # (g*g,) bin-center dE/dx (keV/mm)
-    grid_s = SS.ravel()          # (g*g,) bin-center R = s/s_max
+    DD, SS = jnp.meshgrid(d_centers, s_centers, indexing="ij")
+    grid_dedx = DD.ravel()  # (g*g,) bin-center dE/dx (keV/mm)
+    grid_s = SS.ravel()  # (g*g,) bin-center R = s/s_max
     # R nodes for the inverse-CDF: prepend the R_min edge so the CDF starts at 0.
     R_nodes = jnp.concatenate([s_edges[:1], s_centers])
 
     # Moyal inverse-CDF lookup, truncated to [lambda_min, lambda_max].
     # Built once here in Python; closed over as a JAX constant in the ray fn.
     _moyal_cdf, _moyal_lam = _build_moyal_inverse_cdf(
-        scint_lambda_min, scint_lambda_max, moyal_loc, moyal_scale)
+        scint_lambda_min, scint_lambda_max, moyal_loc, moyal_scale
+    )
 
     @partial(jax.jit, static_argnums=(3,))
-    def scintillation_get_rays(track_origin, track_direction, energy, Nphot,
-                               model_params, key,
-                               S, kB, C, tau_rise, tau_fall):
+    def scintillation_get_rays(
+        track_origin,
+        track_direction,
+        energy,
+        Nphot,
+        model_params,
+        key,
+        S,
+        kB,
+        C,
+        tau_rise,
+        tau_fall,
+    ):
         r_key, dir_key, t_key, lam_key = random.split(key, 4)
 
         # --- single dE/dx SIREN pass on the (dE/dx, R) bin-center grid ---
         # `grid_w` is row-major from meshgrid(indexing='ij'), so
         # reshape(g, g)[i, j] = SIREN at (d_centers[i], s_centers[j]).
         grid_w = density(emitter, model_params, energy, grid_dedx, grid_s)
-        grid_w_2d = grid_w.reshape(g, g)                                # (g_d, g_R)
+        grid_w_2d = grid_w.reshape(g, g)  # (g_d, g_R)
 
         # --- collapse the dE/dx axis analytically (Rao-Blackwell) ---
         # lambda(R): energy deposited per R-bin (grid_w is an edep density, so
         # the marginal over d IS the deposition profile). <d>_R: edep-weighted
         # typical dE/dx at R, used only in the Birks denominator.
-        lambda_R   = jnp.sum(grid_w_2d, axis=0)                          # (g_R,)
-        weighted_d = jnp.sum(grid_w_2d * d_centers[:, None], axis=0)     # (g_R,)
-        expected_d = weighted_d / jnp.maximum(lambda_R, 1e-30)           # <dE/dx>_R
+        lambda_R = jnp.sum(grid_w_2d, axis=0)  # (g_R,)
+        weighted_d = jnp.sum(grid_w_2d * d_centers[:, None], axis=0)  # (g_R,)
+        expected_d = weighted_d / jnp.maximum(lambda_R, 1e-30)  # <dE/dx>_R
 
         # --- sample R ∝ lambda(R): stratified inverse-CDF draw ---
         # lambda(R) is independent of (S, kB, C), so ray positions never move
         # with the Birks params — their whole gradient stays in the weight.
         cdf = jnp.cumsum(lambda_R)
         cdf = cdf / cdf[-1]
-        cdf_nodes = jnp.concatenate([jnp.zeros(1), cdf])                 # CDF starts at 0
+        cdf_nodes = jnp.concatenate([jnp.zeros(1), cdf])  # CDF starts at 0
         strat = (jnp.arange(Nphot) + random.uniform(r_key, (Nphot,))) / Nphot
         R_i = jnp.interp(strat, cdf_nodes, R_nodes)
 
@@ -393,12 +397,13 @@ def make_scintillation_surrogate_fn(emitter, scint_lambda_min, scint_lambda_max,
         # distribution, so each ray gets a flat pre-quench share E/Nphot;
         # Birks quenches it at <dE/dx>_R.
         # sum(intensities) ≈ S·E·<1/(1+kB·<d>_R+...)>_lambda.
-        intensities = (S * energy / Nphot) / (1.0 + kB * d_typ + C * d_typ ** 2)
+        intensities = (S * energy / Nphot) / (1.0 + kB * d_typ + C * d_typ**2)
 
         # R -> physical distance along the track.
         ranges_m = emitter.along_track_m(R_i, energy)
-        ray_origins = (track_origin[None, :]
-                       + ranges_m[:, None] * normalize(track_direction)[None, :])
+        ray_origins = (
+            track_origin[None, :] + ranges_m[:, None] * normalize(track_direction)[None, :]
+        )
 
         # --- per-ray isotropic directions ---
         ray_vectors = _sample_isotropic(dir_key, Nphot)
@@ -431,7 +436,7 @@ def make_scintillation_surrogate_fn(emitter, scint_lambda_min, scint_lambda_max,
 # ---------------------------------------------------------------------------
 
 
-@partial(jit, static_argnames=('c_mm_per_ns',))
+@partial(jit, static_argnames=("c_mm_per_ns",))
 def predict_t0(distance_m, energy, t0, c_mm_per_ns):
     """Photon emission time t(d, E) in ns at ``distance_m`` metres along the track.
 
@@ -441,7 +446,7 @@ def predict_t0(distance_m, energy, t0, c_mm_per_ns):
     d/c + delay, the stretched-exp parametrisation fit from
     PhotonHist_TimeDistanceNorm. JAX-jitted; vmaps cleanly over distance.
     """
-    distance = distance_m * 1000.0          # the fit's mm
+    distance = distance_m * 1000.0  # the fit's mm
     a_coeffs, l_coeffs, b_coeffs = t0
     x = jnp.log10(energy)
 
@@ -454,5 +459,3 @@ def predict_t0(distance_m, energy, t0, c_mm_per_ns):
     arg = jnp.power(jnp.clip(distance / lam, 1e-12, None), beta)
     delay = A * (jnp.exp(arg) - 1.0)
     return distance / c_mm_per_ns + delay
-
-

@@ -16,9 +16,13 @@ Every batch of SRC is relabelled.
 
 Usage: relabel_particles.py SRC DST {split|merge}
 """
-import sys, os, shutil
-import numpy as np
+
+import os
+import shutil
+import sys
+
 import h5py
+import numpy as np
 
 from lucid.dataset.layout import batch_paths, list_batches
 
@@ -42,14 +46,17 @@ def relabel_batch(labl_f, hits_f, mode):
             old_pid = pt["particle_idx"][:]
 
             if mode == "split":
-                new_pid = old_pid.copy()                      # stored grouping
+                new_pid = old_pid.copy()  # stored grouping
             else:  # merge: every track -> its primary's particle id
                 # primary tracks have parent_id == 0; map their track_id -> particle_idx
-                prim_pid = {int(track_id[t]): int(old_pid[t])
-                            for t in range(len(track_id)) if parent_id[t] == 0 and old_pid[t] >= 0}
+                prim_pid = {
+                    int(track_id[t]): int(old_pid[t])
+                    for t in range(len(track_id))
+                    if parent_id[t] == 0 and old_pid[t] >= 0
+                }
                 new_pid = old_pid.copy()
                 for t in range(len(track_id)):
-                    tgt = prim_pid.get(int(ancestor[t]))      # the primary this track descends from
+                    tgt = prim_pid.get(int(ancestor[t]))  # the primary this track descends from
                     if tgt is not None and old_pid[t] >= 0:
                         new_pid[t] = tgt
             pt["particle_idx"][...] = new_pid.astype(old_pid.dtype)
@@ -63,14 +70,17 @@ def relabel_batch(labl_f, hits_f, mode):
         with h5py.File(hits_f, "r+") as h:
             hp = h[ev]["particle_idx"]
             a = hp[:]
-            b = np.array([remap.get(int(x), int(x)) if x >= 0 else int(x) for x in a], dtype=a.dtype)
+            b = np.array(
+                [remap.get(int(x), int(x)) if x >= 0 else int(x) for x in a], dtype=a.dtype
+            )
             hp[...] = b
             if not np.array_equal(a, b):
                 changed += 1
 
     with h5py.File(labl_f, "r") as h:
-        dist = [len(set(int(x) for x in h[ev]["per_track"]["particle_idx"][:] if x >= 0))
-                for ev in evs]
+        dist = [
+            len(set(int(x) for x in h[ev]["per_track"]["particle_idx"][:] if x >= 0)) for ev in evs
+        ]
     return len(evs), changed, dist
 
 
@@ -90,8 +100,10 @@ def main():
         changed += c
         dist += d
     dist = np.array(dist) if dist else np.zeros(1, int)
-    print(f"[{mode}] {n_events} events; distinct particles per event "
-          f"min/med/max = {dist.min()}/{int(np.median(dist))}/{dist.max()}; hits events changed={changed}")
+    print(
+        f"[{mode}] {n_events} events; distinct particles per event "
+        f"min/med/max = {dist.min()}/{int(np.median(dist))}/{dist.max()}; hits events changed={changed}"
+    )
     print(f"[{mode}] wrote {dst}")
 
 

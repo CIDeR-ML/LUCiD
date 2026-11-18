@@ -3,12 +3,14 @@
 Tests verify gradient directions, numerical stability, and mathematical
 properties of each loss function.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 
 from lucid.losses import (
-    counts_loss, energy_loss,
+    counts_loss,
+    energy_loss,
 )
 
 
@@ -19,6 +21,7 @@ class TestCountsLossGradients:
         """Both normalisations, over- and under-prediction in one vector. The sign test this
         replaces passed a gradient off by any positive factor (e.g. a lost 1/sum(true))."""
         import numpy as np
+
         true = jnp.array([10.0, 5.0, 8.0, 3.0])
         pred = jnp.array([15.0, 2.0, 8.0, 4.5])
         want = 1.0 - np.asarray(true) / np.asarray(pred)
@@ -62,20 +65,35 @@ class TestFirstArrivalWindowNLL:
     arrival is the minimum of n draws, so ``exp(-tnll)`` must be the probability that the minimum
     lands in the window ``[t_obs - delta/2, t_obs + delta/2]``.
     """
+
     W = (2.0, 1.0, 0.5)
     T = (10.0, 12.0, 15.0)
     SIGMA, DELTA = 2.1, 1.0
 
     def _tnll(self, t_obs, n):
         import numpy as np
+
         from lucid.losses import first_arrival_window_nll
-        K = len(t_obs)                              # one "PMT" per window, same photons each
-        w = np.tile(self.W, K); t = np.tile(self.T, K)
+
+        K = len(t_obs)  # one "PMT" per window, same photons each
+        w = np.tile(self.W, K)
+        t = np.tile(self.T, K)
         idx = np.repeat(np.arange(K), len(self.W))
         mu = np.full(K, sum(self.W))
-        return np.asarray(first_arrival_window_nll(
-            jnp.log(jnp.asarray(w)), jnp.asarray(t), jnp.asarray(idx), jnp.asarray(t_obs),
-            jnp.asarray(mu), jnp.full(K, float(n)), K, sigma=self.SIGMA, delta=self.DELTA), float)
+        return np.asarray(
+            first_arrival_window_nll(
+                jnp.log(jnp.asarray(w)),
+                jnp.asarray(t),
+                jnp.asarray(idx),
+                jnp.asarray(t_obs),
+                jnp.asarray(mu),
+                jnp.full(K, float(n)),
+                K,
+                sigma=self.SIGMA,
+                delta=self.DELTA,
+            ),
+            float,
+        )
 
     def test_window_probabilities_tile_to_one(self):
         """Windows tiling [-15, 45] ns cover the whole first-arrival distribution: sum = 1.
@@ -84,6 +102,7 @@ class TestFirstArrivalWindowNLL:
         order-statistic exponent n (S(lo) in place of S(lo)^n) breaks it for n > 1.
         """
         import numpy as np
+
         for n in (1, 3, 7):
             centres = np.arange(-15.0, 45.0, self.DELTA) + self.DELTA / 2
             p = np.exp(-self._tnll(centres, n))
@@ -95,6 +114,7 @@ class TestFirstArrivalWindowNLL:
         4e5 trials; the tolerance is 5 binomial standard errors (about 3e-3 here).
         """
         import numpy as np
+
         rng = np.random.default_rng(0)
         n, trials = 3, 400_000
         pw = np.asarray(self.W) / sum(self.W)
@@ -109,4 +129,5 @@ class TestFirstArrivalWindowNLL:
 
     def test_an_unlit_pmt_contributes_nothing(self):
         import numpy as np
+
         assert np.all(self._tnll(np.array([10.0, 20.0]), 0) == 0.0)

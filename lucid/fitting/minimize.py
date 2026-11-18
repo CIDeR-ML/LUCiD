@@ -42,15 +42,31 @@ state is therefore captured before the update and restored on rejection; optax s
 immutable pytrees, so this is a reference copy. Without it, rejection keeps the good iterate while
 leaving the velocity that produces the next step contaminated — worse than not rejecting at all.
 """
+
 import jax.numpy as jnp
 import numpy as np
 
-__all__ = ['minimize']
+__all__ = ["minimize"]
 
 
-def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_step=None,
-             refresh=1, refresh_final=None, refresh_switch=0.5, readout='final', polyak=0,
-             reject_nonfinite=False, fix=(), on_step=None):
+def minimize(
+    problem,
+    theta0,
+    steps,
+    tx,
+    *,
+    needs_metric=True,
+    scale=None,
+    max_step=None,
+    refresh=1,
+    refresh_final=None,
+    refresh_switch=0.5,
+    readout="final",
+    polyak=0,
+    reject_nonfinite=False,
+    fix=(),
+    on_step=None,
+):
     """Run ``steps`` of ``tx`` on ``problem``, starting from ``theta0``.
 
     Parameters mirror :func:`lucid.fitting.gn.gauss_newton` except that ``lam``/``mu``/``jitter``/
@@ -71,7 +87,7 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
     Returns ``dict(theta, history, gnorm, loss, n_steps)``, with ``history`` and ``gnorm``
     including the starting point, exactly as ``gauss_newton`` does.
     """
-    if readout not in ('final', 'polyak', 'ming'):
+    if readout not in ("final", "polyak", "ming"):
         raise ValueError(f"readout must be 'final', 'polyak' or 'ming', got {readout!r}")
 
     theta = jnp.asarray(theta0, jnp.float32)
@@ -81,7 +97,7 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
     # [True, False, True] would become indices [1, 0, 1] and silently freeze the wrong
     # parameters. The two cannot collide: integer indices never carry dtype bool.
     fix = np.asarray(list(fix))
-    fix = (np.flatnonzero(fix) if fix.dtype == bool else fix.astype(int))
+    fix = np.flatnonzero(fix) if fix.dtype == bool else fix.astype(int)
     sw = int(refresh_switch * steps)
     since = None
 
@@ -118,13 +134,12 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
             gs = np.array(gs)
             gs[fix] = 0.0
 
-        prev_state = state                      # optax states are immutable pytrees
+        prev_state = state  # optax states are immutable pytrees
         # `iteration` is the RAW loop index, which advances whether or not the step is accepted.
         # A transformation's own state counter is NOT the same thing: restoring the state on a
         # refused step (below) correctly discards momentum but would also rewind a schedule
         # counter, so the lr anneal is driven by this index to stay on fit_track's schedule.
-        extra = ({'metric': Hs, 'iteration': step}
-                 if (needs_metric and Hs is not None) else {})
+        extra = {"metric": Hs, "iteration": step} if (needs_metric and Hs is not None) else {}
         du, state = tx.update(gs, state, np.asarray(theta), **extra)
 
         du = np.asarray(du)
@@ -143,12 +158,16 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
             nxt = problem.grad_metric_loss(theta_new, step + 1, refresh=due)
             since = 1 if due else since + 1
 
-        if reject_nonfinite and nxt is not None and not (
-                np.isfinite(np.asarray(theta_new)).all()
-                and np.isfinite(np.asarray(nxt[0])).all()):
+        if (
+            reject_nonfinite
+            and nxt is not None
+            and not (
+                np.isfinite(np.asarray(theta_new)).all() and np.isfinite(np.asarray(nxt[0])).all()
+            )
+        ):
             # Recorded for diagnostics only; it changes no number.
             rejected.append(step)
-            state = prev_state                  # do NOT keep the moments from a refused step
+            state = prev_state  # do NOT keep the moments from a refused step
             if due and step + 1 < steps:
                 # The look-ahead call refreshed the metric at the REFUSED point, and a problem
                 # that caches its metric hands that one back on every later non-refresh step. A
@@ -169,12 +188,18 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
         if on_step is not None:
             on_step(step, theta, g, H, loss)
 
-    if readout == 'polyak' and polyak:
+    if readout == "polyak" and polyak:
         out = np.mean(np.stack(history[1:])[-polyak:], axis=0)
-    elif readout == 'ming':
+    elif readout == "ming":
         out = best[1]
     else:
         out = np.asarray(theta)
-    return dict(theta=out, history=np.stack(history), gnorm=np.array(gnorms),
-                loss=losses, n_steps=steps, n_rejected=len(rejected),
-                rejected_steps=tuple(rejected))
+    return dict(
+        theta=out,
+        history=np.stack(history),
+        gnorm=np.array(gnorms),
+        loss=losses,
+        n_steps=steps,
+        n_rejected=len(rejected),
+        rejected_steps=tuple(rejected),
+    )

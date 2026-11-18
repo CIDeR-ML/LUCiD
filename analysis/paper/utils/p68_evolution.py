@@ -9,51 +9,64 @@ the final iterate.
 
     python analysis/paper/utils/p68_evolution.py <run.h5> [--out DIR]
 """
+
 import argparse
 import sys
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # LUCiD/ on path
-from analysis.paper.utils.ovv_plots import open_study          # noqa: E402
-from lucid.fitting import track_errors                          # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))  # LUCiD/ on path
+from analysis.paper.utils.ovv_plots import open_study  # noqa: E402
+from lucid.fitting import track_errors  # noqa: E402
 
-
-METRICS = [('vertex distance (cm)', 'vtx'), ('direction (deg)', 'dir'),
-           ('|dE| (MeV)', 'E'), ('|dt0| (ns)', 't0')]
+METRICS = [
+    ("vertex distance (cm)", "vtx"),
+    ("direction (deg)", "dir"),
+    ("|dE| (MeV)", "E"),
+    ("|dt0| (ns)", "t0"),
+]
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('h5file')
-    ap.add_argument('--out', default=None, help='output dir for the PNG (default: next to the h5)')
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("h5file")
+    ap.add_argument("--out", default=None, help="output dir for the PNG (default: next to the h5)")
     args = ap.parse_args()
 
     import matplotlib
-    matplotlib.use('Agg')
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     curves, ming_iters, ming_errs, final_errs, which = [], [], [], [], []
     with open_study(args.h5file) as f:
-        for k in sorted(f['events']):
-            ev = f['events'][k]
-            c = np.abs(track_errors(ev['traj_win'][:], ev['truth_vec9'][:], ev['tdir'][:]))
+        for k in sorted(f["events"]):
+            ev = f["events"][k]
+            c = np.abs(track_errors(ev["traj_win"][:], ev["truth_vec9"][:], ev["tdir"][:]))
             curves.append(c)
-            bi = int(ev.attrs['best_iter_win'])
-            ming_iters.append(bi); ming_errs.append(c[bi]); final_errs.append(c[-1])
-            which.append(int(ev.attrs['which']))
-        name = f.attrs.get('name', Path(args.h5file).stem)
+            bi = int(ev.attrs["best_iter_win"])
+            ming_iters.append(bi)
+            ming_errs.append(c[bi])
+            final_errs.append(c[-1])
+            which.append(int(ev.attrs["which"]))
+        name = f.attrs.get("name", Path(args.h5file).stem)
 
-    C = np.stack(curves)                       # (n_events, niters+1, 4)
+    C = np.stack(curves)  # (n_events, niters+1, 4)
     N, NI, _ = C.shape
-    p68 = np.quantile(C, 0.68, axis=0)         # (niters+1, 4)
-    ming_errs = np.stack(ming_errs); final_errs = np.stack(final_errs)
-    p68_seed, p68_ming, p68_final = p68[0], np.quantile(ming_errs, 0.68, 0), np.quantile(final_errs, 0.68, 0)
+    p68 = np.quantile(C, 0.68, axis=0)  # (niters+1, 4)
+    ming_errs = np.stack(ming_errs)
+    final_errs = np.stack(final_errs)
+    p68_seed, p68_ming, p68_final = (
+        p68[0],
+        np.quantile(ming_errs, 0.68, 0),
+        np.quantile(final_errs, 0.68, 0),
+    )
 
     wfrac = [int(np.sum(np.array(which) == i)) for i in range(3)]
-    print(f"\n=== p68 convergence — {name}  (N={N} events, {NI-1} GN iterations) ===")
+    print(f"\n=== p68 convergence — {name}  (N={N} events, {NI - 1} GN iterations) ===")
     print(f"  winning seed: A {wfrac[0]}  B {wfrac[1]}  fused {wfrac[2]}")
     print(f"  median min-||g|| readout iteration: {np.median(ming_iters):.0f}")
     print(f"  {'metric':<22}{'seed (it 0)':>14}{'min-g readout':>16}{'final iter':>14}")
@@ -64,21 +77,27 @@ def main():
     fig, ax = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
     for j, (lab, _) in enumerate(METRICS):
         a = ax.ravel()[j]
-        a.plot(it, p68[:, j], lw=1.8, color='C0')
-        a.axhline(p68_ming[j], color='C3', ls='--', lw=1.1,
-                  label=f'min-‖g‖ readout p68 = {p68_ming[j]:.2f}')
-        a.set(ylabel=f'p68 {lab}', yscale='log'); a.grid(alpha=.3, which='both')
+        a.plot(it, p68[:, j], lw=1.8, color="C0")
+        a.axhline(
+            p68_ming[j],
+            color="C3",
+            ls="--",
+            lw=1.1,
+            label=f"min-‖g‖ readout p68 = {p68_ming[j]:.2f}",
+        )
+        a.set(ylabel=f"p68 {lab}", yscale="log")
+        a.grid(alpha=0.3, which="both")
         a.legend(fontsize=8)
     for a in ax[1]:
-        a.set_xlabel('GN iteration')
-    fig.suptitle(f'p68 evolution over GN iterations — {name} (N={N}, winning seed per event)')
+        a.set_xlabel("GN iteration")
+    fig.suptitle(f"p68 evolution over GN iterations — {name} (N={N}, winning seed per event)")
     fig.tight_layout()
 
     out_dir = Path(args.out) if args.out else Path(args.h5file).parent
-    png = out_dir / f'{Path(args.h5file).stem}_p68_evolution.png'
+    png = out_dir / f"{Path(args.h5file).stem}_p68_evolution.png"
     fig.savefig(png, dpi=130)
     print(f"\nwrote {png}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

@@ -39,7 +39,8 @@ import jax
 import jax.numpy as jnp
 
 from lucid.simulation.optics import (
-    compute_reflection_direction, sample_cosine_hemisphere,
+    compute_reflection_direction,
+    sample_cosine_hemisphere,
 )
 
 sg = jax.lax.stop_gradient
@@ -49,6 +50,7 @@ sg = jax.lax.stop_gradient
 # Scalar model (default) — angle/λ-independent rates, hard direction.
 # ---------------------------------------------------------------------------
 
+
 class ScalarReflection(NamedTuple):
     """``refl_params`` for the scalar reflection model.
 
@@ -57,6 +59,7 @@ class ScalarReflection(NamedTuple):
     wall_rate : jnp.ndarray     scalar reflection probability at walls
     sensor_rate : jnp.ndarray   scalar reflection probability at sensors
     """
+
     wall_rate: jnp.ndarray
     sensor_rate: jnp.ndarray
 
@@ -86,6 +89,7 @@ def scalar_reflection(direction, normal, hit_sensor, refl_params, lam, key):
 # scalar (wavelength_mode=False) calibration.
 # ---------------------------------------------------------------------------
 
+
 class ScalarMixReflection(NamedTuple):
     """``refl_params`` for the scalar specular/diffuse-mixture reflection model.
 
@@ -96,6 +100,7 @@ class ScalarMixReflection(NamedTuple):
     wall_fspec : jnp.ndarray    wall specular fraction (1-fspec diffuse)
     sensor_fspec : jnp.ndarray  sensor specular fraction (1-fspec diffuse)
     """
+
     wall_rate: jnp.ndarray
     sensor_rate: jnp.ndarray
     wall_fspec: jnp.ndarray
@@ -114,8 +119,9 @@ def scalar_mix_reflection(direction, normal, hit_sensor, refl_params, lam, key):
     refl_prob = jnp.where(hit_sensor, refl_params.sensor_rate, refl_params.wall_rate)
     normal_refl = sg(normal)
     kd, ks = jax.random.split(key)
-    f_eff = jnp.clip(jnp.where(hit_sensor, refl_params.sensor_fspec, refl_params.wall_fspec),
-                     1e-3, 1.0 - 1e-3)
+    f_eff = jnp.clip(
+        jnp.where(hit_sensor, refl_params.sensor_fspec, refl_params.wall_fspec), 1e-3, 1.0 - 1e-3
+    )
     is_spec = jax.random.uniform(ks) < sg(f_eff)
     specular_dir = compute_reflection_direction(direction, normal_refl)
     diffuse_dir = sample_cosine_hemisphere(-normal_refl, kd)
@@ -130,6 +136,7 @@ def scalar_mix_reflection(direction, normal, hit_sensor, refl_params, lam, key):
 # (R0w, pw, nr, nk) is PATHWISE-exact because cth_inc uses sg(normal); the spec/diff
 # DIRECTION mix (fractions fw, fs) is a DISCRETE branch carried by a DiCE score lr.
 # ---------------------------------------------------------------------------
+
 
 def n_glass(lam):
     """SK PMT-glass dispersion n_g(λ), λ in nm."""
@@ -164,7 +171,7 @@ def pmt_reflectance(cth_inc, lam, n_r, n_k, n_medium):
     """Effective 4-level PMT reflectance: medium(n_medium)→glass(λ)→cathode(n_r+i·n_k),
     two incoherent Fresnel interfaces summed over multi-bounce."""
     ng = n_glass(lam)
-    R1, ctg = fresnel_rr(cth_inc, n_medium, ng)             # medium→glass (real)
+    R1, ctg = fresnel_rr(cth_inc, n_medium, ng)  # medium→glass (real)
     R2 = fresnel_rc(ctg, ng, jnp.asarray(n_r) + 1j * jnp.asarray(n_k))  # glass→cathode (complex)
     return jnp.clip(R1 + (1.0 - R1) ** 2 * R2 / (1.0 - R1 * R2 + 1e-9), 0.0, 0.999)
 
@@ -181,6 +188,7 @@ class AngularReflection(NamedTuple):
     nk : jnp.ndarray    cathode imaginary refractive index (absorption)
     fs : jnp.ndarray    cathode specular fraction (1-fs diffuse)
     """
+
     R0w: jnp.ndarray
     pw: jnp.ndarray
     fw: jnp.ndarray
@@ -201,7 +209,9 @@ def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key, *, 
     normal_refl = sg(normal)
     cth_inc = jnp.clip(jnp.abs(jnp.sum(direction * normal_refl)), 0.0, 1.0)
 
-    Rw = refl_params.R0w + (1.0 - refl_params.R0w) * (1.0 - cth_inc) ** jnp.clip(refl_params.pw, 0.5, 12.0)
+    Rw = refl_params.R0w + (1.0 - refl_params.R0w) * (1.0 - cth_inc) ** jnp.clip(
+        refl_params.pw, 0.5, 12.0
+    )
     Rs = pmt_reflectance(cth_inc, lam, refl_params.nr, refl_params.nk, n_medium)
     refl_prob = jnp.clip(jnp.where(hit_sensor, Rs, Rw), 0.0, 0.999)
 
@@ -224,6 +234,7 @@ def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key, *, 
 # needs per-photon λ (wavelength_mode=True), threaded by the simulator.
 # ---------------------------------------------------------------------------
 
+
 def _build_scalar_params(detector_params):
     return ScalarReflection(
         wall_rate=detector_params.reflection.wall_reflection_rate,
@@ -234,24 +245,33 @@ def _build_scalar_params(detector_params):
 def _build_scalar_mix_params(detector_params):
     r = detector_params.reflection
     return ScalarMixReflection(
-        wall_rate=r.wall_reflection_rate, sensor_rate=r.sensor_reflection_rate,
-        wall_fspec=r.wall_fspec, sensor_fspec=r.sensor_fspec)
+        wall_rate=r.wall_reflection_rate,
+        sensor_rate=r.sensor_reflection_rate,
+        wall_fspec=r.wall_fspec,
+        sensor_fspec=r.sensor_fspec,
+    )
 
 
 def _build_angular_params(detector_params):
     r = detector_params.reflection
-    return AngularReflection(R0w=r.wall_R0, pw=r.wall_p, fw=r.wall_fspec,
-                             nr=r.cathode_nr, nk=r.cathode_nk, fs=r.sensor_fspec)
+    return AngularReflection(
+        R0w=r.wall_R0,
+        pw=r.wall_p,
+        fw=r.wall_fspec,
+        nr=r.cathode_nr,
+        nk=r.cathode_nk,
+        fs=r.sensor_fspec,
+    )
 
 
 REFLECTION_MODELS = {
-    'scalar': (scalar_reflection, _build_scalar_params),
-    'scalar_mix': (scalar_mix_reflection, _build_scalar_mix_params),
-    'angular': (angular_reflection, _build_angular_params),
+    "scalar": (scalar_reflection, _build_scalar_params),
+    "scalar_mix": (scalar_mix_reflection, _build_scalar_mix_params),
+    "angular": (angular_reflection, _build_angular_params),
 }
 
 # Reflection models whose physics depends on the medium's refractive index.
-MEDIUM_REFLECTION_MODELS = frozenset({'angular'})
+MEDIUM_REFLECTION_MODELS = frozenset({"angular"})
 
 
 def get_reflection_model(name, *, n_medium):
@@ -262,7 +282,8 @@ def get_reflection_model(name, *, n_medium):
     """
     if name not in REFLECTION_MODELS:
         raise ValueError(
-            f"Unknown reflection model {name!r}; available: {sorted(REFLECTION_MODELS)}")
+            f"Unknown reflection model {name!r}; available: {sorted(REFLECTION_MODELS)}"
+        )
     fn, build = REFLECTION_MODELS[name]
     if name in MEDIUM_REFLECTION_MODELS:
         fn = partial(fn, n_medium=float(n_medium))
@@ -276,6 +297,5 @@ def sensor_normal_reflectance(reflection_fn, refl_params, lam):
     a quoted QE already contains. The key only drives the reflected direction, which is unused.
     """
     normal = jnp.array([0.0, 0.0, 1.0])
-    refl_prob, _, _ = reflection_fn(-normal, normal, True, refl_params, lam,
-                                    jax.random.PRNGKey(0))
+    refl_prob, _, _ = reflection_fn(-normal, normal, True, refl_params, lam, jax.random.PRNGKey(0))
     return refl_prob

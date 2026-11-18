@@ -6,6 +6,7 @@ notebook with 18 MB of inlined plotly, and force-added GIFs — so the check is
 on the tracked set, not on the working tree. Run from the repo root; exits 1
 with one line per offender.
 """
+
 import json
 import subprocess
 import sys

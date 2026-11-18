@@ -22,6 +22,7 @@ path (spack-activated).
 Water target is expressed as a two-nucleus mix by mass fraction:
 16O (0.888) + 1H (0.112).
 """
+
 from __future__ import annotations
 
 import os
@@ -124,7 +125,7 @@ def run_genie(
         )
 
     gevgen = _resolve_binary("gevgen")
-    gntpc  = _resolve_binary("gntpc")
+    gntpc = _resolve_binary("gntpc")
 
     if seed is None:
         # Deterministic per-job seed. job_id is 1-based; avoid seed==0.
@@ -132,7 +133,7 @@ def run_genie(
 
     job_padded = f"{job_id:06d}"
     # gevgen v3's -o is the literal output filename (no suffix appended).
-    ghep_file  = output_dir / f"gntp_job_{job_padded}.ghep.root"
+    ghep_file = output_dir / f"gntp_job_{job_padded}.ghep.root"
     gtrac_file = output_dir / f"gntp_job_{job_padded}.gtrac.root"
 
     # gevgen runs in output_dir because it leaves auxiliary files
@@ -140,15 +141,24 @@ def run_genie(
     # job-local avoids cross-job contention.
     gevgen_cmd = [
         gevgen,
-        "-n", str(n_events),
-        "-e", f"{emin},{emax}",
-        "-f", "1",  # flat flux across the energy range
-        "-p", str(probe),
-        "-t", target,
-        "--cross-sections", xsec,
-        "--tune", tune,
-        "--seed", str(seed),
-        "-o", str(ghep_file),
+        "-n",
+        str(n_events),
+        "-e",
+        f"{emin},{emax}",
+        "-f",
+        "1",  # flat flux across the energy range
+        "-p",
+        str(probe),
+        "-t",
+        target,
+        "--cross-sections",
+        xsec,
+        "--tune",
+        tune,
+        "--seed",
+        str(seed),
+        "-o",
+        str(ghep_file),
     ]
     # Allow opt-in to a specific event-generator-list; by default use GENIE's
     # own default (Tune's bundled generator list). "CC+NC" is not a valid
@@ -186,6 +196,5 @@ def run_genie(
             pass
 
     total_primaries = _count_rootracker_entries(gtrac_file)
-    print(f"    counted {total_primaries} rootracker entries across "
-          f"{n_events} GENIE interactions")
+    print(f"    counted {total_primaries} rootracker entries across {n_events} GENIE interactions")
     return gtrac_file, total_primaries
