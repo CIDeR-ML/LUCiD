@@ -30,7 +30,7 @@ def _installed(root, rel):
 
 def _release():
     text = (REPO / "scripts" / "download_data.py").read_text()
-    return re.search(r"^RELEASE = '([^']+)'", text, re.M).group(1)
+    return re.search(r'^RELEASE = ["\']([^"\']+)', text, re.M).group(1)
 
 
 @pytest.fixture
@@ -110,7 +110,7 @@ def test_paper_installs_the_results_under_output_data(checkout):
     """--paper installs its own asset, checked against analysis/paper/RESULTS.sha256, where the
     figures' --plot-results reads it, and leaves data/ alone."""
     text = (REPO / "scripts" / "download_data.py").read_text()
-    release = re.search(r"^PAPER_RELEASE = '([^']+)'", text, re.M).group(1)
+    release = re.search(r'^PAPER_RELEASE = ["\']([^"\']+)', text, re.M).group(1)
     results = {"nrays/nrays_mu_5k/nrays_mu_5k.h5": b"a study", "juno_cher_scint/charges.npz": b"q"}
     (checkout / "analysis" / "paper").mkdir(parents=True)
     (checkout / "analysis" / "paper" / "RESULTS.sha256").write_text(
