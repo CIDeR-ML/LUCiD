@@ -1,0 +1,3 @@
+# Commits that only reformat, for `git blame --ignore-revs-file` (GitHub reads this file).
+# lint: mechanical pass (ruff format, ruff --fix, whitespace)
+942f0f40c2472b960d5d45be16f23ae990f15a59

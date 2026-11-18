@@ -6,8 +6,7 @@
 # Install:  pre-commit install
 # Run all:  pre-commit run --all-files
 #
-# Two hooks are advisory in CI today (the lint job, until its backlog clears);
-# they are NOT advisory here. Locally, they fail the commit.
+# CI's lint job runs these same hooks on every file and fails the build when one fails.
 default_language_version:
   python: python3
 
