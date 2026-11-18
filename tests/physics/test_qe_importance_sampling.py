@@ -9,33 +9,32 @@ Covers:
 - Gradients w.r.t. detector.qe and qe_corrections: Q is linear in each, so g qe = Q and g_i = Q_i.
 - Explicit wavelengths override the sampler (per-call precedence rule).
 """
+
 import os
 
-import numpy as np
-import pytest
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 
 from lucid.wavelength.medium import load_qe_curve
 from lucid.wavelength.spectrum import (
     build_qe_weighted_cherenkov_sampler,
 )
-
 from tests.helpers.params import calib_dp
-from tests.helpers.stats import ks_distance
 from tests.helpers.paths import REPO
+from tests.helpers.stats import ks_distance
 
-
-GEOM = os.path.join(REPO, 'config', 'WCTE_like_geom_config.json')
-PHYSICS = os.path.join(REPO, 'config', 'SK_physics_config.json')
-SK_QE_PATH = os.path.join(REPO, 'config', 'pmt', 'SK_QE.json')
+GEOM = os.path.join(REPO, "config", "WCTE_like_geom_config.json")
+PHYSICS = os.path.join(REPO, "config", "SK_physics_config.json")
+SK_QE_PATH = os.path.join(REPO, "config", "pmt", "SK_QE.json")
 
 
 # ── Pure sampler ───────────────────────────────────────────────────────────
 
 LO, HI = 300.0, 648.22
 N_KS = 400_000
-KS_CRIT = 1.95 / np.sqrt(N_KS)          # 99.9 % Kolmogorov critical value, 0.0031
+KS_CRIT = 1.95 / np.sqrt(N_KS)  # 99.9 % Kolmogorov critical value, 0.0031
 
 
 def _frank_tamm_cdf(x):
@@ -50,13 +49,15 @@ class TestQEWeightedSampler:
         """QE(lambda) = c gives <QE>_C = c whatever the spectrum. (A 1/lambda weight in the
         numerator gives 430 c: the ratio stops being dimensionless.)"""
         _, mean_qe = build_qe_weighted_cherenkov_sampler(
-            lambda lam: 0.3 * jnp.ones_like(lam), LO, HI)
+            lambda lam: 0.3 * jnp.ones_like(lam), LO, HI
+        )
         np.testing.assert_allclose(mean_qe, 0.3, rtol=1e-6)
 
     def test_constant_qe_samples_follow_frank_tamm(self):
         """With a constant QE the importance sampler must reduce to the 1/lambda^2 law."""
         sample_fn, _ = build_qe_weighted_cherenkov_sampler(
-            lambda lam: 0.3 * jnp.ones_like(lam), LO, HI)
+            lambda lam: 0.3 * jnp.ones_like(lam), LO, HI
+        )
         wl = sample_fn(jax.random.PRNGKey(0), N_KS)
         assert ks_distance(wl, _frank_tamm_cdf) < KS_CRIT
 
@@ -64,6 +65,7 @@ class TestQEWeightedSampler:
         """<QE>_C for the SK curve against a float64 trapezoid on 2e5 points (measured
         agreement 8e-6)."""
         from scipy.integrate import trapezoid
+
         qe_fn = load_qe_curve(SK_QE_PATH)
         _, mean_qe = build_qe_weighted_cherenkov_sampler(qe_fn, LO, HI)
         x = np.linspace(LO, HI, 200001)
@@ -86,102 +88,138 @@ class TestQEWeightedSampler:
 
     def test_sampler_errors_when_qe_zero_everywhere(self):
         """If QE is identically zero on the sampling range, refuse to build."""
+
         def zero_qe(wl):
             return jnp.zeros_like(wl)
+
         with pytest.raises(ValueError, match="zero everywhere"):
             build_qe_weighted_cherenkov_sampler(zero_qe, 300.0, 700.0)
 
 
 # ── Setup-time errors ──────────────────────────────────────────────────────
 
-@pytest.mark.slow                 # builds simulators
+
+@pytest.mark.slow  # builds simulators
 class TestSetupTimeErrors:
     def test_error_when_wavelength_mode_off(self):
-        from lucid.simulation import setup_event_simulator
         from lucid.geometry import generate_detector
+        from lucid.simulation import setup_event_simulator
+
         det = generate_detector(GEOM)
         dp = calib_dp(len(det.all_points))
         with pytest.raises(ValueError, match="wavelength_mode=True"):
             setup_event_simulator(
-                GEOM, 1000, source='light_source', temperature=None, K=2,
+                GEOM,
+                1000,
+                source="light_source",
+                temperature=None,
+                K=2,
                 default_detector_params=dp,
                 wavelength_mode=False,
-                wavelength_sampling='cherenkov_qe')
+                wavelength_sampling="cherenkov_qe",
+            )
 
     def test_error_when_no_qe_curve(self):
-        from lucid.simulation import setup_event_simulator
         from lucid.geometry import generate_detector
+        from lucid.simulation import setup_event_simulator
+
         det = generate_detector(GEOM)
         dp = calib_dp(len(det.all_points))
         with pytest.raises(ValueError, match="requires a QE curve"):
             # physics_config not passed → no QE curve loaded.
             setup_event_simulator(
-                GEOM, 1000, source='light_source', temperature=None, K=2,
+                GEOM,
+                1000,
+                source="light_source",
+                temperature=None,
+                K=2,
                 default_detector_params=dp,
                 wavelength_mode=True,
-                wavelength_sampling='cherenkov_qe')
+                wavelength_sampling="cherenkov_qe",
+            )
 
     def test_error_when_photons_are_given(self):
-        from lucid.simulation import setup_event_simulator
         from lucid.geometry import generate_detector
+        from lucid.simulation import setup_event_simulator
+
         det = generate_detector(GEOM)
         dp = calib_dp(len(det.all_points))
         with pytest.raises(ValueError, match="incompatible with.*source=.photons."):
             setup_event_simulator(
-                GEOM, 1000, source='photons', temperature=None, K=2,
+                GEOM,
+                1000,
+                source="photons",
+                temperature=None,
+                K=2,
                 default_detector_params=dp,
                 physics_config=PHYSICS,
                 wavelength_mode=True,
-                wavelength_sampling='cherenkov_qe')
+                wavelength_sampling="cherenkov_qe",
+            )
 
     def test_error_on_bad_value(self):
-        from lucid.simulation import setup_event_simulator
         from lucid.geometry import generate_detector
+        from lucid.simulation import setup_event_simulator
+
         det = generate_detector(GEOM)
         dp = calib_dp(len(det.all_points))
         with pytest.raises(ValueError, match="cherenkov_qe"):
             setup_event_simulator(
-                GEOM, 1000, source='light_source', temperature=None, K=2,
+                GEOM,
+                1000,
+                source="light_source",
+                temperature=None,
+                K=2,
                 default_detector_params=dp,
                 physics_config=PHYSICS,
                 wavelength_mode=True,
-                wavelength_sampling='bogus')
+                wavelength_sampling="bogus",
+            )
 
 
 # ── End-to-end equivalence ─────────────────────────────────────────────────
 
-@pytest.fixture(scope='module')
+
+@pytest.fixture(scope="module")
 def detector():
     from lucid.geometry import generate_detector
+
     return generate_detector(GEOM)
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def base_dp(detector):
     return calib_dp(len(detector.all_points))
 
 
 def _build_sim(sampling, base_dp):
     from lucid.simulation import setup_event_simulator
+
     return setup_event_simulator(
-        GEOM, 20000, source='light_source', temperature=None, K=4,
+        GEOM,
+        20000,
+        source="light_source",
+        temperature=None,
+        K=4,
         default_detector_params=base_dp,
         physics_config=PHYSICS,
         wavelength_mode=True,
-        wavelength_sampling=sampling)
+        wavelength_sampling=sampling,
+    )
 
 
-@pytest.mark.slow                 # builds simulators
+@pytest.mark.slow  # builds simulators
 class TestMethodBEquivalenceExpected:
     """In expected-value mode, Method A and B should agree in the large-N
     limit within a few times the larger standard error."""
 
     def test_expected_value_equivalence(self, detector, base_dp):
         from lucid.sources import isotropic_source
-        sim_a = _build_sim('cherenkov', base_dp)
-        sim_b = _build_sim('cherenkov_qe', base_dp)
 
-        src = isotropic_source(position=[0., 0., 0.], intensity=1.0)
+        sim_a = _build_sim("cherenkov", base_dp)
+        sim_b = _build_sim("cherenkov_qe", base_dp)
+
+        src = isotropic_source(position=[0.0, 0.0, 0.0], intensity=1.0)
         # Per-key totals; the tolerance is 4 combined standard errors of the two 6-key means
         # (measured: A and B differ by 0.11 %, the bound is ~1.6 %), capped at 3 %.
         keys = jax.random.split(jax.random.PRNGKey(0), 6)
@@ -192,16 +230,18 @@ class TestMethodBEquivalenceExpected:
         diff = abs(tot_a.mean() - tot_b.mean())
         assert diff < min(4.0 * se, 0.03 * tot_a.mean()), (
             f"Method A vs B totals disagreed: {tot_a.mean()} vs {tot_b.mean()} "
-            f"({diff / tot_a.mean() * 100:.2f} %, 4 s.e. = {4 * se / tot_a.mean() * 100:.2f} %)")
+            f"({diff / tot_a.mean() * 100:.2f} %, 4 s.e. = {4 * se / tot_a.mean() * 100:.2f} %)"
+        )
 
     def test_method_b_variance_is_lower_or_similar(self, detector, base_dp):
         """Per-sensor std across runs should not exceed Method A by more than
         a small tolerance — Method B is expected to be at least as good."""
         from lucid.sources import isotropic_source
-        sim_a = _build_sim('cherenkov', base_dp)
-        sim_b = _build_sim('cherenkov_qe', base_dp)
 
-        src = isotropic_source(position=[0., 0., 0.], intensity=1.0)
+        sim_a = _build_sim("cherenkov", base_dp)
+        sim_b = _build_sim("cherenkov_qe", base_dp)
+
+        src = isotropic_source(position=[0.0, 0.0, 0.0], intensity=1.0)
         keys = jax.random.split(jax.random.PRNGKey(7), 8)
         A = jnp.stack([sim_a(src, k)[0] for k in keys])
         B = jnp.stack([sim_b(src, k)[0] for k in keys])
@@ -216,7 +256,7 @@ class TestMethodBEquivalenceExpected:
         assert float(jnp.median(std_b / (std_a + 1e-30))) < 1.5
 
 
-@pytest.mark.slow                 # builds simulators
+@pytest.mark.slow  # builds simulators
 class TestExplicitWavelengthOverride:
     """When the caller supplies a wavelength, 'cherenkov_qe' must be ignored;
     per-photon qe_fn(λ) is used, not the scalar <QE>_C."""
@@ -227,26 +267,30 @@ class TestExplicitWavelengthOverride:
 
         # Method B set at setup — should not apply since source pins λ.
         sim = setup_event_simulator(
-            GEOM, 5000, source='light_source', temperature=None, K=2,
+            GEOM,
+            5000,
+            source="light_source",
+            temperature=None,
+            K=2,
             default_detector_params=base_dp,
             physics_config=PHYSICS,
             wavelength_mode=True,
-            wavelength_sampling='cherenkov_qe')
+            wavelength_sampling="cherenkov_qe",
+        )
 
         # QE at 375 is ~21 %, QE at 600 is ~1 %. Detected charges must track
         # that ratio — a scalar <QE>_C weight would make them equal.
-        src_peak = laser_source(position=[0., 0., 0.], intensity=1e6, wavelength=375.0)
-        src_red  = laser_source(position=[0., 0., 0.], intensity=1e6, wavelength=600.0)
+        src_peak = laser_source(position=[0.0, 0.0, 0.0], intensity=1e6, wavelength=375.0)
+        src_red = laser_source(position=[0.0, 0.0, 0.0], intensity=1e6, wavelength=600.0)
         key = jax.random.PRNGKey(3)
         c_peak, _ = sim(src_peak, key)
-        c_red, _  = sim(src_red,  key)
+        c_red, _ = sim(src_red, key)
 
         ratio = float(jnp.sum(c_peak) / (jnp.sum(c_red) + 1e-30))
-        assert ratio > 3.0, \
-            f"peak/red ratio {ratio:.2f} — flag leaked into explicit-λ path"
+        assert ratio > 3.0, f"peak/red ratio {ratio:.2f} — flag leaked into explicit-λ path"
 
 
-@pytest.mark.slow                 # builds simulators
+@pytest.mark.slow  # builds simulators
 class TestGradients:
     """QE-importance sampling must preserve gradients w.r.t. the fittable
     QE parameters (global scalar, per-sensor corrections). QE curve shape
@@ -257,16 +301,20 @@ class TestGradients:
         from lucid.sources import isotropic_source
 
         sim = setup_event_simulator(
-            GEOM, 5000, source='light_source', temperature=None, K=2,
+            GEOM,
+            5000,
+            source="light_source",
+            temperature=None,
+            K=2,
             physics_config=PHYSICS,
             wavelength_mode=True,
-            wavelength_sampling='cherenkov_qe')
-        src = isotropic_source(position=[0., 0., 0.], intensity=1.0)
+            wavelength_sampling="cherenkov_qe",
+        )
+        src = isotropic_source(position=[0.0, 0.0, 0.0], intensity=1.0)
         key = jax.random.PRNGKey(5)
 
         def loss(qe_scalar):
-            dp = base_dp._replace(
-                response=base_dp.response._replace(qe=qe_scalar))
+            dp = base_dp._replace(response=base_dp.response._replace(qe=qe_scalar))
             c, _ = sim(src, dp, key)
             return jnp.sum(c)
 
@@ -280,24 +328,33 @@ class TestGradients:
         from lucid.sources import isotropic_source
 
         sim = setup_event_simulator(
-            GEOM, 5000, source='light_source', temperature=None, K=2,
+            GEOM,
+            5000,
+            source="light_source",
+            temperature=None,
+            K=2,
             physics_config=PHYSICS,
             wavelength_mode=True,
-            wavelength_sampling='cherenkov_qe')
-        src = isotropic_source(position=[0., 0., 0.], intensity=1.0)
+            wavelength_sampling="cherenkov_qe",
+        )
+        src = isotropic_source(position=[0.0, 0.0, 0.0], intensity=1.0)
         key = jax.random.PRNGKey(6)
         N = base_dp.per_pmt.qe_corrections.shape[0]
 
         def loss(corrections):
-            dp = base_dp._replace(
-                per_pmt=base_dp.per_pmt._replace(qe_corrections=corrections))
+            dp = base_dp._replace(per_pmt=base_dp.per_pmt._replace(qe_corrections=corrections))
             c, _ = sim(src, dp, key)
             return jnp.sum(c)
 
         # Each correction multiplies its own sensor's charge only, so at corrections = 1 the
         # gradient of the total is each sensor's charge: g_i = Q_i.
         g = jax.grad(loss)(jnp.ones(N))
-        q = np.asarray(sim(src, base_dp._replace(
-            per_pmt=base_dp.per_pmt._replace(qe_corrections=jnp.ones(N))), key)[0])
+        q = np.asarray(
+            sim(
+                src,
+                base_dp._replace(per_pmt=base_dp.per_pmt._replace(qe_corrections=jnp.ones(N))),
+                key,
+            )[0]
+        )
         assert q.sum() > 0.0
         np.testing.assert_allclose(np.asarray(g), q, rtol=1e-4, atol=1e-6 * q.max())

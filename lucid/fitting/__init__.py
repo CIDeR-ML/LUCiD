@@ -43,57 +43,118 @@ different question than the fit does — what the observable could support, rath
 estimator returned — and it marginalises the per-PMT gains by Schur complement rather than
 profiling them, for that reason.
 """
-from lucid.fitting.params import CalibrationParams, FieldParams
-from lucid.fitting.calib import (
-    CalibrationForward, CalibrationProblem,
-    profile_gains, neyman_residual,
-)
-from lucid.fitting.gn import gauss_newton, gauss_newton_tx
-from lucid.fitting.calibrate import calibrate, closure_data
-from lucid.fitting.schur_gn import ridge_inverse, fit_charge_time, ChargeTimeModel
-from lucid.fitting.fisher import crb, make_constrained_schur, SQRT12
-from lucid.fitting.timing import calibrate_timing
-from lucid.fitting.recon import (
-    ReconModel, ReconProblem, fit_track, FitRecipe, FIT_RECIPE, ModelRecipe, MODEL_RECIPE,
-    track_from_vec9, vec9_from_track, vec9_dir, SCALE9,
-)
-from lucid.fitting.seed import (
-    SeedRecipe, SEED_RECIPE, reconstruct, seed_track, seed_vertex_time, fuse_seeds, pick_by_margin,
-)
+
 from lucid.fitting import report
-from lucid.fitting.contracts import CalibForward, PerPhotonPredictor
 from lucid.fitting.analysis import (
-    bootstrap, bootstrap_ci, resolution_stats, vertex_residual, angular_error_deg, track_errors,
+    angular_error_deg,
+    bootstrap,
+    bootstrap_ci,
+    resolution_stats,
+    track_errors,
+    vertex_residual,
 )
+from lucid.fitting.calib import (
+    CalibrationForward,
+    CalibrationProblem,
+    neyman_residual,
+    profile_gains,
+)
+from lucid.fitting.calibrate import calibrate, closure_data
+from lucid.fitting.contracts import CalibForward, PerPhotonPredictor
+from lucid.fitting.fisher import SQRT12, crb, make_constrained_schur
+from lucid.fitting.gn import gauss_newton, gauss_newton_tx
+from lucid.fitting.minimize import minimize
+from lucid.fitting.params import CalibrationParams, FieldParams
+from lucid.fitting.recon import (
+    FIT_RECIPE,
+    MODEL_RECIPE,
+    SCALE9,
+    FitRecipe,
+    ModelRecipe,
+    ReconModel,
+    ReconProblem,
+    fit_track,
+    track_from_vec9,
+    vec9_dir,
+    vec9_from_track,
+)
+from lucid.fitting.schur_gn import ChargeTimeModel, fit_charge_time, ridge_inverse
+from lucid.fitting.seed import (
+    SEED_RECIPE,
+    SeedRecipe,
+    fuse_seeds,
+    pick_by_margin,
+    reconstruct,
+    seed_track,
+    seed_vertex_time,
+)
+from lucid.fitting.timing import calibrate_timing
+
 # The optax transformations are re-exported; `damped_matrix` deliberately is not. It is the single
 # implementation of the damping convention, so a fix lands in one place; import it explicitly with
 # `from lucid.fitting.transforms import damped_matrix`.
-from lucid.fitting.transforms import (damped_gauss_newton, scale_by_damped_gauss_newton,
-                                      scale_by_driver_schedule, annealed_learning_rate)
-from lucid.fitting.minimize import minimize
+from lucid.fitting.transforms import (
+    annealed_learning_rate,
+    damped_gauss_newton,
+    scale_by_damped_gauss_newton,
+    scale_by_driver_schedule,
+)
 
 __all__ = [
     # parameterisations
-    'CalibrationParams', 'FieldParams',
+    "CalibrationParams",
+    "FieldParams",
     # calibration: entry points, then the pieces
-    'calibrate', 'closure_data',
-    'CalibrationForward', 'CalibrationProblem',
-    'profile_gains', 'neyman_residual',
+    "calibrate",
+    "closure_data",
+    "CalibrationForward",
+    "CalibrationProblem",
+    "profile_gains",
+    "neyman_residual",
     # the shared optimiser: the damped Gauss-Newton configuration, its optax pieces, the driver
-    'gauss_newton', 'gauss_newton_tx',
-    'damped_gauss_newton', 'scale_by_damped_gauss_newton', 'minimize',
+    "gauss_newton",
+    "gauss_newton_tx",
+    "damped_gauss_newton",
+    "scale_by_damped_gauss_newton",
+    "scale_by_driver_schedule",
+    "annealed_learning_rate",
+    "minimize",
     # reconstruction
-    'ReconModel', 'ReconProblem', 'fit_track', 'FitRecipe', 'FIT_RECIPE', 'ModelRecipe',
-    'MODEL_RECIPE',
-    'reconstruct', 'seed_track', 'SeedRecipe', 'SEED_RECIPE', 'seed_vertex_time', 'fuse_seeds',
-    'pick_by_margin',
-    'track_from_vec9', 'vec9_from_track', 'vec9_dir', 'SCALE9',
+    "ReconModel",
+    "ReconProblem",
+    "fit_track",
+    "FitRecipe",
+    "FIT_RECIPE",
+    "ModelRecipe",
+    "MODEL_RECIPE",
+    "reconstruct",
+    "seed_track",
+    "SeedRecipe",
+    "SEED_RECIPE",
+    "seed_vertex_time",
+    "fuse_seeds",
+    "pick_by_margin",
+    "track_from_vec9",
+    "vec9_from_track",
+    "vec9_dir",
+    "SCALE9",
     # uncertainty
-    'crb', 'make_constrained_schur', 'SQRT12',
+    "crb",
+    "make_constrained_schur",
+    "SQRT12",
     # not yet consolidated: the joint charge+time fit
-    'ridge_inverse', 'fit_charge_time', 'ChargeTimeModel', 'calibrate_timing',
+    "ridge_inverse",
+    "fit_charge_time",
+    "ChargeTimeModel",
+    "calibrate_timing",
     # reporting and contracts
-    'report', 'CalibForward', 'PerPhotonPredictor',
-    'bootstrap', 'bootstrap_ci', 'resolution_stats', 'vertex_residual', 'angular_error_deg',
-    'track_errors',
+    "report",
+    "CalibForward",
+    "PerPhotonPredictor",
+    "bootstrap",
+    "bootstrap_ci",
+    "resolution_stats",
+    "vertex_residual",
+    "angular_error_deg",
+    "track_errors",
 ]

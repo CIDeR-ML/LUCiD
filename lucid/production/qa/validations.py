@@ -23,6 +23,7 @@ Usage::
 Writes ``val_{charge,time,symmetry,energy}.png`` plus a PASS/FAIL summary to
 stdout; exits non-zero if any enabled check fails.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,13 +47,16 @@ def check_integrity(dataset: Path):
     has no gap between the first and the last shard (a missing shard means a job died before its
     first write and left no file to flag; a production need not start at file_index 0)."""
     import h5py
+
     present = list_batches(dataset)
     gaps = sorted(set(range(present[0], present[-1] + 1)) - set(present)) if present else []
     corrupt, nev, commits = [], [], set()
     for fi in present:
         ok, messages = check_batch(dataset, fi)
         if not ok:
-            corrupt.append((fi, next(m for m in messages if not m.startswith(("OK", "EMPTY_KEPT")))))
+            corrupt.append(
+                (fi, next(m for m in messages if not m.startswith(("OK", "EMPTY_KEPT"))))
+            )
             continue
         with h5py.File(batch_paths(dataset, fi)["sensor"], "r") as f:
             nev.append(int(f["config"].attrs["n_events"]))
@@ -62,12 +66,17 @@ def check_integrity(dataset: Path):
     # tell a physics change from a script-only one. The list is always printed
     # so a human can judge whether the spread matters.
     passed = not corrupt and not gaps
-    detail = (f"{len(nev)} shards, {sum(nev)} events, commits={sorted(commits)}"
-              + ("  [WARN: multiple commits]" if len(commits) > 1 else "")
-              + (f", BAD={corrupt}" if corrupt else "")
-              + (f", MISSING file_indices={gaps}" if gaps else ""))
-    return passed, detail, {"n_events": nev, "corrupt": corrupt, "missing": gaps,
-                            "commits": sorted(commits)}
+    detail = (
+        f"{len(nev)} shards, {sum(nev)} events, commits={sorted(commits)}"
+        + ("  [WARN: multiple commits]" if len(commits) > 1 else "")
+        + (f", BAD={corrupt}" if corrupt else "")
+        + (f", MISSING file_indices={gaps}" if gaps else "")
+    )
+    return (
+        passed,
+        detail,
+        {"n_events": nev, "corrupt": corrupt, "missing": gaps, "commits": sorted(commits)},
+    )
 
 
 def load_response_samples(dataset: Path, n_shards: int):
@@ -78,6 +87,7 @@ def load_response_samples(dataset: Path, n_shards: int):
     on the first bad file.
     """
     import h5py
+
     tp, reco, resid = [], [], []
     taken = 0
     for fi in list_batches(dataset):
@@ -113,19 +123,20 @@ def load_response_samples(dataset: Path, n_shards: int):
                     reco.append(sPE[clean].astype(np.float32))
                     resid.append((sT[clean] - tt[clean]).astype(np.float32))
             except Exception:
-                continue          # read error mid-shard (corrupt file / EOS I/O)
+                continue  # read error mid-shard (corrupt file / EOS I/O)
     return _cat(tp, np.int16), _cat(reco, np.float32), _cat(resid, np.float32)
 
 
 def load_sensor_sums(dataset: Path):
     """Per-sensor summed charge over all shards + event count + positions."""
     import h5py
+
     sum_pe, pos, nev = None, None, 0
     for fi in list_batches(dataset):
         try:
             sf = h5py.File(batch_paths(dataset, fi)["sensor"], "r")
         except Exception:
-            continue                      # unreadable shard: integrity reports it
+            continue  # unreadable shard: integrity reports it
         with sf as s:
             try:
                 if pos is None:
@@ -134,23 +145,27 @@ def load_sensor_sums(dataset: Path):
                 for ev in s.keys():
                     if not ev.startswith("event_"):
                         continue
-                    np.add.at(sum_pe, s[ev]["sensor_idx"][:].astype(np.int64),
-                              s[ev]["PE"][:].astype(np.float64))
+                    np.add.at(
+                        sum_pe,
+                        s[ev]["sensor_idx"][:].astype(np.int64),
+                        s[ev]["PE"][:].astype(np.float64),
+                    )
                     nev += 1
             except Exception:
-                continue          # read error mid-shard (corrupt file / EOS I/O)
+                continue  # read error mid-shard (corrupt file / EOS I/O)
     return sum_pe, pos, nev
 
 
 def load_primaries(dataset: Path):
     """(pdg, energy) of every primary, plus per-event fingerprints."""
     import h5py
+
     pdgs, ens, fingerprints = [], [], []
     for fi in list_batches(dataset):
         try:
             lf = h5py.File(batch_paths(dataset, fi)["labl"], "r")
         except Exception:
-            continue                      # unreadable shard: integrity reports it
+            continue  # unreadable shard: integrity reports it
         with lf as f:
             try:
                 for ev in f.keys():
@@ -161,16 +176,17 @@ def load_primaries(dataset: Path):
                     e = np.asarray(pi["primary_energies_data"][:], np.float32)
                     pdgs.append(p)
                     ens.append(e)
-                    fingerprints.append((tuple(int(x) for x in p),
-                                         tuple(float(x) for x in e)))
+                    fingerprints.append((tuple(int(x) for x in p), tuple(float(x) for x in e)))
             except Exception:
-                continue          # read error mid-shard (corrupt file / EOS I/O)
+                continue  # read error mid-shard (corrupt file / EOS I/O)
     return _cat(pdgs, np.int32), _cat(ens, np.float32), fingerprints
 
 
 def _digitizer_model(dataset: Path):
     import h5py
+
     from lucid.simulation.digitizer import resolve_model_config
+
     fi = list_batches(dataset)[0]
     with h5py.File(batch_paths(dataset, fi)["sensor"], "r") as s:
         name = str(s["config"].attrs.get("digitizer_model", "basic"))
@@ -181,8 +197,10 @@ def _digitizer_model(dataset: Path):
 def check_charge(dataset: Path, out: Path, n_shards: int, tol=0.02):
     """Reco charge vs true p.e.: unbiased mean + shape match to the SPE model."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
     from lucid.simulation.digitizer import _sample_spe_charge
 
     name, model = _digitizer_model(dataset)
@@ -206,12 +224,25 @@ def check_charge(dataset: Path, out: Path, n_shards: int, tol=0.02):
             fails.append(f"mean(reco|{N}pe)={mu:.3f}")
         bins = np.linspace(max(0, N - 2.5), N + 3.5, 70)
         a.hist(reco[m], bins=bins, density=True, alpha=0.3, color="#2b6cb0")
-        a.hist(reco[m], bins=bins, density=True, histtype="step", color="#2b6cb0",
-               label=f"data (n={m.sum()})")
+        a.hist(
+            reco[m],
+            bins=bins,
+            density=True,
+            histtype="step",
+            color="#2b6cb0",
+            label=f"data (n={m.sum()})",
+        )
         if spe:
             mod = _sample_spe_charge(np.full(300000, float(N)), spe, rng)
-            a.hist(mod, bins=bins, density=True, histtype="step", ls="--",
-                   color="#dd6b20", label="SPE model")
+            a.hist(
+                mod,
+                bins=bins,
+                density=True,
+                histtype="step",
+                ls="--",
+                color="#dd6b20",
+                label="SPE model",
+            )
         a.axvline(N, color="gray", ls=":")
         a.set_title(f"true={N} p.e. (mean reco {mu:.2f})")
         a.legend(fontsize=8)
@@ -232,8 +263,10 @@ def check_time(dataset: Path, out: Path, n_shards: int, tol_ns=0.1):
     quantized-reco minus continuous truth).
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
     from lucid.simulation.digitizer import apply_discriminator, apply_readout_resolution
 
     name, model = _digitizer_model(dataset)
@@ -265,10 +298,17 @@ def check_time(dataset: Path, out: Path, n_shards: int, tol_ns=0.1):
             fails.append(f"{N}pe moments off")
         bins = np.linspace(-4, 9, 80)
         a.hist(resid[m], bins=bins, density=True, alpha=0.3, color="#2b6cb0")
-        a.hist(resid[m], bins=bins, density=True, histtype="step", color="#2b6cb0",
-               label=f"data (n={m.sum()})")
-        a.hist(mod, bins=bins, density=True, histtype="step", ls="--",
-               color="#dd6b20", label="model")
+        a.hist(
+            resid[m],
+            bins=bins,
+            density=True,
+            histtype="step",
+            color="#2b6cb0",
+            label=f"data (n={m.sum()})",
+        )
+        a.hist(
+            mod, bins=bins, density=True, histtype="step", ls="--", color="#dd6b20", label="model"
+        )
         a.axvline(0, color="gray", ls=":")
         a.set_title(f"true={N} p.e. (rms {dr:.2f} ns)")
         a.legend(fontsize=8)
@@ -286,6 +326,7 @@ def check_independence(dataset: Path, out: Path, null_trials=100, nsigma=5.0):
     only when far above the per-PID null (a genuine seed collision would also
     reproduce directions — worth checking by hand on any flagged pair)."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -301,8 +342,10 @@ def check_independence(dataset: Path, out: Path, null_trials=100, nsigma=5.0):
             continue
         exact = n - len(np.unique(a))
         lo, hi = float(a.min()), float(a.max())
-        null = [len(x := (lo + (hi - lo) * rng.random(n)).astype(np.float32))
-                - len(np.unique(x)) for _ in range(null_trials)]
+        null = [
+            len(x := (lo + (hi - lo) * rng.random(n)).astype(np.float32)) - len(np.unique(x))
+            for _ in range(null_trials)
+        ]
         mu, sd = float(np.mean(null)), float(np.std(null)) or 1.0
         null_mu_tot += mu
         null_var_tot += sd * sd
@@ -315,9 +358,11 @@ def check_independence(dataset: Path, out: Path, null_trials=100, nsigma=5.0):
     # (exact for single-particle datasets). A genuine seed collision sits far
     # above it — and would also reproduce directions, worth checking by hand.
     n_dupe = len(fingerprints) - len(set(fingerprints))
-    thr = null_mu_tot + nsigma * (null_var_tot ** 0.5)
-    rows.append(f"event-fingerprint dups={n_dupe}/{len(fingerprints)} "
-                f"(null {null_mu_tot:.0f}, thr {thr:.0f})")
+    thr = null_mu_tot + nsigma * (null_var_tot**0.5)
+    rows.append(
+        f"event-fingerprint dups={n_dupe}/{len(fingerprints)} "
+        f"(null {null_mu_tot:.0f}, thr {thr:.0f})"
+    )
     if n_dupe > thr:
         fails.append(f"{n_dupe} duplicate event fingerprints vs null bound {thr:.0f}")
 
@@ -326,7 +371,7 @@ def check_independence(dataset: Path, out: Path, null_trials=100, nsigma=5.0):
     for a, (pid, arr) in zip(ax.flat, sorted(uniq.items())):
         a.hist(arr, bins=80, color="#2b6cb0")
         a.set_title(f"pdg {pid} (n={len(arr)})", fontsize=9)
-    for a in ax.flat[len(uniq):]:
+    for a in ax.flat[len(uniq) :]:
         a.axis("off")
     fig.suptitle("primary energy by PID", fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
@@ -339,6 +384,7 @@ def check_independence(dataset: Path, out: Path, null_trials=100, nsigma=5.0):
 def check_symmetry(dataset: Path, out: Path, max_mode_pct=0.5):
     """Azimuthal symmetry of per-sensor mean charge (cylinder barrel)."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -351,8 +397,9 @@ def check_symmetry(dataset: Path, out: Path, max_mode_pct=0.5):
     zb, qb, phib = z[barrel], mean_q[barrel], phi[barrel]
     zbins = np.linspace(zb.min(), zb.max(), 41)
     zi = np.clip(np.digitize(zb, zbins) - 1, 0, len(zbins) - 2)
-    ring = np.array([qb[zi == k].mean() if (zi == k).any() else np.nan
-                     for k in range(len(zbins) - 1)])
+    ring = np.array(
+        [qb[zi == k].mean() if (zi == k).any() else np.nan for k in range(len(zbins) - 1)]
+    )
     ratio = qb / ring[zi]
     pb = np.linspace(-180, 180, 73)
     pc = 0.5 * (pb[1:] + pb[:-1])
@@ -360,8 +407,7 @@ def check_symmetry(dataset: Path, out: Path, max_mode_pct=0.5):
     prof = np.array([ratio[pj == k].mean() for k in range(len(pb) - 1)])
     ang = np.radians(pc)
     sig = prof - prof.mean()
-    amps = {m: 200.0 / len(sig) * abs(np.sum(sig * np.exp(-1j * m * ang)))
-            for m in range(1, 9)}
+    amps = {m: 200.0 / len(sig) * abs(np.sum(sig * np.exp(-1j * m * ang))) for m in range(1, 9)}
     dead = int((mean_q == 0).sum())
 
     fails = [f"m={m} amp {a:.2f}%" for m, a in amps.items() if a > max_mode_pct]
@@ -391,8 +437,9 @@ def check_symmetry(dataset: Path, out: Path, max_mode_pct=0.5):
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(out / "val_symmetry.png", dpi=130)
     plt.close(fig)
-    detail = (f"events={nev} " + " ".join(f"m{m}:{a:.2f}%" for m, a in amps.items())
-              + f" dead={dead}")
+    detail = (
+        f"events={nev} " + " ".join(f"m{m}:{a:.2f}%" for m, a in amps.items()) + f" dead={dead}"
+    )
     return not fails, detail + (f"  FAIL:{fails}" if fails else ""), {}
 
 
@@ -407,16 +454,28 @@ CHECKS = {
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--dataset", type=Path, required=True,
-                   help="dataset dir containing sensor/ hits/ step/ labl/")
-    p.add_argument("--out", type=Path, default=None,
-                   help="output dir for figures (default: <dataset>/validations)")
-    p.add_argument("--response-shards", type=int, default=12,
-                   help="shards to sample for the charge/time checks")
-    p.add_argument("--skip", type=str, default="",
-                   help="comma-separated checks to skip")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--dataset",
+        type=Path,
+        required=True,
+        help="dataset dir containing sensor/ hits/ step/ labl/",
+    )
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="output dir for figures (default: <dataset>/validations)",
+    )
+    p.add_argument(
+        "--response-shards",
+        type=int,
+        default=12,
+        help="shards to sample for the charge/time checks",
+    )
+    p.add_argument("--skip", type=str, default="", help="comma-separated checks to skip")
     args = p.parse_args(argv)
 
     out = args.out or (args.dataset / "validations")

@@ -10,13 +10,14 @@ These tests set x64 in a SUBPROCESS. The flag is process-global and must be set 
 an array, so it cannot be toggled inside a session that has already imported and used jax without
 contaminating every other test in the run.
 """
+
 import subprocess
 import sys
 import textwrap
 
 import pytest
-from tests.helpers.paths import REPO
 
+from tests.helpers.paths import REPO
 
 # Slow by behaviour: each test spawns a fresh interpreter that imports jax and
 # compiles a propagation primitive at float64.
@@ -33,12 +34,13 @@ def _run_x64(body: str):
         import jax.numpy as jnp
         import numpy as np
         assert jnp.zeros(1).dtype == jnp.float64, 'x64 did not take effect'
-{textwrap.indent(textwrap.dedent(body), ' ' * 8)}
+{textwrap.indent(textwrap.dedent(body), " " * 8)}
         print('OK')
     """)
-    r = subprocess.run([sys.executable, '-c', src], capture_output=True, text=True, timeout=600)
-    assert r.returncode == 0 and r.stdout.strip().endswith('OK'), \
-        f'x64 subprocess failed\nSTDOUT:\n{r.stdout}\nSTDERR:\n{r.stderr[-3000:]}'
+    r = subprocess.run([sys.executable, "-c", src], capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0 and r.stdout.strip().endswith("OK"), (
+        f"x64 subprocess failed\nSTDOUT:\n{r.stdout}\nSTDERR:\n{r.stderr[-3000:]}"
+    )
     return r.stdout
 
 
@@ -103,7 +105,9 @@ def test_float32_is_unchanged_by_the_dtype_fix():
     import numpy as np
 
     from lucid.propagation.cylinder import intersect_cylinder_wall
-    o = jnp.array([0.0, 0.0, -5.0]); d = jnp.array([0.0, 0.0, 1.0])
+
+    o = jnp.array([0.0, 0.0, -5.0])
+    d = jnp.array([0.0, 0.0, 1.0])
     hit, t = intersect_cylinder_wall(o, d, 5.0, 20.0)
     assert t.dtype == jnp.float32
     assert not bool(hit)

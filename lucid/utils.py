@@ -11,6 +11,7 @@ It imports no IO library and re-exports nothing: the PhotonSim ROOT reader is
 ``lucid.sources.root_reader`` and the dataset writer and reader are ``lucid.dataset.writer`` and
 ``lucid.dataset.reader``.
 """
+
 import functools
 import os
 import re
@@ -21,23 +22,23 @@ import jax.numpy as jnp
 
 
 def base_dir_path():
-    return os.path.dirname(os.path.abspath(__file__))+'/../'
+    return os.path.dirname(os.path.abspath(__file__)) + "/../"
 
 
 # The container image (container/Dockerfile) installs LUCiD at IMAGE_LUCID_DIR without its .git/,
 # builds PhotonSim under IMAGE_PHOTONSIM_DIR, and writes what both were built from into
 # IMAGE_VERSIONS (``key=value`` lines).
-IMAGE_LUCID_DIR = '/opt/LUCiD'
-IMAGE_PHOTONSIM_DIR = '/opt/PhotonSim'
-IMAGE_VERSIONS = '/opt/VERSIONS'
-_SHA = re.compile(r'[0-9a-f]{7,40}')
+IMAGE_LUCID_DIR = "/opt/LUCiD"
+IMAGE_PHOTONSIM_DIR = "/opt/PhotonSim"
+IMAGE_VERSIONS = "/opt/VERSIONS"
+_SHA = re.compile(r"[0-9a-f]{7,40}")
 
 
 def _version_record(path):
     """The image's version record as a dict, or ``None`` when it cannot be read."""
     try:
         with open(path) as f:
-            return dict(line.strip().split('=', 1) for line in f if '=' in line)
+            return dict(line.strip().split("=", 1) for line in f if "=" in line)
     except OSError:
         return None
 
@@ -60,37 +61,41 @@ def code_version(checkout=None, image=(IMAGE_LUCID_DIR, IMAGE_VERSIONS)):
     checkout = os.path.realpath(checkout or base_dir_path())
 
     def git(*args):
-        return subprocess.check_output(['git', '-C', checkout, *args],
-                                       stderr=subprocess.DEVNULL).decode().strip()
+        return (
+            subprocess.check_output(["git", "-C", checkout, *args], stderr=subprocess.DEVNULL)
+            .decode()
+            .strip()
+        )
+
     try:
-        top = git('rev-parse', '--show-toplevel')
+        top = git("rev-parse", "--show-toplevel")
     except (subprocess.CalledProcessError, OSError):
         top = None
     # a tree that is merely inside some other repository is not that repository's code
     if top is not None and os.path.realpath(top) == checkout:
         try:
-            commit = git('rev-parse', 'HEAD')
+            commit = git("rev-parse", "HEAD")
         except (subprocess.CalledProcessError, OSError):
-            return 'unknown', None, 'unknown'
+            return "unknown", None, "unknown"
         try:
-            dirty = bool(git('status', '--porcelain', '--untracked-files=no'))
+            dirty = bool(git("status", "--porcelain", "--untracked-files=no"))
         except (subprocess.CalledProcessError, OSError):
             dirty = None
         try:
-            ref = ','.join(git('tag', '--points-at', 'HEAD').split()) or 'none'
+            ref = ",".join(git("tag", "--points-at", "HEAD").split()) or "none"
         except (subprocess.CalledProcessError, OSError):
-            ref = 'unknown'
+            ref = "unknown"
         return commit, dirty, ref
 
     image_dir, versions = image
     if checkout != os.path.realpath(image_dir):
-        return 'unknown', None, 'unknown'
+        return "unknown", None, "unknown"
     record = _version_record(versions)
     if record is None:
-        return 'unknown', None, 'unknown'
-    sha = record.get('lucid_sha', '')
-    dirty = {'true': True, 'false': False}.get(record.get('lucid_dirty'))
-    return (sha if _SHA.fullmatch(sha) else 'unknown'), dirty, record.get('lucid_ref') or 'unknown'
+        return "unknown", None, "unknown"
+    sha = record.get("lucid_sha", "")
+    dirty = {"true": True, "false": False}.get(record.get("lucid_dirty"))
+    return (sha if _SHA.fullmatch(sha) else "unknown"), dirty, record.get("lucid_ref") or "unknown"
 
 
 def photonsim_version(binary, image=(IMAGE_PHOTONSIM_DIR, IMAGE_VERSIONS)):
@@ -101,22 +106,25 @@ def photonsim_version(binary, image=(IMAGE_PHOTONSIM_DIR, IMAGE_VERSIONS)):
     anywhere else records nothing about itself, so every value is then ``'unknown'``, as it is for
     ``binary=None`` (PhotonSim did not run in this process).
     """
-    out = dict(photonsim_ref='unknown', photonsim_commit='unknown', geant4_version='unknown')
+    out = dict(photonsim_ref="unknown", photonsim_commit="unknown", geant4_version="unknown")
     image_dir, versions = image
     root = os.path.realpath(image_dir)
     if binary is None or os.path.commonpath([os.path.realpath(binary), root]) != root:
         return out
     record = _version_record(versions) or {}
-    sha = record.get('photonsim_sha', '')
-    out.update(photonsim_ref=record.get('photonsim_ref') or 'unknown',
-               photonsim_commit=sha if _SHA.fullmatch(sha) else 'unknown',
-               geant4_version=record.get('geant4') or 'unknown')
+    sha = record.get("photonsim_sha", "")
+    out.update(
+        photonsim_ref=record.get("photonsim_ref") or "unknown",
+        photonsim_commit=sha if _SHA.fullmatch(sha) else "unknown",
+        geant4_version=record.get("geant4") or "unknown",
+    )
     return out
 
 
 def git_commit():
     """The commit of :func:`code_version`: ``'unknown'`` when it is not known."""
     return code_version()[0]
+
 
 def spherical_to_cartesian(theta, phi, xp=jnp):
     """Unit direction ``[x, y, z]`` at polar angle ``theta`` (from +z) and azimuth ``phi`` (from +x
@@ -166,10 +174,14 @@ def rotation_onto(a, b, xp=jnp):
     antipodal = bisector_norm2 == 0
     helper = xp.where(xp.abs(a[0]) < 0.9, xp.array([1.0, 0.0, 0.0]), xp.array([0.0, 1.0, 0.0]))
     off_a = helper - xp.dot(helper, a) * a
-    normal = xp.where(antipodal, off_a / xp.linalg.norm(off_a),
-                      bisector / xp.sqrt(xp.where(antipodal, 1.0, bisector_norm2)))
+    normal = xp.where(
+        antipodal,
+        off_a / xp.linalg.norm(off_a),
+        bisector / xp.sqrt(xp.where(antipodal, 1.0, bisector_norm2)),
+    )
     eye = xp.eye(3)
     return (eye - 2 * xp.outer(normal, normal)) @ (eye - 2 * xp.outer(a, a))
+
 
 def sparse_to_full(sparse_indices, sparse_values, full_size):
     """Convert sparse representation back to full array with zeros.
@@ -228,11 +240,9 @@ def smear_charges_SK_like(counts, key=None):
     if key is None:
         raise ValueError("key must be provided for reproducibility.")
 
-    #Define sigma according to the count range
+    # Define sigma according to the count range
     sigma = jnp.where(
-        counts < 20,
-        counts * 0.012,
-        jnp.where(counts < 130, counts * 0.0075, counts * 0.005)
+        counts < 20, counts * 0.012, jnp.where(counts < 130, counts * 0.0075, counts * 0.005)
     )
 
     # Apply Gaussian smearing
@@ -277,16 +287,15 @@ def smear_charges_spe(counts, key=None, spe=None):
         raise ValueError("key must be provided for reproducibility.")
     if spe is None:
         from lucid.simulation.digitizer import _SPE_SK as spe
-    w, mu, sig, tau, fit_mean = (spe["w"], spe["mu"], spe["sig"],
-                                 spe["tau"], spe["fit_mean"])
+    w, mu, sig, tau, fit_mean = (spe["w"], spe["mu"], spe["sig"], spe["tau"], spe["fit_mean"])
 
     # Photoelectron count per sensor (>=1 so the gamma/normal draws are well
     # defined; empty sensors are masked out by the caller's nonzero gate).
     n = jnp.maximum(1.0, jnp.round(counts)).astype(jnp.float32)
     k_key, g_key, t_key = jax.random.split(key, 3)
 
-    k = jax.random.binomial(k_key, n, 1.0 - w)            # Gaussian-core pe count
-    nmk = n - k                                           # exponential-tail pe count
+    k = jax.random.binomial(k_key, n, 1.0 - w)  # Gaussian-core pe count
+    nmk = n - k  # exponential-tail pe count
 
     # Sum of k Gaussians = Normal(k*mu, sqrt(k)*sig); Sum of nmk Exp(tau) = Gamma.
     gauss = k * mu + jnp.sqrt(k) * sig * jax.random.normal(g_key, shape=counts.shape)
@@ -301,6 +310,7 @@ def smear_charges_spe(counts, key=None, spe=None):
 # ---------------------------------------------------------------------------
 # Shared math helpers (moved from generate.py during Phase 2.2 refactor)
 # ---------------------------------------------------------------------------
+
 
 def normalize(v, epsilon=1e-8):
     """Normalize a vector (or batch of vectors) with numerical stability.

@@ -20,24 +20,24 @@ Both stubs are trivial on purpose: the expected file contents then follow by
 hand from the event built in each test (photon counts, first-arrival times,
 segment geometry), which is the oracle. No SIREN, no GPU, no downloaded data.
 """
+
 import json
 import sys
 import types
 
 import h5py
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import jax.numpy as jnp
-
+from lucid.dataset.schema import EMISSION_PROCESS_DARK
 from lucid.geometry.cylinder import Cylinder
 from lucid.production.dataprod import drivers
 from lucid.simulation.readout import Readout
 from lucid.simulation.trigger import TriggerConfig, find_trigger_gates
 from lucid.sources.placement import detector_bounds, random_rotation, sample_vertex
-from lucid.dataset.schema import EMISSION_PROCESS_DARK
 
-TOF_NS = np.float32(7.25)        # stub time of flight; exact in float32
+TOF_NS = np.float32(7.25)  # stub time of flight; exact in float32
 CHER_COS = np.cos(np.deg2rad(42.0))
 R_DET, H_DET, S_RADIUS = 2.0, 4.0, 0.04
 
@@ -74,8 +74,10 @@ class _Tree:
 
 class _RootFile:
     def __init__(self, events):
-        self.trees = {"OpticalPhotons": _Tree([e["tree"] for e in events]),
-                      "OpticalPhotonsRaw": _Tree([c for e in events for c in e["chunks"]])}
+        self.trees = {
+            "OpticalPhotons": _Tree([e["tree"] for e in events]),
+            "OpticalPhotonsRaw": _Tree([c for e in events for c in e["chunks"]]),
+        }
 
     def __getitem__(self, name):
         return self.trees[name]
@@ -106,6 +108,7 @@ def fake_root(monkeypatch):
                 c["EventID"] = i
         files[str(path)] = _RootFile(events)
         return str(path)
+
     return _register
 
 
@@ -113,10 +116,11 @@ def _cone(axis, n):
     """``n`` unit vectors at 42 degrees around ``axis``, evenly spread in azimuth."""
     a = np.asarray(axis, float) / np.linalg.norm(axis)
     h = np.array([0.0, 0.0, 1.0]) if abs(a[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
-    u = np.cross(a, h); u /= np.linalg.norm(u)
+    u = np.cross(a, h)
+    u /= np.linalg.norm(u)
     v = np.cross(a, u)
     phi = 2 * np.pi * (np.arange(n) + 0.5) / n
-    s = np.sqrt(1 - CHER_COS ** 2)
+    s = np.sqrt(1 - CHER_COS**2)
     return CHER_COS * a + s * (np.cos(phi)[:, None] * u + np.sin(phi)[:, None] * v)
 
 
@@ -153,15 +157,22 @@ def _event(tracks, segments, split_chunks=False):
     pieces = [slice(0, len(ph_t))]
     if split_chunks and len(ph_t) > 1:
         k = len(ph_t) // 2
-        pieces = [slice(k, None), slice(0, k)]     # stored out of order on purpose
+        pieces = [slice(k, None), slice(0, k)]  # stored out of order on purpose
     chunks = []
     for sl in pieces:
-        chunks.append({
-            "ChunkStartID": sl.start,
-            "PhotonPosX": mm[sl, 0], "PhotonPosY": mm[sl, 1], "PhotonPosZ": mm[sl, 2],
-            "PhotonDirX": ph_d[sl, 0], "PhotonDirY": ph_d[sl, 1], "PhotonDirZ": ph_d[sl, 2],
-            "PhotonTime": ph_t[sl], "PhotonWavelength": np.full(len(ph_t[sl]), 400.0),
-        }) if len(ph_t) else None
+        chunks.append(
+            {
+                "ChunkStartID": sl.start,
+                "PhotonPosX": mm[sl, 0],
+                "PhotonPosY": mm[sl, 1],
+                "PhotonPosZ": mm[sl, 2],
+                "PhotonDirX": ph_d[sl, 0],
+                "PhotonDirY": ph_d[sl, 1],
+                "PhotonDirZ": ph_d[sl, 2],
+                "PhotonTime": ph_t[sl],
+                "PhotonWavelength": np.full(len(ph_t[sl]), 400.0),
+            }
+        ) if len(ph_t) else None
     chunks = [c for c in chunks if c is not None]
     tid = np.array([t[0] for t in tracks], np.int64)
     first = {}
@@ -172,31 +183,49 @@ def _event(tracks, segments, split_chunks=False):
     tree = {
         "PrimaryEnergy": float(tracks[0][3]),
         "TrackInfo_TrackID": tid,
-        "TrackInfo_PosX": tpos[:, 0], "TrackInfo_PosY": tpos[:, 1], "TrackInfo_PosZ": tpos[:, 2],
-        "TrackInfo_DirX": tdir[:, 0], "TrackInfo_DirY": tdir[:, 1], "TrackInfo_DirZ": tdir[:, 2],
+        "TrackInfo_PosX": tpos[:, 0],
+        "TrackInfo_PosY": tpos[:, 1],
+        "TrackInfo_PosZ": tpos[:, 2],
+        "TrackInfo_DirX": tdir[:, 0],
+        "TrackInfo_DirY": tdir[:, 1],
+        "TrackInfo_DirZ": tdir[:, 2],
         "TrackInfo_Energy": np.array([t[3] for t in tracks], float),
         "TrackInfo_Time": np.zeros(len(tracks)),
         "TrackInfo_ParentTrackID": np.array([t[1] for t in tracks], np.int64),
         "TrackInfo_PDG": np.array([t[2] for t in tracks], np.int64),
         "TrackInfo_CreatorProcess": [t[4] for t in tracks],
         "NSegments": len(segments),
-        "Segment_StartX": seg_start[:, 0] * 1000, "Segment_StartY": seg_start[:, 1] * 1000,
+        "Segment_StartX": seg_start[:, 0] * 1000,
+        "Segment_StartY": seg_start[:, 1] * 1000,
         "Segment_StartZ": seg_start[:, 2] * 1000,
-        "Segment_EndX": seg_end[:, 0] * 1000, "Segment_EndY": seg_end[:, 1] * 1000,
+        "Segment_EndX": seg_end[:, 0] * 1000,
+        "Segment_EndY": seg_end[:, 1] * 1000,
         "Segment_EndZ": seg_end[:, 2] * 1000,
-        "Segment_DirX": seg_dir[:, 0], "Segment_DirY": seg_dir[:, 1], "Segment_DirZ": seg_dir[:, 2],
+        "Segment_DirX": seg_dir[:, 0],
+        "Segment_DirY": seg_dir[:, 1],
+        "Segment_DirZ": seg_dir[:, 2],
         "Segment_Edep": 2.0 * np.linalg.norm(d, axis=1),
         "Segment_Time": np.array([s[3] for s in segments], float),
         "Segment_BetaStart": np.full(len(segments), 0.99),
         "Segment_NCherenkov": np.array([s[4] for s in segments], np.int64),
         "Segment_TrackID": np.array([s[0] for s in segments], np.int64),
         "Photon_SegmentIndex": ph_seg,
-        "RooTrackerEntryID": -1, "IncomingNuPdg": 0, "IncomingNuKE": 0.0,
+        "RooTrackerEntryID": -1,
+        "IncomingNuPdg": 0,
+        "IncomingNuKE": 0.0,
     }
-    truth = dict(origins=ph_o, dirs=ph_d, times=ph_t, seg=ph_seg, frac=ph_frac,
-                 seg_start=seg_start, seg_end=seg_end, seg_dir=seg_dir,
-                 seg_tid=np.array([s[0] for s in segments]),
-                 seg_nch=np.array([s[4] for s in segments]))
+    truth = dict(
+        origins=ph_o,
+        dirs=ph_d,
+        times=ph_t,
+        seg=ph_seg,
+        frac=ph_frac,
+        seg_start=seg_start,
+        seg_end=seg_end,
+        seg_dir=seg_dir,
+        seg_tid=np.array([s[0] for s in segments]),
+        seg_nch=np.array([s[4] for s in segments]),
+    )
     return {"tree": tree, "chunks": chunks, "truth": truth}
 
 
@@ -215,15 +244,18 @@ class _StubSimulator:
     def __init__(self, detector):
         self.sensors = np.asarray(detector.all_points, float)
         self.det_geom = types.SimpleNamespace(
-            detector_type="cylinder", detector=detector, sensor_points=detector.all_points,
-            medium=types.SimpleNamespace(material="water", emission_processes=("cherenkov",)))
+            detector_type="cylinder",
+            detector=detector,
+            sensor_points=detector.all_points,
+            medium=types.SimpleNamespace(material="water", emission_processes=("cherenkov",)),
+        )
         self.reflection_model = "scalar_mix"
-        self.default_detector_params = object()     # baked in: called as (track, key, photons)
+        self.default_detector_params = object()  # baked in: called as (track, key, photons)
         self.calls = []
 
     def __call__(self, key, photonsim_data):
         n = int(photonsim_data["N"])
-        o_all = np.asarray(photonsim_data["photon_origins"], np.float64)     # metres
+        o_all = np.asarray(photonsim_data["photon_origins"], np.float64)  # metres
         b = o_all.shape[0]
         o = o_all[:n]
         dirs = np.asarray(photonsim_data["photon_directions"], np.float64)[:n]
@@ -232,9 +264,12 @@ class _StubSimulator:
         if n:
             self.calls.append(dict(origins=o, dirs=dirs, times=t))
         ns = self.sensors.shape[0]
-        qe_w = np.zeros(b, np.float32); qe_w[:n] = 1.0
-        qe_t = np.full(b, np.inf, np.float32); qe_t[:n] = t + TOF_NS
-        sen_full = np.zeros(b, np.int32); sen_full[:n] = sen
+        qe_w = np.zeros(b, np.float32)
+        qe_w[:n] = 1.0
+        qe_t = np.full(b, np.inf, np.float32)
+        qe_t[:n] = t + TOF_NS
+        sen_full = np.zeros(b, np.int32)
+        sen_full[:n] = sen
         pe = np.bincount(sen, minlength=ns).astype(np.float32)
         tmin = np.full(ns, np.inf, np.float32)
         np.minimum.at(tmin, sen, t + TOF_NS)
@@ -257,13 +292,18 @@ def _read(path):
     out = {}
     with h5py.File(path, "r") as f:
         out["config"] = dict(f["config"].attrs)
-        f.visititems(lambda name, obj: out.__setitem__(name, obj[()])
-                     if isinstance(obj, h5py.Dataset) else None)
+        f.visititems(
+            lambda name, obj: (
+                out.__setitem__(name, obj[()]) if isinstance(obj, h5py.Dataset) else None
+            )
+        )
     return out
 
 
 def _files(out_dir, idx=0):
-    return {k: _read(out_dir / k / f"wc_{k}_{idx:04d}.h5") for k in ("sensor", "hits", "step", "labl")}
+    return {
+        k: _read(out_dir / k / f"wc_{k}_{idx:04d}.h5") for k in ("sensor", "hits", "step", "labl")
+    }
 
 
 def _check_digit_fk(sensor, hits, step, ev="event_000"):
@@ -276,7 +316,8 @@ def _check_digit_fk(sensor, hits, step, ev="event_000"):
     s_d, s_s = step[f"{ev}/sensor_hits/digit_idx"], step[f"{ev}/sensor_hits/sensor_idx"]
     np.testing.assert_array_equal(s_s, sd_s[s_d])
     np.testing.assert_allclose(
-        np.bincount(s_d, weights=step[f"{ev}/sensor_hits/PE"], minlength=sd_s.size), sd_pe)
+        np.bincount(s_d, weights=step[f"{ev}/sensor_hits/PE"], minlength=sd_s.size), sd_pe
+    )
 
 
 def _check_hits_equal_step_rollup(hits, step, labl, ev="event_000"):
@@ -286,17 +327,35 @@ def _check_hits_equal_step_rollup(hits, step, labl, ev="event_000"):
     are minima. Dark rows (no segment) are excluded from the hits side.
     """
     seg_part = labl[f"{ev}/per_track/particle_idx"][step[f"{ev}/track_idx"]]
-    sh = {k: step[f"{ev}/sensor_hits/{k}"] for k in
-          ("segment_idx", "sensor_idx", "digit_idx", "emission_process", "PE", "T", "T_reco")}
+    sh = {
+        k: step[f"{ev}/sensor_hits/{k}"]
+        for k in ("segment_idx", "sensor_idx", "digit_idx", "emission_process", "PE", "T", "T_reco")
+    }
     roll = {}
     for j, s, d, e, pe, t, tr in zip(*sh.values()):
         key = (int(seg_part[j]), int(s), int(d), int(e))
         r = roll.setdefault(key, [0.0, np.inf, np.inf])
-        r[0] += pe; r[1] = min(r[1], t); r[2] = min(r[2], tr)
+        r[0] += pe
+        r[1] = min(r[1], t)
+        r[2] = min(r[2], tr)
     dark = hits[f"{ev}/emission_process"] == EMISSION_PROCESS_DARK
-    got = {(int(p), int(s), int(d), int(e)): [pe, t, tr] for p, s, d, e, pe, t, tr in zip(
-        *(hits[f"{ev}/{k}"][~dark] for k in
-          ("particle_idx", "sensor_idx", "digit_idx", "emission_process", "PE", "T", "T_reco")))}
+    got = {
+        (int(p), int(s), int(d), int(e)): [pe, t, tr]
+        for p, s, d, e, pe, t, tr in zip(
+            *(
+                hits[f"{ev}/{k}"][~dark]
+                for k in (
+                    "particle_idx",
+                    "sensor_idx",
+                    "digit_idx",
+                    "emission_process",
+                    "PE",
+                    "T",
+                    "T_reco",
+                )
+            )
+        )
+    }
     assert set(got) == set(roll)
     for k in got:
         assert got[k][0] == pytest.approx(roll[k][0], rel=1e-6)
@@ -312,25 +371,28 @@ def _muon_michel_event():
     Segment containment by construction (R = 2 m, |z| <= 2 m, vertex at origin):
     muon [in, in, straddles (start in, end out), out]; Michel [in, in].
     """
-    tracks = [(1, 0, 13, 500.0, "primary"),
-              (2, 1, 2112, 5.0, "muMinusCaptureAtRest"),
-              (3, 1, 11, 30.0, "Decay")]
+    tracks = [
+        (1, 0, 13, 500.0, "primary"),
+        (2, 1, 2112, 5.0, "muMinusCaptureAtRest"),
+        (3, 1, 11, 30.0, "Decay"),
+    ]
     y, z = 0.1, 0.2
-    segs = [(1, (0.00, y, z), (0.75, y, z), 0.0, 6),
-            (1, (0.75, y, z), (1.50, y, z), 2.5, 6),
-            (1, (1.50, y, z), (2.25, y, z), 5.0, 6),
-            (1, (2.25, y, z), (3.00, y, z), 7.5, 6),
-            (2, (0.3, -0.5, 0.1), (0.4, -0.5, 0.1), 1.0, 0),
-            (2, (0.4, -0.5, 0.1), (0.5, -0.5, 0.1), 1.5, 0),
-            (3, (0.5, -0.4, -0.3), (0.5, -0.1, -0.3), 2000.0, 8),
-            (3, (0.5, -0.1, -0.3), (0.5, 0.2, -0.3), 2001.0, 8)]
+    segs = [
+        (1, (0.00, y, z), (0.75, y, z), 0.0, 6),
+        (1, (0.75, y, z), (1.50, y, z), 2.5, 6),
+        (1, (1.50, y, z), (2.25, y, z), 5.0, 6),
+        (1, (2.25, y, z), (3.00, y, z), 7.5, 6),
+        (2, (0.3, -0.5, 0.1), (0.4, -0.5, 0.1), 1.0, 0),
+        (2, (0.4, -0.5, 0.1), (0.5, -0.5, 0.1), 1.5, 0),
+        (3, (0.5, -0.4, -0.3), (0.5, -0.1, -0.3), 2000.0, 8),
+        (3, (0.5, -0.1, -0.3), (0.5, 0.2, -0.3), 2001.0, 8),
+    ]
     return _event(tracks, segs, split_chunks=True)
 
 
 def _dim_muon_event():
     """Two photons: below a 4-hit trigger, so the event is dropped."""
-    return _event([(1, 0, 13, 300.0, "primary")],
-                  [(1, (0.0, 0.3, 0.0), (0.5, 0.3, 0.0), 0.0, 2)])
+    return _event([(1, 0, 13, 300.0, "primary")], [(1, (0.0, 0.3, 0.0), (0.5, 0.3, 0.0), 0.0, 2)])
 
 
 def _expected_digits(truth, sim, t0):
@@ -347,7 +409,9 @@ def _expected_digits(truth, sim, t0):
         cluster = int(a // 1000)
         key = (int(s), cluster)
         r = rows.setdefault(key, [np.inf, 0, set()])
-        r[0] = min(r[0], float(a)); r[1] += 1; r[2].add(int(p))
+        r[0] = min(r[0], float(a))
+        r[1] += 1
+        r[2].add(int(p))
     return {k: (np.float64(v[0]) + np.float64(t0), v[1], v[2]) for k, v in rows.items()}
 
 
@@ -363,13 +427,23 @@ def test_single_vertex_digit_times_sit_on_the_absolute_tdc_grid(tmp_path, fake_r
     put every digit on t0 + k * 0.4 ns, so each event's digit times gave away t0 modulo 0.4 ns."""
     path = fake_root(tmp_path / "ps.root", [_muon_michel_event()])
     drivers.run_particles(
-        _StubSimulator(detector), path, output_dir=str(tmp_path / "out"), file_index=0,
-        n_events=1, master_seed=7, job_id=1, readout=Readout.from_blocks(SKI_NO_DARK, TRIG),
-        dataset_name="t", apply_smearing=True, apply_translation=False, pad_size_buckets=(64,))
+        _StubSimulator(detector),
+        path,
+        output_dir=str(tmp_path / "out"),
+        file_index=0,
+        n_events=1,
+        master_seed=7,
+        job_id=1,
+        readout=Readout.from_blocks(SKI_NO_DARK, TRIG),
+        dataset_name="t",
+        apply_smearing=True,
+        apply_translation=False,
+        pad_size_buckets=(64,),
+    )
     f = _files(tmp_path / "out")
     t0 = float(f["labl"]["event_000/per_event/t0"])
     steps = np.asarray(f["sensor"]["event_000/T"], np.float64) / 0.4
-    assert steps.size > 1 and abs(t0 / 0.4 - round(t0 / 0.4)) > 1e-3   # t0 itself is off-grid
+    assert steps.size > 1 and abs(t0 / 0.4 - round(t0 / 0.4)) > 1e-3  # t0 itself is off-grid
     np.testing.assert_allclose(steps, np.round(steps), atol=1e-6)
 
 
@@ -378,9 +452,19 @@ def test_particles_driver_writes_what_the_event_implies(tmp_path, fake_root, det
     path = fake_root(tmp_path / "ps.root", [ev0, ev1])
     sim = _StubSimulator(detector)
     drivers.run_particles(
-        sim, path, output_dir=str(tmp_path / "out"), file_index=0, n_events=2, master_seed=7,
-        job_id=1, readout=Readout.from_blocks(SKI_NO_DARK, TRIG), dataset_name="t",
-        apply_smearing=False, apply_translation=False, pad_size_buckets=(64,))
+        sim,
+        path,
+        output_dir=str(tmp_path / "out"),
+        file_index=0,
+        n_events=2,
+        master_seed=7,
+        job_id=1,
+        readout=Readout.from_blocks(SKI_NO_DARK, TRIG),
+        dataset_name="t",
+        apply_smearing=False,
+        apply_translation=False,
+        pad_size_buckets=(64,),
+    )
     f = _files(tmp_path / "out")
     sensor, hits, step, labl = f["sensor"], f["hits"], f["step"], f["labl"]
 
@@ -397,7 +481,7 @@ def test_particles_driver_writes_what_the_event_implies(tmp_path, fake_root, det
     # in global photon order although the chunks were stored out of order
     tr = ev0["truth"]
     seen = sim.photons()
-    np.testing.assert_allclose(seen["origins"][:len(tr["times"])], tr["origins"], atol=1e-6)
+    np.testing.assert_allclose(seen["origins"][: len(tr["times"])], tr["origins"], atol=1e-6)
 
     t0 = labl["event_000/per_interaction/t0"]
     assert t0.shape == (1,) and abs(t0[0]) <= 250.0
@@ -406,9 +490,12 @@ def test_particles_driver_writes_what_the_event_implies(tmp_path, fake_root, det
     # sensor.h5: one digit per (sensor, cluster), T = first arrival + t0 in
     # float64 (a float32 shift would be off by ~1e-5 ns at |t0| ~ 100 ns)
     exp = _expected_digits(tr, sim, t0[0])
-    got = {(int(s), int((t - t0[0]) // 1000)): (t, pe)
-           for s, t, pe in zip(sensor["event_000/sensor_idx"], sensor["event_000/T"],
-                               sensor["event_000/PE"])}
+    got = {
+        (int(s), int((t - t0[0]) // 1000)): (t, pe)
+        for s, t, pe in zip(
+            sensor["event_000/sensor_idx"], sensor["event_000/T"], sensor["event_000/PE"]
+        )
+    }
     assert set(got) == set(exp)
     for k, (t, pe) in got.items():
         assert abs(t - exp[k][0]) < 1e-9, k
@@ -425,10 +512,11 @@ def test_particles_driver_writes_what_the_event_implies(tmp_path, fake_root, det
         ts = np.sort([v[0] for k, v in exp.items() if k[1] == cluster])
         n, thr = ts.size, TRIG["n_thr"]
         assert pw_s[w] == pytest.approx(ts[thr - 1] - TRIG["pad_before_ns"], abs=1e-9)
-        assert pw_e[w] == pytest.approx(ts[n - thr] + TRIG["window_ns"] + TRIG["pad_after_ns"],
-                                        abs=1e-9)
+        assert pw_e[w] == pytest.approx(
+            ts[n - thr] + TRIG["window_ns"] + TRIG["pad_after_ns"], abs=1e-9
+        )
         assert off[w + 1] - off[w] == n
-        win_t = sensor["event_000/T"][off[w]:off[w + 1]]
+        win_t = sensor["event_000/T"][off[w] : off[w + 1]]
         assert ((win_t >= pw_s[w]) & (win_t <= pw_e[w])).all()
 
     # hits.h5: per (particle, sensor, digit) photon counts; particle 0 = muon (1,),
@@ -441,8 +529,9 @@ def test_particles_driver_writes_what_the_event_implies(tmp_path, fake_root, det
     for s, p in zip(sen, part):
         exp_counts[(int(p), int(s))] = exp_counts.get((int(p), int(s)), 0) + 1
     got_counts = {}
-    for p, s, pe in zip(hits["event_000/particle_idx"], hits["event_000/sensor_idx"],
-                        hits["event_000/PE"]):
+    for p, s, pe in zip(
+        hits["event_000/particle_idx"], hits["event_000/sensor_idx"], hits["event_000/PE"]
+    ):
         got_counts[(int(p), int(s))] = got_counts.get((int(p), int(s)), 0) + pe
     assert got_counts == exp_counts
     assert hits["event_000/T"].dtype == np.float64
@@ -451,23 +540,33 @@ def test_particles_driver_writes_what_the_event_implies(tmp_path, fake_root, det
     # in m; per-segment containment is AND of both endpoints
     keep = tr["seg_tid"] != 2
     np.testing.assert_allclose(
-        np.stack([step["event_000/start_x"], step["event_000/start_y"], step["event_000/start_z"]], 1),
-        tr["seg_start"][keep], atol=1e-6)
+        np.stack(
+            [step["event_000/start_x"], step["event_000/start_y"], step["event_000/start_z"]], 1
+        ),
+        tr["seg_start"][keep],
+        atol=1e-6,
+    )
     np.testing.assert_allclose(
         np.stack([step["event_000/end_x"], step["event_000/end_y"], step["event_000/end_z"]], 1),
-        tr["seg_end"][keep], atol=1e-6)
+        tr["seg_end"][keep],
+        atol=1e-6,
+    )
     np.testing.assert_array_equal(step["event_000/track_idx"], [0, 0, 0, 0, 1, 1])
     np.testing.assert_array_equal(step["event_000/contained"], [1, 1, 0, 0, 1, 1])
-    np.testing.assert_allclose(step["event_000/time"] - t0[0], [0, 2.5, 5, 7.5, 2000, 2001],
-                               atol=1e-9)
+    np.testing.assert_allclose(
+        step["event_000/time"] - t0[0], [0, 2.5, 5, 7.5, 2000, 2001], atol=1e-9
+    )
     # step sensor_hits: segment index in the filtered table (raw 6, 7 -> 4, 5)
     raw_to_filt = np.cumsum(keep) - 1
     exp_seg = {}
     for s, j in zip(sen, tr["seg"]):
         exp_seg[(int(raw_to_filt[j]), int(s))] = exp_seg.get((int(raw_to_filt[j]), int(s)), 0) + 1
     got_seg = {}
-    for j, s, pe in zip(step["event_000/sensor_hits/segment_idx"],
-                        step["event_000/sensor_hits/sensor_idx"], step["event_000/sensor_hits/PE"]):
+    for j, s, pe in zip(
+        step["event_000/sensor_hits/segment_idx"],
+        step["event_000/sensor_hits/sensor_idx"],
+        step["event_000/sensor_hits/PE"],
+    ):
         got_seg[(int(j), int(s))] = got_seg.get((int(j), int(s)), 0) + pe
     assert got_seg == exp_seg
 
@@ -483,8 +582,14 @@ def test_particles_driver_writes_what_the_event_implies(tmp_path, fake_root, det
     assert not labl["event_000/per_event/contained"]
     # untranslated, the event stays at the vertex PhotonSim recorded: the muon's start
     np.testing.assert_allclose(
-        [labl["event_000/per_interaction/vertex_x"][0], labl["event_000/per_interaction/vertex_y"][0],
-         labl["event_000/per_interaction/vertex_z"][0]], tr["seg_start"][0], atol=1e-7)
+        [
+            labl["event_000/per_interaction/vertex_x"][0],
+            labl["event_000/per_interaction/vertex_y"][0],
+            labl["event_000/per_interaction/vertex_z"][0],
+        ],
+        tr["seg_start"][0],
+        atol=1e-7,
+    )
 
 
 def test_rotation_and_translation_keep_photons_on_their_segments(tmp_path, fake_root, detector):
@@ -500,26 +605,40 @@ def test_rotation_and_translation_keep_photons_on_their_segments(tmp_path, fake_
     path = fake_root(tmp_path / "ps.root", [ev])
     sim = _StubSimulator(detector)
     drivers.run_particles(
-        sim, path, output_dir=str(tmp_path / "out"), file_index=0, n_events=1, master_seed=11,
-        job_id=1, readout=Readout.from_blocks(SKI_NO_DARK), dataset_name="t",
-        apply_smearing=False, apply_translation=True, apply_rotation=True,
-        pad_size_buckets=(64,))
+        sim,
+        path,
+        output_dir=str(tmp_path / "out"),
+        file_index=0,
+        n_events=1,
+        master_seed=11,
+        job_id=1,
+        readout=Readout.from_blocks(SKI_NO_DARK),
+        dataset_name="t",
+        apply_smearing=False,
+        apply_translation=True,
+        apply_rotation=True,
+        pad_size_buckets=(64,),
+    )
     f = _files(tmp_path / "out")
     step, labl = f["step"], f["labl"]
     tr = ev["truth"]
     v = np.array([labl[f"event_000/per_interaction/vertex_{c}"][0] for c in "xyz"], float)
     assert np.hypot(v[0], v[1]) <= 0.9 * R_DET + 1e-6 and abs(v[2]) <= 0.9 * H_DET / 2 + 1e-6
-    assert np.linalg.norm(v) > 0.05                     # really translated
+    assert np.linalg.norm(v) > 0.05  # really translated
 
     st = np.stack([step[f"event_000/start_{c}"] for c in "xyz"], 1).astype(float)
     en = np.stack([step[f"event_000/end_{c}"] for c in "xyz"], 1).astype(float)
     dr = np.stack([step[f"event_000/dir_{c}"] for c in "xyz"], 1).astype(float)
     keep = tr["seg_tid"] != 2
     v0 = tr["seg_start"][0]
-    np.testing.assert_allclose(np.linalg.norm(st - v, axis=1),
-                               np.linalg.norm(tr["seg_start"][keep] - v0, axis=1), atol=1e-5)
-    np.testing.assert_allclose(np.linalg.norm(en - v, axis=1),
-                               np.linalg.norm(tr["seg_end"][keep] - v0, axis=1), atol=1e-5)
+    np.testing.assert_allclose(
+        np.linalg.norm(st - v, axis=1),
+        np.linalg.norm(tr["seg_start"][keep] - v0, axis=1),
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.linalg.norm(en - v, axis=1), np.linalg.norm(tr["seg_end"][keep] - v0, axis=1), atol=1e-5
+    )
     # the rotation really happened (the muon no longer points along +x)
     assert np.dot(dr[0], [1, 0, 0]) < 0.999
     # segment directions were rotated with the endpoints (dir is float16 on disk)
@@ -539,8 +658,7 @@ def test_rotation_and_translation_keep_photons_on_their_segments(tmp_path, fake_
 # pile-up driver
 # --------------------------------------------------------------------------
 def _single_muon_event():
-    return _event([(1, 0, 13, 400.0, "primary")],
-                  [(1, (0.0, 0.2, 0.1), (0.6, 0.2, 0.1), 0.0, 10)])
+    return _event([(1, 0, 13, 400.0, "primary")], [(1, (0.0, 0.2, 0.1), (0.6, 0.2, 0.1), 0.0, 10)])
 
 
 def test_pileup_driver_pools_two_vertices_into_shared_digits(tmp_path, fake_root, detector):
@@ -556,9 +674,19 @@ def test_pileup_driver_pools_two_vertices_into_shared_digits(tmp_path, fake_root
     pb = fake_root(tmp_path / "b.root", [ev_b])
     sim = _StubSimulator(detector)
     drivers.run_pileup(
-        sim, [pa, pb], ["particles", "genie"], output_dir=str(tmp_path / "out"), file_index=0,
-        n_events=1, master_seed=3, job_id=1, readout=Readout.from_blocks(), dataset_name="t",
-        apply_smearing=False, apply_translation=False)
+        sim,
+        [pa, pb],
+        ["particles", "genie"],
+        output_dir=str(tmp_path / "out"),
+        file_index=0,
+        n_events=1,
+        master_seed=3,
+        job_id=1,
+        readout=Readout.from_blocks(),
+        dataset_name="t",
+        apply_smearing=False,
+        apply_translation=False,
+    )
     f = _files(tmp_path / "out")
     sensor, hits, step, labl = f["sensor"], f["hits"], f["step"], f["labl"]
     t0 = labl["event_000/per_interaction/t0"]
@@ -591,8 +719,9 @@ def test_pileup_driver_pools_two_vertices_into_shared_digits(tmp_path, fake_root
 # supernova driver
 # --------------------------------------------------------------------------
 def _positron(n_photons, y0):
-    return _event([(1, 0, -11, 20.0, "primary")],
-                  [(1, (0.0, y0, 0.0), (0.0, y0 + 0.1, 0.05), 0.0, n_photons)])
+    return _event(
+        [(1, 0, -11, 20.0, "primary")], [(1, (0.0, y0, 0.0), (0.0, y0 + 0.1, 0.05), 0.0, n_photons)]
+    )
 
 
 def _distinct_sensors(ev, sim):
@@ -611,23 +740,39 @@ def test_supernova_driver_chunks_selects_and_keeps_float64_time(tmp_path, fake_r
       (float32 at 1e9 ns has a 64 ns step).
     """
     sim = _StubSimulator(detector)
-    evs = [_positron(6, 0.0), _positron(6, 0.3), _positron(6, -0.3), _positron(2, 0.6),
-           _positron(3, -0.6)]
+    evs = [
+        _positron(6, 0.0),
+        _positron(6, 0.3),
+        _positron(6, -0.3),
+        _positron(2, 0.6),
+        _positron(3, -0.6),
+    ]
     assert _distinct_sensors(evs[3], sim) == 2
     assert _distinct_sensors(evs[4], sim) == 3
     path = fake_root(tmp_path / "sn.root", evs)
     times_ms = [0.0, 150e-6, 300e-6, 500.0, 1000.0]
     drivers.run_supernova(
-        sim, path, times_ms, interaction_channels=[0, 1, 2, 3, 4],
-        sn_ordering="NMO", sn_transformation="AdiabaticMSW_NMO",
-        output_dir=str(tmp_path / "out"), file_index=0, master_seed=5, job_id=1,
-        readout=Readout.from_blocks(SKI_NO_DARK, None, min_physics_hits=3), dataset_name="t",
-        apply_smearing=False, apply_translation=False)
+        sim,
+        path,
+        times_ms,
+        interaction_channels=[0, 1, 2, 3, 4],
+        sn_ordering="NMO",
+        sn_transformation="AdiabaticMSW_NMO",
+        output_dir=str(tmp_path / "out"),
+        file_index=0,
+        master_seed=5,
+        job_id=1,
+        readout=Readout.from_blocks(SKI_NO_DARK, None, min_physics_hits=3),
+        dataset_name="t",
+        apply_smearing=False,
+        apply_translation=False,
+    )
     f = _files(tmp_path / "out")
     sensor, hits, step, labl = f["sensor"], f["hits"], f["step"], f["labl"]
 
-    np.testing.assert_array_equal(labl["event_000/per_interaction/interaction_channel"],
-                                  [0, 1, 2, 4])
+    np.testing.assert_array_equal(
+        labl["event_000/per_interaction/interaction_channel"], [0, 1, 2, 4]
+    )
     t0 = labl["event_000/per_interaction/t0"]
     np.testing.assert_allclose(t0 - t0[0], [0.0, 150.0, 300.0, 1e9], atol=1e-6)
     assert labl["event_000/per_window/window_start"].shape == (2,)
@@ -642,8 +787,8 @@ def test_supernova_driver_chunks_selects_and_keeps_float64_time(tmp_path, fake_r
     sen = _nearest_sensor(tr["origins"], tr["dirs"], sim.sensors)
     arr = tr["times"].astype(np.float32) + TOF_NS
     exp = {int(s): float(arr[sen == s].min()) for s in np.unique(sen)}
-    got_s = sensor["event_000/sensor_idx"][off[1]:]
-    got_t = sensor["event_000/T"][off[1]:]
+    got_s = sensor["event_000/sensor_idx"][off[1] :]
+    got_t = sensor["event_000/T"][off[1] :]
     assert {int(s) for s in got_s} == set(exp)
     for s, t in zip(got_s, got_t):
         assert abs((t - t0[3]) - exp[int(s)]) < 1e-6
@@ -666,10 +811,20 @@ def test_supernova_vertices_move_photons_and_segments_together(tmp_path, fake_ro
     evs = [_positron(6, 0.0), _positron(6, 0.3)]
     path = fake_root(tmp_path / "sn.root", evs)
     drivers.run_supernova(
-        sim, path, [0.0, 10.0], output_dir=str(tmp_path / "out"), file_index=0, master_seed=9,
-        sn_ordering="NMO", sn_transformation="AdiabaticMSW_NMO",
-        job_id=1, readout=Readout.from_blocks(SKI_NO_DARK, None, min_physics_hits=1),
-        dataset_name="t", apply_smearing=False, apply_translation=True)
+        sim,
+        path,
+        [0.0, 10.0],
+        output_dir=str(tmp_path / "out"),
+        file_index=0,
+        master_seed=9,
+        sn_ordering="NMO",
+        sn_transformation="AdiabaticMSW_NMO",
+        job_id=1,
+        readout=Readout.from_blocks(SKI_NO_DARK, None, min_physics_hits=1),
+        dataset_name="t",
+        apply_smearing=False,
+        apply_translation=True,
+    )
     f = _files(tmp_path / "out")
     step, labl = f["step"], f["labl"]
     vx = np.stack([labl[f"event_000/per_interaction/vertex_{c}"] for c in "xyz"], 1).astype(float)
@@ -680,13 +835,15 @@ def test_supernova_vertices_move_photons_and_segments_together(tmp_path, fake_ro
     st = np.stack([step[f"event_000/start_{c}"] for c in "xyz"], 1)
     np.testing.assert_allclose(st, vx, atol=1e-5)
     seen = sim.photons()["origins"]
-    exp = np.concatenate([e["truth"]["origins"] - e["truth"]["seg_start"][0] + vx[i]
-                          for i, e in enumerate(evs)])
+    exp = np.concatenate(
+        [e["truth"]["origins"] - e["truth"]["seg_start"][0] + vx[i] for i, e in enumerate(evs)]
+    )
     np.testing.assert_allclose(seen, exp, atol=1e-5)
 
 
 def test_a_supernova_burst_with_no_kept_interaction_writes_a_complete_empty_batch(
-        tmp_path, fake_root, monkeypatch, detector):
+    tmp_path, fake_root, monkeypatch, detector
+):
     """No interaction reaches min_physics_hits: the job wrote no files, so its own check and
     verify_jobs failed it, and the resubmission (same seeds) failed again, forever. Now it writes
     a 0-event batch flagged complete, which every reader of a batch accepts."""
@@ -701,14 +858,33 @@ def test_a_supernova_burst_with_no_kept_interaction_writes_a_complete_empty_batc
     (out / "output_job_000001.root").touch()
     fake_root(out / "output_job_000001.root", [_positron(6, 0.0), _positron(2, 0.3)])
     (out / "gntp_job_000001.times.json").write_text(json.dumps([0.0, 10.0]))
-    cfg = {"name": "t", "material": "water", "digitizer": SKI_NO_DARK, "trigger": None,
-           "primary_source": "supernova", "supernova": {"orderings": ["NMO"]},
-           "selection": {"mode": "min_physics_hits", "n": 50}}
+    cfg = {
+        "name": "t",
+        "material": "water",
+        "digitizer": SKI_NO_DARK,
+        "trigger": None,
+        "primary_source": "supernova",
+        "supernova": {"orderings": ["NMO"]},
+        "selection": {"mode": "min_physics_hits", "n": 50},
+    }
     (out / "cfg.json").write_text(json.dumps(cfg))
     monkeypatch.setattr(run_job, "_simulator", lambda name: _StubSimulator(detector))
-    rc = run_job.main(["--config", str(out / "cfg.json"), "--detector", "SK_like",
-                       "--output-dir", str(out), "--job-id", "1", "--master-seed", "3",
-                       "--skip-photonsim", "--skip-genie"])
+    rc = run_job.main(
+        [
+            "--config",
+            str(out / "cfg.json"),
+            "--detector",
+            "SK_like",
+            "--output-dir",
+            str(out),
+            "--job-id",
+            "1",
+            "--master-seed",
+            "3",
+            "--skip-photonsim",
+            "--skip-genie",
+        ]
+    )
     assert rc == run_job.EXIT_OK
 
     ok, messages = check_batch(out, 0, expected_dataset_name="t")
@@ -727,15 +903,19 @@ def test_a_supernova_burst_with_no_kept_interaction_writes_a_complete_empty_batc
     assert validations.load_primaries(out)[0].size == 0
 
 
-@pytest.mark.parametrize("orderings, flag, rc, stamped", [
-    (["IMO"], None, 0, ("IMO", "AdiabaticMSW_IMO")),
-    (["NMO", "noosc"], "noosc", 0, ("noosc", "NoTransformation")),
-    (["NMO", "IMO"], None, 10, None),       # which one? --sn-ordering must say
-    (["IMO"], "NMO", 10, None),             # not an ordering the config lists
-    (None, None, 10, None),                 # no ordering at all: no default
-])
+@pytest.mark.parametrize(
+    "orderings, flag, rc, stamped",
+    [
+        (["IMO"], None, 0, ("IMO", "AdiabaticMSW_IMO")),
+        (["NMO", "noosc"], "noosc", 0, ("noosc", "NoTransformation")),
+        (["NMO", "IMO"], None, 10, None),  # which one? --sn-ordering must say
+        (["IMO"], "NMO", 10, None),  # not an ordering the config lists
+        (None, None, 10, None),  # no ordering at all: no default
+    ],
+)
 def test_a_direct_supernova_job_runs_and_records_the_ordering_its_config_lists(
-        tmp_path, fake_root, monkeypatch, detector, orderings, flag, rc, stamped):
+    tmp_path, fake_root, monkeypatch, detector, orderings, flag, rc, stamped
+):
     """``lucid-run-job`` without ``--sn-ordering`` ran NMO whatever ``supernova.orderings`` said,
     and no batch recorded the ordering. It is now stamped as ``sn_ordering`` and
     ``sn_transformation`` on all four files."""
@@ -747,13 +927,31 @@ def test_a_direct_supernova_job_runs_and_records_the_ordering_its_config_lists(
     fake_root(out / "output_job_000001.root", [_positron(6, 0.0), _positron(6, 0.3)])
     (out / "gntp_job_000001.times.json").write_text(json.dumps([0.0, 10.0]))
     sn = {} if orderings is None else {"orderings": orderings}
-    cfg = {"name": "t", "material": "water", "digitizer": SKI_NO_DARK, "trigger": None,
-           "primary_source": "supernova", "supernova": sn,
-           "selection": {"mode": "min_physics_hits", "n": 1}}
+    cfg = {
+        "name": "t",
+        "material": "water",
+        "digitizer": SKI_NO_DARK,
+        "trigger": None,
+        "primary_source": "supernova",
+        "supernova": sn,
+        "selection": {"mode": "min_physics_hits", "n": 1},
+    }
     (out / "cfg.json").write_text(json.dumps(cfg))
     monkeypatch.setattr(run_job, "_simulator", lambda name: _StubSimulator(detector))
-    argv = ["--config", str(out / "cfg.json"), "--detector", "SK_like", "--output-dir", str(out),
-            "--job-id", "1", "--master-seed", "3", "--skip-photonsim", "--skip-genie"]
+    argv = [
+        "--config",
+        str(out / "cfg.json"),
+        "--detector",
+        "SK_like",
+        "--output-dir",
+        str(out),
+        "--job-id",
+        "1",
+        "--master-seed",
+        "3",
+        "--skip-photonsim",
+        "--skip-genie",
+    ]
     assert run_job.main(argv + (["--sn-ordering", flag] if flag else [])) == rc
     if stamped is None:
         assert not (out / "sensor").exists()
@@ -768,11 +966,18 @@ def test_a_direct_supernova_job_runs_and_records_the_ordering_its_config_lists(
 _PARTICLES = {"particles": [{"pdg": 13}], "energy_distribution": "uniform"}
 _PATHS = {
     "particles": ({**_PARTICLES}, ["output_job_000001.root"]),
-    "pileup": ({"pile_up": True, "vertices": [dict(_PARTICLES), dict(_PARTICLES)]},
-               ["output_job_000001_v0.root", "output_job_000001_v1.root"]),
-    "supernova": ({"primary_source": "supernova", "supernova": {"orderings": ["NMO"]},
-                   "selection": {"mode": "min_physics_hits", "n": 1}},
-                  ["output_job_000001.root"]),
+    "pileup": (
+        {"pile_up": True, "vertices": [dict(_PARTICLES), dict(_PARTICLES)]},
+        ["output_job_000001_v0.root", "output_job_000001_v1.root"],
+    ),
+    "supernova": (
+        {
+            "primary_source": "supernova",
+            "supernova": {"orderings": ["NMO"]},
+            "selection": {"mode": "min_physics_hits", "n": 1},
+        },
+        ["output_job_000001.root"],
+    ),
 }
 
 
@@ -780,39 +985,65 @@ def _run_job(tmp_path, fake_root, monkeypatch, detector, path, seed):
     """``lucid-run-job --skip-photonsim --skip-genie --master-seed seed`` on one path, with the
     stub kernel; returns the written sensor and hits files."""
     from lucid.production.dataprod import run_job
+
     extra, roots = _PATHS[path]
     out = tmp_path / f"{path}_{seed}"
     out.mkdir()
-    events = ([_positron(6, 0.0), _positron(6, 0.3)] if path == "supernova"
-              else [_single_muon_event()])
+    events = (
+        [_positron(6, 0.0), _positron(6, 0.3)] if path == "supernova" else [_single_muon_event()]
+    )
     for name in roots:
         (out / name).touch()
         fake_root(out / name, events)
     if path == "supernova":
         (out / "gntp_job_000001.times.json").write_text(json.dumps([0.0, 10.0]))
-    cfg = {"name": "t", "material": "water", "n_events_per_job": 1, "digitizer": SKI_NO_DARK,
-           "trigger": None, **extra}
+    cfg = {
+        "name": "t",
+        "material": "water",
+        "n_events_per_job": 1,
+        "digitizer": SKI_NO_DARK,
+        "trigger": None,
+        **extra,
+    }
     (out / "cfg.json").write_text(json.dumps(cfg))
     monkeypatch.setattr(run_job, "_simulator", lambda name: _StubSimulator(detector))
-    rc = run_job.main(["--config", str(out / "cfg.json"), "--detector", "SK_like",
-                       "--output-dir", str(out), "--job-id", "1", "--master-seed", str(seed),
-                       "--skip-photonsim", "--skip-genie"])
+    rc = run_job.main(
+        [
+            "--config",
+            str(out / "cfg.json"),
+            "--detector",
+            "SK_like",
+            "--output-dir",
+            str(out),
+            "--job-id",
+            "1",
+            "--master-seed",
+            str(seed),
+            "--skip-photonsim",
+            "--skip-genie",
+        ]
+    )
     assert rc == run_job.EXIT_OK
     f = _files(out)
     return {k: f[k] for k in ("sensor", "hits")}
 
 
 @pytest.mark.parametrize("path", sorted(_PATHS))
-def test_every_path_resolves_the_master_seed_mod_2_31_minus_1(tmp_path, fake_root, monkeypatch,
-                                                              detector, path):
+def test_every_path_resolves_the_master_seed_mod_2_31_minus_1(
+    tmp_path, fake_root, monkeypatch, detector, path
+):
     """A master seed and the same seed plus 2**31 - 1 are one seed on every path: the same smeared
     digits and the same recorded ``lucid_master_seed``. The kernel keys always reduced it; the
     single-vertex digitizer stream once took it unreduced."""
     small = 7
     a = _run_job(tmp_path, fake_root, monkeypatch, detector, path, small)
-    b = _run_job(tmp_path, fake_root, monkeypatch, detector, path, small + 2 ** 31 - 1)
+    b = _run_job(tmp_path, fake_root, monkeypatch, detector, path, small + 2**31 - 1)
     for kind in a:
-        assert a[kind]["config"]["lucid_master_seed"] == b[kind]["config"]["lucid_master_seed"] == small
+        assert (
+            a[kind]["config"]["lucid_master_seed"]
+            == b[kind]["config"]["lucid_master_seed"]
+            == small
+        )
         assert sorted(a[kind]) == sorted(b[kind])
         for k in a[kind]:
             if k != "config":
@@ -827,6 +1058,7 @@ def test_every_file_records_what_regenerates_it(tmp_path, fake_root, monkeypatch
     generator stream, the LUCiD one), so a batch can be rerun from its own metadata."""
     from lucid.production.dataprod.run_job import physics_config_path
     from lucid.production.dataprod.seeds import derive_subprocess_seeds
+
     _run_job(tmp_path, fake_root, monkeypatch, detector, path, 5)
     out = tmp_path / f"{path}_5"
     seeds = [derive_subprocess_seeds(5, 1, vertex_idx=v) for v in range(len(_PATHS[path][1]))]
@@ -834,9 +1066,11 @@ def test_every_file_records_what_regenerates_it(tmp_path, fake_root, monkeypatch
         c = f["config"]
         assert (c["master_seed"], c["lucid_master_seed"], c["job_id"]) == (5, 5, 1), kind
         np.testing.assert_array_equal(
-            c["photonsim_seeds"], [[s["photonsim_seed1"], s["photonsim_seed2"]] for s in seeds])
+            c["photonsim_seeds"], [[s["photonsim_seed1"], s["photonsim_seed2"]] for s in seeds]
+        )
         np.testing.assert_array_equal(  # sntools feeds the supernova stream; particle guns: none
-            c["generator_seeds"], [s["genie_seed"] if path == "supernova" else -1 for s in seeds])
+            c["generator_seeds"], [s["genie_seed"] if path == "supernova" else -1 for s in seeds]
+        )
         assert c["dataset_config"] == (out / "cfg.json").read_text()
         assert json.loads(c["run_job_args"])[:2] == ["--config", str(out / "cfg.json")]
         assert c["detector"] == "SK_like"
@@ -852,11 +1086,32 @@ def test_a_split_job_must_name_its_master_seed(tmp_path, capsys):
     """Each invocation of a split job derives the PhotonSim / generator seeds from the master seed,
     and the batch records them: without --master-seed each would draw its own."""
     from lucid.production.dataprod import run_job
+
     cfg = tmp_path / "cfg.json"
-    cfg.write_text(json.dumps({"name": "t", "material": "water", "digitizer": SKI_NO_DARK,
-                               "trigger": None, **_PARTICLES}))
-    rc = run_job.main(["--config", str(cfg), "--detector", "SK_like", "--job-id", "1",
-                       "--output-dir", str(tmp_path / "out"), "--skip-photonsim"])
+    cfg.write_text(
+        json.dumps(
+            {
+                "name": "t",
+                "material": "water",
+                "digitizer": SKI_NO_DARK,
+                "trigger": None,
+                **_PARTICLES,
+            }
+        )
+    )
+    rc = run_job.main(
+        [
+            "--config",
+            str(cfg),
+            "--detector",
+            "SK_like",
+            "--job-id",
+            "1",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--skip-photonsim",
+        ]
+    )
     assert rc == run_job.EXIT_CONFIG and "needs --master-seed" in capsys.readouterr().err
     assert not (tmp_path / "out").exists()
 
@@ -875,17 +1130,21 @@ def test_interaction_chunks_split_on_the_gap_between_neighbours():
 
 def test_min_physics_hits_keeps_exactly_the_threshold_and_ignores_dark():
     # 4 digits: digits 0-2 have physics light, digit 3 is dark only
-    sd = {"sensor_idx": np.array([5, 1, 3, 2], np.uint16),
-          "PE": np.array([1, 2, 1, 1], np.float32),
-          "T": np.array([10.0, 30.0, 20.0, 40.0])}
-    hits = {"particle_idx": np.array([0, 0, 1, -1], np.int32),
-            "digit_idx": np.array([0, 1, 2, 3], np.int32),
-            "emission_process": np.array([0, 0, 0, EMISSION_PROCESS_DARK], np.int8)}
-    assert Readout({}, min_physics_hits=4).select(sd, hits, None) is None   # dark does not count
-    out = Readout({}, min_physics_hits=3).select(sd, hits, None)            # exactly 3 physics digits
+    sd = {
+        "sensor_idx": np.array([5, 1, 3, 2], np.uint16),
+        "PE": np.array([1, 2, 1, 1], np.float32),
+        "T": np.array([10.0, 30.0, 20.0, 40.0]),
+    }
+    hits = {
+        "particle_idx": np.array([0, 0, 1, -1], np.int32),
+        "digit_idx": np.array([0, 1, 2, 3], np.int32),
+        "emission_process": np.array([0, 0, 0, EMISSION_PROCESS_DARK], np.int8),
+    }
+    assert Readout({}, min_physics_hits=4).select(sd, hits, None) is None  # dark does not count
+    out = Readout({}, min_physics_hits=3).select(sd, hits, None)  # exactly 3 physics digits
     assert out is not None
     sd2, h2, _, pw = out
-    np.testing.assert_array_equal(sd2["sensor_idx"], [1, 2, 3, 5])   # canonical (sensor, T)
+    np.testing.assert_array_equal(sd2["sensor_idx"], [1, 2, 3, 5])  # canonical (sensor, T)
     # each remapped row still points at the digit it described
     np.testing.assert_array_equal(sd2["sensor_idx"][h2["digit_idx"]], sd["sensor_idx"])
     np.testing.assert_array_equal(pw["digit_offsets"], [0, 4])
@@ -906,7 +1165,7 @@ def test_dark_noise_span_covers_every_gate_edge():
         pad = Readout({}, trigger=cfg).dark_pad_ns()
         assert gates.shape == (1, 2)
         assert gates[0, 0] >= t.min() - pad and gates[0, 1] <= t.max() + pad
-        assert gates[0, 1] > t.max() + max(pb, pa)        # the window term is needed
+        assert gates[0, 1] > t.max() + max(pb, pa)  # the window term is needed
     assert Readout({}).dark_pad_ns() == 100.0
 
 
@@ -934,10 +1193,20 @@ def test_supernova_vertices_keep_the_detectors_pmt_radius_from_every_sensor(tmp_
     n = 40
     path = fake_root(tmp_path / "sn.root", [_positron(6, 0.0) for _ in range(n)])
     drivers.run_supernova(
-        sim, path, list(np.arange(n) * 10.0), output_dir=str(tmp_path / "out"), file_index=0,
-        sn_ordering="NMO", sn_transformation="AdiabaticMSW_NMO", master_seed=9, job_id=1,
-        readout=Readout.from_blocks(SKI_NO_DARK, None, min_physics_hits=1), dataset_name="t",
-        apply_smearing=False, apply_translation=True)
+        sim,
+        path,
+        list(np.arange(n) * 10.0),
+        output_dir=str(tmp_path / "out"),
+        file_index=0,
+        sn_ordering="NMO",
+        sn_transformation="AdiabaticMSW_NMO",
+        master_seed=9,
+        job_id=1,
+        readout=Readout.from_blocks(SKI_NO_DARK, None, min_physics_hits=1),
+        dataset_name="t",
+        apply_smearing=False,
+        apply_translation=True,
+    )
     labl = _files(tmp_path / "out")["labl"]
     vx = np.stack([labl[f"event_000/per_interaction/vertex_{c}"] for c in "xyz"], 1).astype(float)
     assert vx.shape == (n, 3)
@@ -946,16 +1215,17 @@ def test_supernova_vertices_keep_the_detectors_pmt_radius_from_every_sensor(tmp_
 
 
 def test_detector_bounds_shapes():
-    cyl = types.SimpleNamespace(detector_type="Cylinder",
-                                detector=types.SimpleNamespace(r=3.0, H=5.0, S_radius=0.1))
+    cyl = types.SimpleNamespace(
+        detector_type="Cylinder", detector=types.SimpleNamespace(r=3.0, H=5.0, S_radius=0.1)
+    )
     b = detector_bounds(cyl)
     assert (b["type"], b["radius"], b["height"]) == ("cylinder", 3.0, 5.0)
     sph = types.SimpleNamespace(detector_type="sphere", detector=types.SimpleNamespace(r=4.0))
     assert detector_bounds(sph) == {"type": "sphere", "radius": 4.0}
-    box = types.SimpleNamespace(detector_type="box",
-                                detector=types.SimpleNamespace(L=1.0, W=2.0, H=3.0))
-    assert detector_bounds(box) == {
-        "type": "box", "length": 1.0, "width": 2.0, "height": 3.0}
+    box = types.SimpleNamespace(
+        detector_type="box", detector=types.SimpleNamespace(L=1.0, W=2.0, H=3.0)
+    )
+    assert detector_bounds(box) == {"type": "box", "length": 1.0, "width": 2.0, "height": 3.0}
     string = types.SimpleNamespace(detector_type="string", detector=object())
     assert detector_bounds(string) is None
     assert detector_bounds(None) is None
@@ -976,15 +1246,15 @@ def test_fiducial_vertices_are_volume_uniform():
     r = np.hypot(v[:, 0], v[:, 1]) / (0.9 * 10.0)
     z = v[:, 2] / (0.9 * 10.0)
     assert r.max() <= 1.0 + 1e-6 and np.abs(z).max() <= 1.0 + 1e-6
-    assert np.mean(r ** 2) == pytest.approx(0.5, abs=0.02)
-    assert np.mean(z) == pytest.approx(0.0, abs=0.03)          # sigma 0.009
-    assert np.mean(z ** 2) == pytest.approx(1 / 3, abs=0.02)   # uniform in z
+    assert np.mean(r**2) == pytest.approx(0.5, abs=0.02)
+    assert np.mean(z) == pytest.approx(0.0, abs=0.03)  # sigma 0.009
+    assert np.mean(z**2) == pytest.approx(1 / 3, abs=0.02)  # uniform in z
     sph = {"type": "sphere", "radius": 5.0}
     v = np.array([sample_vertex(sph, rng) for _ in range(N_VTX)])
     r = np.linalg.norm(v, axis=1) / (0.9 * 5.0)
     assert r.max() <= 1.0 + 1e-6
-    assert np.mean(r ** 3) == pytest.approx(0.5, abs=0.02)
-    assert np.abs(v.mean(0)).max() < 0.1                       # isotropic: sigma 0.04
+    assert np.mean(r**3) == pytest.approx(0.5, abs=0.02)
+    assert np.abs(v.mean(0)).max() < 0.1  # isotropic: sigma 0.04
 
 
 def test_supernova_vertices_are_redrawn_out_of_pmts():
@@ -998,15 +1268,19 @@ def test_supernova_vertices_are_redrawn_out_of_pmts():
     g = np.linspace(-0.6, 0.6, 4)
     sensors = np.stack(np.meshgrid(g, g, g), -1).reshape(-1, 3)
     b = {"type": "cylinder", "radius": 1.0, "height": 2.0}
-    v = np.array([sample_vertex(b, rng, r_frac=0.995, z_frac=0.995,
-                                            sensor_positions=sensors, pmt_radius=0.12)
-                  for _ in range(2000)])
+    v = np.array(
+        [
+            sample_vertex(
+                b, rng, r_frac=0.995, z_frac=0.995, sensor_positions=sensors, pmt_radius=0.12
+            )
+            for _ in range(2000)
+        ]
+    )
     d = np.sqrt(((v[:, None, :] - sensors[None]) ** 2).sum(-1)).min(1)
     assert (d > 0.12).all()
-    free = np.array([sample_vertex(b, rng, r_frac=0.995, z_frac=0.995)
-                     for _ in range(2000)])
+    free = np.array([sample_vertex(b, rng, r_frac=0.995, z_frac=0.995) for _ in range(2000)])
     d_free = np.sqrt(((free[:, None, :] - sensors[None]) ** 2).sum(-1)).min(1)
-    assert (d_free <= 0.12).mean() > 0.05       # the test geometry can tell
+    assert (d_free <= 0.12).mean() > 0.05  # the test geometry can tell
 
 
 def test_random_rotations_are_proper_and_uniform():
@@ -1019,8 +1293,9 @@ def test_random_rotations_are_proper_and_uniform():
     rng = np.random.default_rng(2)
     Rs = np.array([random_rotation(rng) for _ in range(3000)])
     np.testing.assert_allclose(np.linalg.det(Rs), 1.0, atol=1e-12)
-    np.testing.assert_allclose(Rs @ Rs.transpose(0, 2, 1), np.broadcast_to(np.eye(3), Rs.shape),
-                               atol=1e-12)
+    np.testing.assert_allclose(
+        Rs @ Rs.transpose(0, 2, 1), np.broadcast_to(np.eye(3), Rs.shape), atol=1e-12
+    )
     assert np.abs(Rs.mean(0)).max() < 0.05
     c = Rs[:, 2, 2]
-    assert np.mean(c ** 2) == pytest.approx(1 / 3, abs=0.025)
+    assert np.mean(c**2) == pytest.approx(1 / 3, abs=0.025)

@@ -35,6 +35,7 @@ class ShotgunSource(NamedTuple):
     matching ``IsotropicSource`` / ``LaserSource``. Wavelengths are read from
     ``source.wavelength`` by ``setup_event_simulator`` for optical lookups.
     """
+
     origins: jnp.ndarray
     directions: jnp.ndarray
     intensities: jnp.ndarray
@@ -148,8 +149,10 @@ def stack_shotgun_sources(sources):
 
     wl_none = [s.wavelength is None for s in sources]
     if any(wl_none) and not all(wl_none):
-        raise ValueError("all sources must have wavelengths set or none set "
-                         "(mixed Cherenkov + fixed not supported)")
+        raise ValueError(
+            "all sources must have wavelengths set or none set "
+            "(mixed Cherenkov + fixed not supported)"
+        )
 
     origins = jnp.stack([s.origins for s in sources], axis=0)
     directions = jnp.stack([s.directions for s in sources], axis=0)
@@ -161,5 +164,6 @@ def stack_shotgun_sources(sources):
         if len(wl_shapes) > 1:
             raise ValueError(f"inconsistent wavelength shapes across sources: {wl_shapes}")
         wl = jnp.stack([jnp.asarray(s.wavelength) for s in sources], axis=0)
-    return ShotgunSource(origins=origins, directions=directions,
-                         intensities=intensities, wavelength=wl)
+    return ShotgunSource(
+        origins=origins, directions=directions, intensities=intensities, wavelength=wl
+    )

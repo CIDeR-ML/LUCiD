@@ -19,20 +19,20 @@ import pytest
 
 from lucid.detector_params import (
     DetectorParams,
-    load_physics_config,
     load_detector_params,
+    load_physics_config,
 )
 from tests.helpers.paths import REPO
 
-CONFIG_DIR = os.path.join(
-    str(REPO), "config"
-)
+CONFIG_DIR = os.path.join(str(REPO), "config")
 
 # The whole shipped catalogue, by glob rather than by hand.
-PHYSICS_CONFIGS = sorted(glob.glob(os.path.join(CONFIG_DIR, "**", "*physics_config*.json"),
-                                   recursive=True))
-GEOM_CONFIGS = sorted(glob.glob(os.path.join(CONFIG_DIR, "**", "*_geom_config.json"),
-                                recursive=True))
+PHYSICS_CONFIGS = sorted(
+    glob.glob(os.path.join(CONFIG_DIR, "**", "*physics_config*.json"), recursive=True)
+)
+GEOM_CONFIGS = sorted(
+    glob.glob(os.path.join(CONFIG_DIR, "**", "*_geom_config.json"), recursive=True)
+)
 
 # What a geometry config has to carry for the production template to pair it
 # with its physics file and build a detector from it.
@@ -74,17 +74,23 @@ def test_every_physics_config_loads_its_numbers_onto_the_right_leaves(cfg_path):
     scaled a value, dropped one to the default or put it on another leaf fails here.
     """
     from lucid.detector_params import _flatten_detector_params
+
     raw = _raw(cfg_path)
     params, _, _ = load_physics_config(cfg_path, num_sensors=None)
     assert isinstance(params, DetectorParams)
     flat = _flatten_detector_params(params)
 
-    written = {k: v for k, v in raw.items()
-               if k in flat and isinstance(v, (int, float)) and not isinstance(v, bool)}
+    written = {
+        k: v
+        for k, v in raw.items()
+        if k in flat and isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
     for field, value in written.items():
         got = jnp.asarray(flat[field])
         assert got.ndim == 0, f"{field}: scalar {value} became shape {got.shape}"
-        assert float(got) == float(jnp.float32(value)), f"{field}: JSON {value}, loaded {float(got)}"
+        assert float(got) == float(jnp.float32(value)), (
+            f"{field}: JSON {value}, loaded {float(got)}"
+        )
 
     for field, value in flat.items():
         v = jnp.asarray(value)
@@ -102,8 +108,7 @@ def _raw_qe_corrections(path):
 
 
 # configs whose qe_corrections is a per-sensor vector (a file or an inline list)
-FILE_QE_CONFIGS = [p for p in PHYSICS_CONFIGS
-                   if isinstance(_raw_qe_corrections(p), (str, list))]
+FILE_QE_CONFIGS = [p for p in PHYSICS_CONFIGS if isinstance(_raw_qe_corrections(p), (str, list))]
 SCALAR_QE_CONFIGS = [p for p in PHYSICS_CONFIGS if p not in FILE_QE_CONFIGS]
 
 
@@ -156,31 +161,32 @@ def test_every_geom_config_has_a_physics_partner(cfg_path):
     one ``--detector`` string: a geometry file whose physics partner is missing
     is a detector nobody can run.
     """
-    detector = _name(cfg_path)[:-len("_geom_config.json")]
+    detector = _name(cfg_path)[: -len("_geom_config.json")]
     partner = os.path.join(CONFIG_DIR, f"{detector}_physics_config.json")
     if detector in _GEOM_WITHOUT_TEMPLATE_PARTNER:
         assert not os.path.isfile(partner), (
-            f"{detector} now has a physics partner — drop it from "
-            f"_GEOM_WITHOUT_TEMPLATE_PARTNER")
+            f"{detector} now has a physics partner — drop it from _GEOM_WITHOUT_TEMPLATE_PARTNER"
+        )
         return
     assert os.path.isfile(partner), (
-        f"{_name(cfg_path)} has no {detector}_physics_config.json beside it")
+        f"{_name(cfg_path)} has no {detector}_physics_config.json beside it"
+    )
 
 
 # Map: detector name -> (physics_config filename, num_sensors from geom config)
 DETECTOR_INFO = {
-    "BigHK":   ("BigHK_physics_config.json",   20000),
-    "EOS":     ("EOS_physics_config.json",       200),
-    "HK":      ("HK_physics_config.json",      19746),
-    "IWCD":    ("IWCD_physics_config.json",     10000),
-    "JUNO":    ("JUNO_physics_config.json",     10000),
-    "MidBox":  ("MidBox_physics_config.json",    9000),
-    "SK":      ("SK_physics_config.json",       11096),
-    "SK_like": ("SK_like_physics_config.json",  11000),
-    "TAO":     ("TAO_physics_config.json",       4000),
-    "WCTE":    ("WCTE_physics_config.json",      1995),
+    "BigHK": ("BigHK_physics_config.json", 20000),
+    "EOS": ("EOS_physics_config.json", 200),
+    "HK": ("HK_physics_config.json", 19746),
+    "IWCD": ("IWCD_physics_config.json", 10000),
+    "JUNO": ("JUNO_physics_config.json", 10000),
+    "MidBox": ("MidBox_physics_config.json", 9000),
+    "SK": ("SK_physics_config.json", 11096),
+    "SK_like": ("SK_like_physics_config.json", 11000),
+    "TAO": ("TAO_physics_config.json", 4000),
+    "WCTE": ("WCTE_physics_config.json", 1995),
     "WCTE_like": ("WCTE_like_physics_config.json", 2500),
-    "nuSCOPE": ("nuSCOPE_physics_config.json",   5000),
+    "nuSCOPE": ("nuSCOPE_physics_config.json", 5000),
 }
 
 # DetectorParams is now nested by physics. These tests check the FLAT JSON
@@ -188,18 +194,28 @@ DETECTOR_INFO = {
 # fields (the new response/per-PMT placeholders carry neutral defaults, not the
 # NaN "missing" semantics asserted below).
 DETECTOR_PARAMS_FIELDS = (
-    "scatter_length", "g", "mie_scatter_length",
-    "wall_reflection_rate", "sensor_reflection_rate",
-    "absorption_length", "qe", "qe_corrections",
+    "scatter_length",
+    "g",
+    "mie_scatter_length",
+    "wall_reflection_rate",
+    "sensor_reflection_rate",
+    "absorption_length",
+    "qe",
+    "qe_corrections",
 )
 
 # Map each flat leaf field to its sub-tuple so getattr resolves through nesting.
 _LEAF_PARENT = {
-    "scatter_length": "scattering", "mie_scatter_length": "scattering", "g": "scattering",
+    "scatter_length": "scattering",
+    "mie_scatter_length": "scattering",
+    "g": "scattering",
     "absorption_length": "absorption",
-    "wall_reflection_rate": "reflection", "sensor_reflection_rate": "reflection",
-    "qe": "response", "tts": "response",
-    "qe_corrections": "per_pmt", "t0": "per_pmt",
+    "wall_reflection_rate": "reflection",
+    "sensor_reflection_rate": "reflection",
+    "qe": "response",
+    "tts": "response",
+    "qe_corrections": "per_pmt",
+    "t0": "per_pmt",
 }
 
 
@@ -239,15 +255,18 @@ def test_field_presence(det_name, loaded_configs):
                 if field == "qe_corrections" and n_sensors is not None:
                     assert val.shape == (n_sensors,), (
                         f"{det_name}.{field} shape mismatch: "
-                        f"got {val.shape}, expected ({n_sensors},)")
+                        f"got {val.shape}, expected ({n_sensors},)"
+                    )
                     assert jnp.allclose(val, raw_val)
                 else:
                     assert jnp.allclose(val, jnp.asarray(float(raw_val))), (
-                        f"{det_name}.{field}={float(val)}, expected {raw_val}")
+                        f"{det_name}.{field}={float(val)}, expected {raw_val}"
+                    )
             elif isinstance(raw_val, str):
                 assert val.ndim >= 1, (
                     f"{det_name}.{field} loaded from file '{raw_val}' "
-                    f"should be array, got shape {val.shape}")
+                    f"should be array, got shape {val.shape}"
+                )
         else:
             # An omitted leaf is projected from the medium / QE curve at λ_ref (the loader
             # raises for any other omitted one): finite, and positive except g.
@@ -270,6 +289,7 @@ def test_sk_missing_fields_project_from_curves(loaded_configs):
       0.02 /m bounds it below at 48 m. A cm/m or percent mix-up is x100.
     """
     import numpy as np
+
     sk_params, medium, _, cfg_path, _ = loaded_configs["SK"]
     with open(cfg_path) as f:
         sk_raw = json.load(f)
@@ -282,10 +302,10 @@ def test_sk_missing_fields_project_from_curves(loaded_configs):
     assert float(sk_params.response.qe) == pytest.approx(qe_ref, rel=1e-4)
     water = medium.model
     sym = water["scattering"]["symmetric"]
-    alpha_sym = sym["P4"] / lam ** 4 * (1.0 + sym["P5"] / lam ** 2)
+    alpha_sym = sym["P4"] / lam**4 * (1.0 + sym["P5"] / lam**2)
     assert float(sk_params.scattering.scatter_length) == pytest.approx(1.0 / alpha_sym, rel=1e-4)
     ab = water["absorption"]
-    alpha_r = ab["P0"] * ab["P1"] / lam ** 4
+    alpha_r = ab["P0"] * ab["P1"] / lam**4
     L_abs = float(sk_params.absorption.absorption_length)
     assert 1.0 / (alpha_r + 0.02) < L_abs <= 1.0 / alpha_r
 
@@ -312,8 +332,7 @@ def test_qe_curve_path(det_name, loaded_configs):
 
     if raw.get("qe_curve") is not None:
         qe_400 = float(qe_curve(400.0))
-        assert 0.0 < qe_400 < 1.0, (
-            f"{det_name} QE at 400nm = {qe_400}, expected 0 < QE < 1")
+        assert 0.0 < qe_400 < 1.0, f"{det_name} QE at 400nm = {qe_400}, expected 0 < QE < 1"
     else:
         assert qe_curve is None, det_name
 
@@ -326,7 +345,8 @@ def test_scalar_qe_corrections_expansion(det_name, loaded_configs):
     params, _, _, _, n_sensors = loaded_configs[det_name]
     qe_c = params.per_pmt.qe_corrections
     assert qe_c.shape == (n_sensors,), (
-        f"{det_name} qe_corrections shape {qe_c.shape}, expected ({n_sensors},)")
+        f"{det_name} qe_corrections shape {qe_c.shape}, expected ({n_sensors},)"
+    )
     assert jnp.allclose(qe_c, 1.0)
 
 
@@ -353,6 +373,7 @@ def test_scalar_qe_stays_scalar_without_num_sensors():
 def test_load_detector_params_is_load_physics_config(loaded_configs):
     """The backward-compatible entry point returns the same parameters."""
     import jax
+
     _, _, _, cfg_path, n = loaded_configs["SK"]
     a = load_detector_params(cfg_path, num_sensors=n)
     b = load_physics_config(cfg_path, num_sensors=n)[0]
@@ -365,7 +386,7 @@ def test_missing_required_scalar_without_curve_raises(tmp_path):
     loading must fail loudly rather than silently substitute a placeholder."""
     bad_cfg = tmp_path / "bad_physics.json"
     cfg = {k: v for k, v in _MINIMAL.items() if k != "scalar_mode"}
-    bad_cfg.write_text(json.dumps({**cfg, "qe": 0.2}))     # no scalar_mode, no medium_model
+    bad_cfg.write_text(json.dumps({**cfg, "qe": 0.2}))  # no scalar_mode, no medium_model
     with pytest.raises(ValueError, match="'scatter_length'.*and no 'medium_model'"):
         load_detector_params(str(bad_cfg))
 
@@ -373,10 +394,15 @@ def test_missing_required_scalar_without_curve_raises(tmp_path):
 # ---------------------------------------------------------------------------
 # 6. The strict loader
 # ---------------------------------------------------------------------------
-_MINIMAL = {"wall_reflection_rate": 0.2, "sensor_reflection_rate": 0.2,
-            "wall_fspec": 0.55, "sensor_fspec": 0.9, "qe_corrections": 1.0, "g": 0.0,
-            "scalar_mode": {"scatter_length": 50.0, "absorption_length": 50.0,
-                            "mie_scatter_length": 1.0e9}}
+_MINIMAL = {
+    "wall_reflection_rate": 0.2,
+    "sensor_reflection_rate": 0.2,
+    "wall_fspec": 0.55,
+    "sensor_fspec": 0.9,
+    "qe_corrections": 1.0,
+    "g": 0.0,
+    "scalar_mode": {"scatter_length": 50.0, "absorption_length": 50.0, "mie_scatter_length": 1.0e9},
+}
 
 
 def _load(tmp_path, cfg):
@@ -394,12 +420,26 @@ def test_an_unknown_key_raises_naming_the_closest(tmp_path):
     with pytest.raises(ValueError, match="unknown key 'wall_reflection'.*'wall_reflection_rate'"):
         _load(tmp_path, {**_MINIMAL, "qe": 0.2, "wall_reflection": 0.1})
     with pytest.raises(ValueError, match="unknown key 'scatter_lenght'"):
-        _load(tmp_path, {**_MINIMAL, "qe": 0.2,
-                         "scalar_mode": {**_MINIMAL["scalar_mode"], "scatter_lenght": 1.0}})
+        _load(
+            tmp_path,
+            {
+                **_MINIMAL,
+                "qe": 0.2,
+                "scalar_mode": {**_MINIMAL["scalar_mode"], "scatter_lenght": 1.0},
+            },
+        )
 
 
-@pytest.mark.parametrize("field", ["wall_reflection_rate", "sensor_reflection_rate",
-                                   "wall_fspec", "sensor_fspec", "qe_corrections"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "wall_reflection_rate",
+        "sensor_reflection_rate",
+        "wall_fspec",
+        "sensor_fspec",
+        "qe_corrections",
+    ],
+)
 def test_a_required_key_left_out_raises(tmp_path, field):
     cfg = {**_MINIMAL, "qe": 0.2}
     del cfg[field]
@@ -419,7 +459,8 @@ _ANGULAR = {"wall_R0": 0.1, "wall_p": 5.0, "cathode_nr": 2.6, "cathode_nk": 1.3}
 def test_the_angular_block_lands_on_its_leaves(tmp_path):
     r = _load(tmp_path, {**_MINIMAL, "qe": 0.2, "angular_reflection": _ANGULAR}).reflection
     assert {k: float(getattr(r, k)) for k in _ANGULAR} == {
-        k: float(jnp.float32(v)) for k, v in _ANGULAR.items()}
+        k: float(jnp.float32(v)) for k, v in _ANGULAR.items()
+    }
 
 
 def test_an_angular_leaf_at_the_top_level_or_a_partial_block_raises(tmp_path):
@@ -435,7 +476,7 @@ def test_the_angular_model_requires_the_block(tmp_path):
     path = tmp_path / "physics_config.json"
     path.write_text(json.dumps({**_MINIMAL, "qe": 0.2}))
     load_physics_config(str(path), reflection_model="scalar_mix")
-    with pytest.raises(ValueError, match="no \"angular_reflection\" block"):
+    with pytest.raises(ValueError, match='no "angular_reflection" block'):
         load_physics_config(str(path), reflection_model="angular")
 
 
@@ -444,22 +485,29 @@ def test_null_is_not_a_value(tmp_path):
         _load(tmp_path, {**_MINIMAL, "qe": None})
 
 
-@pytest.mark.slow                 # builds a detector and propagator
+@pytest.mark.slow  # builds a detector and propagator
 def test_a_physics_medium_unlike_the_geometry_material_is_refused(tmp_path, small_cylinder_config):
     """The geometry JSON's material sets n, c and the emission processes; the physics config's
     medium_model sets the optical curves and the scintillation defaults. A water detector with an
     ice medium model is two media at once, so the simulator refuses it."""
     import json
+
     from lucid.simulation import setup_event_simulator
-    repo_config = os.path.join(str(REPO), 'config')
-    phys = json.load(open(os.path.join(repo_config, 'SK_like_physics_config.json')))
-    phys['medium_model'] = os.path.join(repo_config, 'materials', 'ice.json')
-    for key in ('qe_curve',):
+
+    repo_config = os.path.join(str(REPO), "config")
+    phys = json.load(open(os.path.join(repo_config, "SK_like_physics_config.json")))
+    phys["medium_model"] = os.path.join(repo_config, "materials", "ice.json")
+    for key in ("qe_curve",):
         if key in phys and not os.path.isabs(phys[key]):
             phys[key] = os.path.join(repo_config, phys[key])
-    path = tmp_path / 'ice_medium_physics_config.json'
+    path = tmp_path / "ice_medium_physics_config.json"
     path.write_text(json.dumps(phys))
     with pytest.raises(ValueError, match="'water' but the physics config's medium_model"):
-        setup_event_simulator(small_cylinder_config, 1000, source='particle',
-                              physics_config=str(path),
-                              default_detector_params=True, wavelength_mode=False)
+        setup_event_simulator(
+            small_cylinder_config,
+            1000,
+            source="particle",
+            physics_config=str(path),
+            default_detector_params=True,
+            wavelength_mode=False,
+        )

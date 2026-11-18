@@ -20,34 +20,40 @@ refuse it.
 Designed to run inside the LUCiD container (see utils/submit_job.py); on a GPU
 node with the layered JAX-CUDA env the per-event fit runs on the GPU.
 """
+
 import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # LUCiD/ on path
-from analysis.paper.utils.pipeline import load_config          # noqa: E402
-from analysis.paper.utils.run import write_study               # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))  # LUCiD/ on path
+from analysis.paper.utils.pipeline import load_config  # noqa: E402
+from analysis.paper.utils.run import write_study  # noqa: E402
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--config', required=True, help='study config JSON')
-    ap.add_argument('--output', required=True, help='directory for <config-name>.h5')
-    ap.add_argument('--events', default=None,
-                    help='comma list of event indices (overrides event_start/n_events)')
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--config", required=True, help="study config JSON")
+    ap.add_argument("--output", required=True, help="directory for <config-name>.h5")
+    ap.add_argument(
+        "--events",
+        default=None,
+        help="comma list of event indices (overrides event_start/n_events)",
+    )
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    name = cfg['name']
-    out_dir = Path(args.output); out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f'{name}.h5'
+    name = cfg["name"]
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{name}.h5"
 
     if args.events:
-        events = [int(x) for x in args.events.split(',')]
+        events = [int(x) for x in args.events.split(",")]
     else:
-        events = list(range(cfg['event_start'], cfg['event_start'] + cfg['n_events']))
+        events = list(range(cfg["event_start"], cfg["event_start"] + cfg["n_events"]))
 
     print(f"=== tracking study '{name}' ===")
     print(f"  config : {Path(args.config).resolve()}")
@@ -59,5 +65,5 @@ def main():
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

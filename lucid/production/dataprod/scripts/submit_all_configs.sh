@@ -4,6 +4,8 @@
 # Per-config job counts come from each config (nominal_*, seconds_per_event); to change one, run
 # the fan-out on that config with -N (--n-jobs-override).
 
+set -euo pipefail
+
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # Bundled dataprod configs live under LUCiD/lucid/production/dataprod/configs/<block>/
 # (block = GeV, Solar, SN, Test), one NN_name.json per config.

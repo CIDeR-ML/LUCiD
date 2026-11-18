@@ -16,7 +16,7 @@
 # Stage-1 SIREN-input scripts look it up). To target a different
 # checkout, pass the path as the second arg.
 
-set -eu -o pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 USER_PATHS="${SCRIPT_DIR}/../../platform/user_paths.sh"

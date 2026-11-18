@@ -6,25 +6,25 @@ from typing import Dict, List, Optional
 import numpy as np
 from tqdm import tqdm
 
-
 # ---------------------------------------------------------------------------
 # SweepParam
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class SweepParam:
     """Specification for a single parameter sweep axis."""
 
-    name: str                          # Display name: 'X', 'Energy', 'Scatter Length'
-    field: str                         # NamedTuple field: 'position', 'energy', ...
-    half_width: float                  # Sweep range: center +/- half_width
-    index: Optional[int] = None        # Sub-index for array fields (0,1,2 for position)
-    center: Optional[float] = None     # Auto-filled from base_params if None
-    num_points: int = 41               # Default scan resolution
-    unit: str = ""                     # For axis labels: 'm', 'MeV', 'rad'
-    min_val: Optional[float] = None    # Lower clamp
-    max_val: Optional[float] = None    # Upper clamp
-    grad_scale: float = 1.0            # Gradient scaling for streamline viz (plot time)
+    name: str  # Display name: 'X', 'Energy', 'Scatter Length'
+    field: str  # NamedTuple field: 'position', 'energy', ...
+    half_width: float  # Sweep range: center +/- half_width
+    index: Optional[int] = None  # Sub-index for array fields (0,1,2 for position)
+    center: Optional[float] = None  # Auto-filled from base_params if None
+    num_points: int = 41  # Default scan resolution
+    unit: str = ""  # For axis labels: 'm', 'MeV', 'rad'
+    min_val: Optional[float] = None  # Lower clamp
+    max_val: Optional[float] = None  # Upper clamp
+    grad_scale: float = 1.0  # Gradient scaling for streamline viz (plot time)
 
     def resolve(self, base_params):
         """Return copy with center filled from base_params if needed."""
@@ -46,16 +46,17 @@ class SweepParam:
     @property
     def label(self):
         """Formatted axis label."""
-        if self.name == 'theta':
-            return r'$\theta$ (rad)'
-        if self.name == 'phi':
-            return r'$\phi$ (rad)'
-        return f'{self.name} ({self.unit})' if self.unit else self.name
+        if self.name == "theta":
+            return r"$\theta$ (rad)"
+        if self.name == "phi":
+            return r"$\phi$ (rad)"
+        return f"{self.name} ({self.unit})" if self.unit else self.name
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _find_leaf(params, field):
     """Locate a (possibly nested) leaf ``field``.
@@ -122,12 +123,13 @@ def numerical_gradient(losses, values):
 # Result dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SweepResult1D:
-    param: SweepParam            # Resolved (center filled)
-    values: np.ndarray           # (N,)
-    losses: np.ndarray           # (N,)
-    gradients: np.ndarray        # (N,) raw analytical gradients
+    param: SweepParam  # Resolved (center filled)
+    values: np.ndarray  # (N,)
+    losses: np.ndarray  # (N,)
+    gradients: np.ndarray  # (N,) raw analytical gradients
     numerical_grads: np.ndarray  # (N,) 2-point central difference
 
 
@@ -135,16 +137,17 @@ class SweepResult1D:
 class SweepResult2D:
     param_x: SweepParam
     param_y: SweepParam
-    x_values: np.ndarray         # (Nx,)
-    y_values: np.ndarray         # (Ny,)
-    losses: np.ndarray           # (Nx, Ny)
-    grad_x: np.ndarray           # (Nx, Ny) raw
-    grad_y: np.ndarray           # (Nx, Ny) raw
+    x_values: np.ndarray  # (Nx,)
+    y_values: np.ndarray  # (Ny,)
+    losses: np.ndarray  # (Nx, Ny)
+    grad_x: np.ndarray  # (Nx, Ny) raw
+    grad_y: np.ndarray  # (Nx, Ny) raw
 
 
 # ---------------------------------------------------------------------------
 # Sweep functions
 # ---------------------------------------------------------------------------
+
 
 def sweep_1d(
     loss_and_grad_fn,
@@ -231,8 +234,12 @@ def sweep_2d(
             losses[i, j] = float(loss)
             grad_x_arr[i, j] = get_grad_component(grads, px)
             grad_y_arr[i, j] = get_grad_component(grads, py)
-            _require_finite(f"'{px.name}' = {vx}, '{py.name}' = {vy}",
-                            losses[i, j], grad_x_arr[i, j], grad_y_arr[i, j])
+            _require_finite(
+                f"'{px.name}' = {vx}, '{py.name}' = {vy}",
+                losses[i, j],
+                grad_x_arr[i, j],
+                grad_y_arr[i, j],
+            )
 
     return SweepResult2D(
         param_x=px,
@@ -250,19 +257,20 @@ def sweep_2d(
 # ---------------------------------------------------------------------------
 
 RECO_SWEEPS = [
-    SweepParam('X',      'position', half_width=2.0,   index=0, unit='m',   grad_scale=0.05),
-    SweepParam('Y',      'position', half_width=2.0,   index=1, unit='m',   grad_scale=0.05),
-    SweepParam('Z',      'position', half_width=2.0,   index=2, unit='m',   grad_scale=0.05),
-    SweepParam('t0',     't0',       half_width=5.0,   unit='ns'),
-    SweepParam('Energy', 'energy',   half_width=100.0, unit='MeV', min_val=1.0, grad_scale=1000.0),
-    SweepParam('theta',  'theta',    half_width=0.5,   unit='rad', grad_scale=0.005),
-    SweepParam('phi',    'phi',      half_width=0.5,   unit='rad', grad_scale=0.005),
+    SweepParam("X", "position", half_width=2.0, index=0, unit="m", grad_scale=0.05),
+    SweepParam("Y", "position", half_width=2.0, index=1, unit="m", grad_scale=0.05),
+    SweepParam("Z", "position", half_width=2.0, index=2, unit="m", grad_scale=0.05),
+    SweepParam("t0", "t0", half_width=5.0, unit="ns"),
+    SweepParam("Energy", "energy", half_width=100.0, unit="MeV", min_val=1.0, grad_scale=1000.0),
+    SweepParam("theta", "theta", half_width=0.5, unit="rad", grad_scale=0.005),
+    SweepParam("phi", "phi", half_width=0.5, unit="rad", grad_scale=0.005),
 ]
 
 
 # ---------------------------------------------------------------------------
 # Zero-crossing helper
 # ---------------------------------------------------------------------------
+
 
 def find_zero_crossing(values, gradients):
     """Find the first zero crossing of gradients via linear interpolation.
@@ -280,9 +288,38 @@ def find_zero_crossing(values, gradients):
             return float(x1 - g1 * (x2 - x1) / (g2 - g1))
     return np.nan
 
+
 CALIB_SWEEPS = [
-    SweepParam('Scatter Length',    'scatter_length',         half_width=20.0,  unit='m', min_val=0.001, grad_scale=100.0),
-    SweepParam('Wall Reflection',   'wall_reflection_rate',   half_width=0.15,  min_val=0.0, max_val=1.0, grad_scale=0.1),
-    SweepParam('Sensor Reflection', 'sensor_reflection_rate', half_width=0.08,  min_val=0.0, max_val=1.0, grad_scale=0.1),
-    SweepParam('Absorption Length', 'absorption_length',      half_width=80.0,  unit='m', min_val=0.001, grad_scale=100.0),
+    SweepParam(
+        "Scatter Length",
+        "scatter_length",
+        half_width=20.0,
+        unit="m",
+        min_val=0.001,
+        grad_scale=100.0,
+    ),
+    SweepParam(
+        "Wall Reflection",
+        "wall_reflection_rate",
+        half_width=0.15,
+        min_val=0.0,
+        max_val=1.0,
+        grad_scale=0.1,
+    ),
+    SweepParam(
+        "Sensor Reflection",
+        "sensor_reflection_rate",
+        half_width=0.08,
+        min_val=0.0,
+        max_val=1.0,
+        grad_scale=0.1,
+    ),
+    SweepParam(
+        "Absorption Length",
+        "absorption_length",
+        half_width=80.0,
+        unit="m",
+        min_val=0.001,
+        grad_scale=100.0,
+    ),
 ]

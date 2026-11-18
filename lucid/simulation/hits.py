@@ -18,17 +18,20 @@ draws. The keyword-only options are set at setup from ``hits_config``; the simul
 
 A new kind of hits is one function with this signature and one ``HITS`` entry.
 """
+
 import inspect
 from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+
 from lucid.utils import smear_charges_SK_like, smear_charges_spe
 
 
 class FirstArrival(NamedTuple):
     """Per sensor: the charge (PE) and the first-arrival time (ns); 0 on unlit sensors."""
+
     charge: jnp.ndarray
     time: jnp.ndarray
 
@@ -36,6 +39,7 @@ class FirstArrival(NamedTuple):
 class PhotonList(NamedTuple):
     """Per deposit: the log QE-weight (-1e10 when invalid), the time (ns, 0 when invalid) and the
     sensor; then the per-sensor charge."""
+
     log_w: jnp.ndarray
     times: jnp.ndarray
     indices: jnp.ndarray
@@ -46,6 +50,7 @@ class SegmentTruth(NamedTuple):
     """Per sensor: the charge and the first arrival without and with the TTS. Per deposit, for the
     host-side per-(segment, sensor) groupby: the weight (0 when QE failed), the time without and
     with the TTS (inf when QE failed), the sensor and the segment index."""
+
     charge: jnp.ndarray
     time_true: jnp.ndarray
     time_reco: jnp.ndarray
@@ -59,6 +64,7 @@ class SegmentTruth(NamedTuple):
 class Waveform(NamedTuple):
     """The ``(num_sensors, n_time_bins)`` waveform, the detections outside the window, and the
     detections (a count when sampled, the total charge when expected)."""
+
     waveform: jnp.ndarray
     n_dropped: jnp.ndarray
     n_detected: jnp.ndarray
@@ -67,11 +73,11 @@ class Waveform(NamedTuple):
 class PhotonHits(NamedTuple):
     """Per emitted photon: whether it was detected, its sensor (-1 if not), its hit time (ns, 0 if
     not) and whether it had scattered or reflected before."""
+
     detected: jnp.ndarray
     sensor_id: jnp.ndarray
     hit_time: jnp.ndarray
     indirect: jnp.ndarray
-
 
 
 def _smear_charge(total_charge, charge_resolution, key):
@@ -89,12 +95,14 @@ def _smear_charge(total_charge, charge_resolution, key):
     if charge_resolution == "Bellamy_94":
         return smear_charges_spe(total_charge, key=key)
     raise ValueError(
-        "charge_resolution must be None|'Abe_2013'|'Bellamy_94', "
-        f"got {charge_resolution!r}")
+        f"charge_resolution must be None|'Abe_2013'|'Bellamy_94', got {charge_resolution!r}"
+    )
+
 
 # ===================================================================
 # First arrival, photon list, segment truth
 # ===================================================================
+
 
 def _exclusive_cumsum_in_runs(x, run_id):
     """Cumulative sum of ``x`` over the earlier entries of the same run, for ``run_id`` sorted so
@@ -119,8 +127,7 @@ def _mean_first_arrival_hard(w, t, idx, num_sensors, norm):
     return jax.ops.segment_sum(p_first * t_s, i_s, num_segments=num_sensors) / norm
 
 
-def _mean_first_arrival_smeared(w, t, idx, num_sensors, mu, norm, t_lo, t_hi, sigma,
-                                n_nodes):
+def _mean_first_arrival_smeared(w, t, idx, num_sensors, mu, norm, t_lo, t_hi, sigma, n_nodes):
     """The same mean when each photo-electron's time is smeared by N(0, sigma^2).
 
     The expected count before t is R(t) = sum_i w_i Phi((t - t_i) / sigma), as in
@@ -133,12 +140,15 @@ def _mean_first_arrival_smeared(w, t, idx, num_sensors, mu, norm, t_lo, t_hi, si
 
     def survival(xg):
         tg = t_lo + span * xg * xg
-        R = jax.ops.segment_sum(w * 0.5 * (1.0 + jax.scipy.special.erf(
-            (tg[idx] - t) / (sigma * jnp.sqrt(2.0)))), idx, num_segments=num_sensors)
+        R = jax.ops.segment_sum(
+            w * 0.5 * (1.0 + jax.scipy.special.erf((tg[idx] - t) / (sigma * jnp.sqrt(2.0)))),
+            idx,
+            num_segments=num_sensors,
+        )
         R = jnp.minimum(R, mu)
         return jnp.exp(-R) * -jnp.expm1(-(mu - R)) / norm
 
-    h = jax.lax.map(survival, x)                                 # (n_nodes, num_sensors)
+    h = jax.lax.map(survival, x)  # (n_nodes, num_sensors)
     dt_dx = 2.0 * span[None, :] * x[:, None]
     f = h * dt_dx
     integral = jnp.sum(0.5 * (f[1:] + f[:-1]), axis=0) * (x[1] - x[0])
@@ -146,9 +156,20 @@ def _mean_first_arrival_smeared(w, t, idx, num_sensors, mu, norm, t_lo, t_hi, si
 
 
 def first_arrival_expected(
-        flat_weights, flat_indices, flat_times, num_sensors, key, qe, qe_corrections, response,
-        flat_segment_idx, flat_indirect, *,
-        threshold=1e-10, n_nodes=128):
+    flat_weights,
+    flat_indices,
+    flat_times,
+    num_sensors,
+    key,
+    qe,
+    qe_corrections,
+    response,
+    flat_segment_idx,
+    flat_indirect,
+    *,
+    threshold=1e-10,
+    n_nodes=128,
+):
     """Expected per-sensor charge and the mean of the predicted first-arrival distribution.
 
     Each deposit is Poisson-distributed photo-electrons (mean ``w_i`` = weight x QE) at its
@@ -166,8 +187,9 @@ def first_arrival_expected(
     valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
     w = jnp.where(valid_mask, qe_weights, 0.0)
     t = jnp.where(valid_mask, flat_times, 0.0)
-    t_min = jax.ops.segment_min(jnp.where(valid_mask, flat_times, jnp.inf), flat_indices,
-                                num_segments=num_sensors)
+    t_min = jax.ops.segment_min(
+        jnp.where(valid_mask, flat_times, jnp.inf), flat_indices, num_segments=num_sensors
+    )
     has_photons = jnp.isfinite(t_min)
 
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_sensors)
@@ -178,12 +200,14 @@ def first_arrival_expected(
         return _mean_first_arrival_hard(w, t, flat_indices, num_sensors, norm)
 
     def smeared(sigma):
-        t_max = jax.ops.segment_max(jnp.where(valid_mask, flat_times, -jnp.inf), flat_indices,
-                                    num_segments=num_sensors)
+        t_max = jax.ops.segment_max(
+            jnp.where(valid_mask, flat_times, -jnp.inf), flat_indices, num_segments=num_sensors
+        )
         t_lo = jax.lax.stop_gradient(jnp.where(has_photons, t_min - 6.0 * sigma, 0.0))
         t_hi = jax.lax.stop_gradient(jnp.where(has_photons, t_max + 6.0 * sigma, 1.0))
-        return _mean_first_arrival_smeared(w, t, flat_indices, num_sensors, mu, norm,
-                                           t_lo, t_hi, sigma, n_nodes)
+        return _mean_first_arrival_smeared(
+            w, t, flat_indices, num_sensors, mu, norm, t_lo, t_hi, sigma, n_nodes
+        )
 
     tts = jnp.asarray(tts, flat_times.dtype)
     t_first = jax.lax.cond(tts > 0, smeared, hard, jnp.where(tts > 0, tts, 1.0))
@@ -196,9 +220,20 @@ def first_arrival_expected(
 
 
 def first_arrival_sampled(
-        flat_weights, flat_indices, flat_times, num_sensors, key, qe, qe_corrections, response,
-        flat_segment_idx, flat_indirect, *,
-        charge_resolution=None, threshold=1e-5):
+    flat_weights,
+    flat_indices,
+    flat_times,
+    num_sensors,
+    key,
+    qe,
+    qe_corrections,
+    response,
+    flat_segment_idx,
+    flat_indirect,
+    *,
+    charge_resolution=None,
+    threshold=1e-5,
+):
     """Sampled per-sensor hits: Bernoulli QE, segment_min timing, configurable charge resolution.
 
     ``response.tts`` (ns) is the per-photon transit-time-spread sigma applied to each photon's
@@ -252,9 +287,20 @@ def first_arrival_sampled(
 
 
 def segment_truth_sampled(
-        flat_weights, flat_indices, flat_times, num_sensors, key, qe, qe_corrections, response,
-        flat_segment_idx, flat_indirect, *,
-        charge_resolution=None, threshold=1e-5):
+    flat_weights,
+    flat_indices,
+    flat_times,
+    num_sensors,
+    key,
+    qe,
+    qe_corrections,
+    response,
+    flat_segment_idx,
+    flat_indirect,
+    *,
+    charge_resolution=None,
+    threshold=1e-5,
+):
     """Per-sensor totals PLUS pass-through per-deposit arrays for host aggregation.
 
     The production 'hits' file needs a per-(segment, sensor) PE decomposition,
@@ -282,25 +328,47 @@ def segment_truth_sampled(
     qe_filtered_smeared = jnp.where(detected_mask & timing_mask, smeared_times, jnp.inf)
 
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_sensors)
-    detector_mins_true = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_sensors)
-    detector_mins_reco = jax.ops.segment_min(qe_filtered_smeared, flat_indices, num_segments=num_sensors)
+    detector_mins_true = jax.ops.segment_min(
+        qe_filtered_times, flat_indices, num_segments=num_sensors
+    )
+    detector_mins_reco = jax.ops.segment_min(
+        qe_filtered_smeared, flat_indices, num_segments=num_sensors
+    )
 
-    nonzero_mask = ((total_charge > 1e-10) & (detector_mins_true > 0)
-                    & jnp.isfinite(detector_mins_true))
+    nonzero_mask = (
+        (total_charge > 1e-10) & (detector_mins_true > 0) & jnp.isfinite(detector_mins_true)
+    )
     smeared_charge = _smear_charge(total_charge, charge_resolution, smear_counts_key)
     measured_charge = jnp.where(nonzero_mask, smeared_charge, 0.0)
     measured_time_true = jnp.where(nonzero_mask, detector_mins_true, 0.0)
     measured_time_reco = jnp.where(nonzero_mask, detector_mins_reco, 0.0)
 
-    return SegmentTruth(measured_charge, measured_time_true, measured_time_reco,
-                        qe_weights, qe_filtered_times, qe_filtered_smeared,
-                        flat_indices, flat_segment_idx)
+    return SegmentTruth(
+        measured_charge,
+        measured_time_true,
+        measured_time_reco,
+        qe_weights,
+        qe_filtered_times,
+        qe_filtered_smeared,
+        flat_indices,
+        flat_segment_idx,
+    )
 
 
 def photon_list_expected(
-        flat_weights, flat_indices, flat_times, num_sensors, key, qe, qe_corrections, response,
-        flat_segment_idx, flat_indirect, *,
-        threshold=1e-10):
+    flat_weights,
+    flat_indices,
+    flat_times,
+    num_sensors,
+    key,
+    qe,
+    qe_corrections,
+    response,
+    flat_segment_idx,
+    flat_indirect,
+    *,
+    threshold=1e-10,
+):
     """Per-deposit log-weights and times, and the per-sensor total charge, for the likelihood.
 
     Instead of aggregating times to per-sensor first-arrival values, this
@@ -326,9 +394,17 @@ def photon_list_expected(
 # Waveform and photon hits
 # ===================================================================
 
+
 def _resolve_first_detection(
-        flat_weights, flat_indices, flat_times, n_photons,
-        per_photon_qe, qe_key, threshold, flat_indirect=None):
+    flat_weights,
+    flat_indices,
+    flat_times,
+    n_photons,
+    per_photon_qe,
+    qe_key,
+    threshold,
+    flat_indirect=None,
+):
     """Compact flat propagation arrays to per-photon first-detection records.
 
     Returns arrays of length ``n_photons``:
@@ -348,8 +424,9 @@ def _resolve_first_detection(
     first_time = jax.ops.segment_min(safe_time, photon_idx, num_segments=n_photons)
 
     matches_first = detected_flat & (flat_times == first_time[photon_idx])
-    safe_flat_idx = jnp.where(matches_first, jnp.arange(flat_weights.shape[0]),
-                              jnp.iinfo(jnp.int32).max)
+    safe_flat_idx = jnp.where(
+        matches_first, jnp.arange(flat_weights.shape[0]), jnp.iinfo(jnp.int32).max
+    )
     first_flat_idx = jax.ops.segment_min(safe_flat_idx, photon_idx, num_segments=n_photons)
 
     detected = jnp.isfinite(first_time)
@@ -363,10 +440,26 @@ def _resolve_first_detection(
 
 
 def waveform_sampled(
-        flat_weights, flat_indices, flat_times, num_sensors, key, qe, qe_corrections, response,
-        flat_segment_idx, flat_indirect, *,
-        n_photons, window_ns=500.0, bin_width_ns=1.0, tts_sigma_ns=1.0, t_min_ns=0.0,
-        smear_time=True, smear_charge=True, threshold=1e-10):
+    flat_weights,
+    flat_indices,
+    flat_times,
+    num_sensors,
+    key,
+    qe,
+    qe_corrections,
+    response,
+    flat_segment_idx,
+    flat_indirect,
+    *,
+    n_photons,
+    window_ns=500.0,
+    bin_width_ns=1.0,
+    tts_sigma_ns=1.0,
+    t_min_ns=0.0,
+    smear_time=True,
+    smear_charge=True,
+    threshold=1e-10,
+):
     """The per-sensor waveform of the detected photons: Bernoulli QE, TTS and gain smearing.
 
     Pipeline: flat deposits → per-photon first-detection (n_photons) → TTS + gain smearing on
@@ -396,8 +489,8 @@ def waveform_sampled(
     qe_key, tts_key, gain_key = jax.random.split(key, 3)
 
     detected, sensor_id, hit_time, _ = _resolve_first_detection(
-        flat_weights, flat_indices, flat_times, n_photons,
-        per_photon_qe, qe_key, threshold)
+        flat_weights, flat_indices, flat_times, n_photons, per_photon_qe, qe_key, threshold
+    )
 
     if smear_time:
         noise = jax.random.normal(tts_key, shape=hit_time.shape) * tts_sigma_ns
@@ -421,7 +514,8 @@ def waveform_sampled(
     safe_charge = jnp.where(keep, charges, 0.0)
 
     waveform_flat = jax.ops.segment_sum(
-        safe_charge, flat_bin_idx, num_segments=num_sensors * n_time_bins)
+        safe_charge, flat_bin_idx, num_segments=num_sensors * n_time_bins
+    )
     waveform = waveform_flat.reshape(num_sensors, n_time_bins)
 
     n_dropped = jnp.sum(dropped.astype(jnp.int32))
@@ -431,10 +525,24 @@ def waveform_sampled(
 
 
 def waveform_expected(
-        flat_weights, flat_indices, flat_times, num_sensors, key, qe, qe_corrections, response,
-        flat_segment_idx, flat_indirect, *,
-        window_ns=500.0, bin_width_ns=1.0, tts_sigma_ns=1.0, t_min_ns=0.0, smear_time=True,
-        threshold=1e-10):
+    flat_weights,
+    flat_indices,
+    flat_times,
+    num_sensors,
+    key,
+    qe,
+    qe_corrections,
+    response,
+    flat_segment_idx,
+    flat_indirect,
+    *,
+    window_ns=500.0,
+    bin_width_ns=1.0,
+    tts_sigma_ns=1.0,
+    t_min_ns=0.0,
+    smear_time=True,
+    threshold=1e-10,
+):
     """The continuous QE-weighted waveform (no Bernoulli, no gain smearing).
 
     Every deposit contributes its continuous ``flat_weight · QE`` to the ``(sensor, time_bin)``
@@ -478,7 +586,8 @@ def waveform_expected(
     safe_charge = jnp.where(keep, slot_charge, 0.0)
 
     waveform_flat = jax.ops.segment_sum(
-        safe_charge, flat_bin_idx, num_segments=num_sensors * n_time_bins)
+        safe_charge, flat_bin_idx, num_segments=num_sensors * n_time_bins
+    )
     waveform = waveform_flat.reshape(num_sensors, n_time_bins)
 
     n_dropped = jnp.sum(dropped.astype(jnp.int32))
@@ -488,9 +597,22 @@ def waveform_expected(
 
 
 def photon_hits_sampled(
-        flat_weights, flat_indices, flat_times, num_sensors, key, qe, qe_corrections, response,
-        flat_segment_idx, flat_indirect, *,
-        n_photons, tts_sigma_ns=1.0, smear_time=True, threshold=1e-10):
+    flat_weights,
+    flat_indices,
+    flat_times,
+    num_sensors,
+    key,
+    qe,
+    qe_corrections,
+    response,
+    flat_segment_idx,
+    flat_indirect,
+    *,
+    n_photons,
+    tts_sigma_ns=1.0,
+    smear_time=True,
+    threshold=1e-10,
+):
     """Per emitted photon: its first detection, if any, under Bernoulli QE.
 
     ``indirect`` marks light that scattered or reflected before detection -- the direct/indirect
@@ -512,8 +634,15 @@ def photon_hits_sampled(
     qe_key, tts_key = jax.random.split(key)
 
     detected, sensor_id, hit_time, indirect = _resolve_first_detection(
-        flat_weights, flat_indices, flat_times, n_photons,
-        per_photon_qe, qe_key, threshold, flat_indirect)
+        flat_weights,
+        flat_indices,
+        flat_times,
+        n_photons,
+        per_photon_qe,
+        qe_key,
+        threshold,
+        flat_indirect,
+    )
 
     if smear_time:
         noise = jax.random.normal(tts_key, shape=hit_time.shape) * tts_sigma_ns
@@ -527,17 +656,17 @@ def photon_hits_sampled(
 # ===================================================================
 
 HITS = {
-    ('first_arrival', 'expected'): first_arrival_expected,
-    ('first_arrival', 'sampled'): first_arrival_sampled,
-    ('photon_list', 'expected'): photon_list_expected,
-    ('segment_truth', 'sampled'): segment_truth_sampled,
-    ('waveform', 'expected'): waveform_expected,
-    ('waveform', 'sampled'): waveform_sampled,
-    ('photon_hits', 'sampled'): photon_hits_sampled,
+    ("first_arrival", "expected"): first_arrival_expected,
+    ("first_arrival", "sampled"): first_arrival_sampled,
+    ("photon_list", "expected"): photon_list_expected,
+    ("segment_truth", "sampled"): segment_truth_sampled,
+    ("waveform", "expected"): waveform_expected,
+    ("waveform", "sampled"): waveform_sampled,
+    ("photon_hits", "sampled"): photon_hits_sampled,
 }
 
 # The options the simulator supplies itself, not hits_config.
-_SIMULATOR_OPTIONS = ('n_photons', 'charge_resolution')
+_SIMULATOR_OPTIONS = ("n_photons", "charge_resolution")
 
 
 def bind_hits(hits, detection, hits_config, n_photons, charge_resolution):
@@ -549,16 +678,19 @@ def bind_hits(hits, detection, hits_config, n_photons, charge_resolution):
     if (hits, detection) not in HITS:
         raise ValueError(
             f"hits={hits!r} with detection={detection!r} is not supported; the supported "
-            f"(hits, detection) pairs are {sorted(HITS)}")
+            f"(hits, detection) pairs are {sorted(HITS)}"
+        )
     fn = HITS[(hits, detection)]
-    options = [name for name, p in inspect.signature(fn).parameters.items()
-               if p.kind is p.KEYWORD_ONLY]
+    options = [
+        name for name, p in inspect.signature(fn).parameters.items() if p.kind is p.KEYWORD_ONLY
+    ]
     accepted = [name for name in options if name not in _SIMULATOR_OPTIONS]
     hits_config = hits_config or {}
     unknown = sorted(set(hits_config) - set(accepted))
     if unknown:
         raise ValueError(
             f"hits_config keys {unknown} are not options of hits={hits!r} with "
-            f"detection={detection!r}; it accepts {accepted}")
+            f"detection={detection!r}; it accepts {accepted}"
+        )
     setup = dict(n_photons=n_photons, charge_resolution=charge_resolution)
     return partial(fn, **{k: v for k, v in setup.items() if k in options}, **hits_config)

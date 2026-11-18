@@ -7,9 +7,12 @@ DiCE score ``log p_mie + hg_logpdf`` versus ``log(1 - p_mie) + rayleigh_logpdf``
 
 The Rayleigh direction itself is sampled by :func:`lucid.simulation.optics.compute_scatter_direction`.
 """
+
 import jax
 import jax.numpy as jnp
+
 from lucid.utils import normalize
+
 # create_local_frame / solve_rayleigh_inverse_cdf are imported lazily inside the
 # functions below (not at module top) to avoid a circular import: importing
 # lucid.simulation.optics runs lucid/simulation/__init__ -> simulator -> photon_step,
@@ -82,17 +85,22 @@ def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
         (3,) scattered direction (unit vector).
     """
     from lucid.simulation.optics import create_local_frame
+
     k1, k2 = jax.random.split(rng_key)
     u1 = jax.random.uniform(k1)
     u2 = jax.random.uniform(k2)
 
     cos_theta = hg_sample_cos_theta(u1, g)
-    sin_theta = jnp.sqrt(jnp.maximum(1.0 - cos_theta ** 2, 0.0))
+    sin_theta = jnp.sqrt(jnp.maximum(1.0 - cos_theta**2, 0.0))
     phi = 2 * jnp.pi * u2
-    local_dir = normalize(jnp.array([
-        sin_theta * jnp.cos(phi),
-        sin_theta * jnp.sin(phi),
-        cos_theta,
-    ]))
+    local_dir = normalize(
+        jnp.array(
+            [
+                sin_theta * jnp.cos(phi),
+                sin_theta * jnp.sin(phi),
+                cos_theta,
+            ]
+        )
+    )
     frame = create_local_frame(incident_dir)
     return normalize(frame.T @ local_dir)

@@ -5,6 +5,7 @@ The lines come from the sbatch wrapper (``Job started`` / ``Job ended``, rendere
 ``PhotonSim exit code``) and the event loops in ``dataprod/drivers.py`` (``Event total time``,
 ``Simulation completed in``, ``[timing] <stage>``, ``Batch N save time``, ``Successfully wrote``).
 """
+
 from __future__ import annotations
 
 import re
@@ -86,8 +87,9 @@ def parse_job_log(lines: Iterable[str]) -> dict:
     job_wall_s = None
     if started and ended:
         try:
-            job_wall_s = (datetime.strptime(ended, DATE_FMT)
-                          - datetime.strptime(started, DATE_FMT)).total_seconds()
+            job_wall_s = (
+                datetime.strptime(ended, DATE_FMT) - datetime.strptime(started, DATE_FMT)
+            ).total_seconds()
         except ValueError:
             pass  # a timezone strptime does not know: no wall time
     return {

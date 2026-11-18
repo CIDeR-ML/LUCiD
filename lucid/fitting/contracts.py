@@ -29,11 +29,14 @@ AMP_DETACH in the time term. Calibration runs the same loop
 (:func:`lucid.fitting.minimize.minimize`, by default with :func:`lucid.fitting.gn.gauss_newton_tx`
 at ``lam=0.01, mu=0.1``, ``max_step=0.5``) and a Neyman residual.
 """
-from __future__ import annotations
-from typing import Protocol, Tuple, TYPE_CHECKING, runtime_checkable
 
-if TYPE_CHECKING:                                   # avoid importing JAX / params at module load
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Protocol, Tuple, runtime_checkable
+
+if TYPE_CHECKING:  # avoid importing JAX / params at module load
     from jax import Array
+
     from lucid.detector_params import ParticleParams
 
 
@@ -46,7 +49,7 @@ class CalibForward(Protocol):
     are clean).
     """
 
-    def __call__(self, theta, ek, pk) -> "Array": ...   # -> (n_sensors,)
+    def __call__(self, theta, ek, pk) -> "Array": ...  # -> (n_sensors,)
 
 
 @runtime_checkable
@@ -61,4 +64,6 @@ class PerPhotonPredictor(Protocol):
     Wrapped by :class:`~lucid.fitting.recon.ReconModel` into the per-PMT (μ, time-NLL).
     """
 
-    def __call__(self, track: "ParticleParams", key) -> Tuple["Array", "Array", "Array", "Array"]: ...
+    def __call__(
+        self, track: "ParticleParams", key
+    ) -> Tuple["Array", "Array", "Array", "Array"]: ...

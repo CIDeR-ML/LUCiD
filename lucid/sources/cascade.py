@@ -19,12 +19,12 @@ suitable for precision physics; suitable for testing propagator integration,
 hit patterns, and reconstruction pipelines.
 """
 
-import jax
-import jax.numpy as jnp
 from typing import NamedTuple
 
-from lucid.utils import create_local_frame
+import jax
+import jax.numpy as jnp
 
+from lucid.utils import create_local_frame
 
 # Cherenkov yield: ~340 photons per cm per MeV of track in water at 400nm
 # Integrated over Cherenkov spectrum (300-600nm): ~24000 photons per cm
@@ -34,11 +34,11 @@ PHOTONS_PER_MEV = 250.0
 
 # Radiation length
 X0_WATER = 0.361  # meters (36.1 cm)
-X0_ICE = 0.393    # meters
+X0_ICE = 0.393  # meters
 
 # Critical energy
-EC_WATER = 78.6   # MeV (electrons in water)
-EC_ICE = 73.0     # MeV (electrons in ice)
+EC_WATER = 78.6  # MeV (electrons in water)
+EC_ICE = 73.0  # MeV (electrons in ice)
 
 
 def cherenkov_angle(n_medium):
@@ -151,9 +151,11 @@ def _cone_to_world(axis, theta, phi):
     sin_p = jnp.sin(phi)
     cos_p = jnp.cos(phi)
 
-    dirs = (cos_t[:, None] * axis[None, :] +
-            sin_t[:, None] * cos_p[:, None] * u[None, :] +
-            sin_t[:, None] * sin_p[:, None] * v[None, :])
+    dirs = (
+        cos_t[:, None] * axis[None, :]
+        + sin_t[:, None] * cos_p[:, None] * u[None, :]
+        + sin_t[:, None] * sin_p[:, None] * v[None, :]
+    )
 
     norms = jnp.linalg.norm(dirs, axis=1, keepdims=True)
     return dirs / (norms + 1e-30)
@@ -166,6 +168,7 @@ class CascadeSource(NamedTuple):
     simulator passes the medium's refractive index. Compatible with
     ``setup_event_simulator(source='light_source')``.
     """
+
     position: jnp.ndarray
     direction: jnp.ndarray
     energy_mev: jnp.ndarray
@@ -174,14 +177,18 @@ class CascadeSource(NamedTuple):
 
     def __call__(self, n_photons, key, n_medium):
         origins, directions, weights = generate_cascade_photons(
-            self.position, self.direction, self.energy_mev,
-            n_photons, key, n_medium=n_medium,
-            is_hadronic=self.is_hadronic)
+            self.position,
+            self.direction,
+            self.energy_mev,
+            n_photons,
+            key,
+            n_medium=n_medium,
+            is_hadronic=self.is_hadronic,
+        )
         return directions, origins, weights
 
 
-def cascade_source(position, direction, energy_mev,
-                   is_hadronic=False, wavelength=None):
+def cascade_source(position, direction, energy_mev, is_hadronic=False, wavelength=None):
     """Create a CascadeSource with sensible defaults."""
     if direction is None:
         direction = [0.0, 0.0, -1.0]

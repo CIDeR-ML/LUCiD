@@ -26,7 +26,9 @@ def load_user_paths(path: Path) -> Dict[str, str]:
         )
     proc = subprocess.run(
         ["bash", "-c", f"set -e; source {shlex.quote(str(path))} && env"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     out: Dict[str, str] = {}
     for line in proc.stdout.splitlines():

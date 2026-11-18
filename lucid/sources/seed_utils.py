@@ -3,6 +3,7 @@
 ``derive_event_keys`` folds (master_seed, job_id, event_idx, interaction_idx) into independent
 per-event streams.
 """
+
 from __future__ import annotations
 
 import jax
@@ -14,10 +15,10 @@ __all__ = [
 
 # Tag constants used with jax.random.fold_in so each stream in the seed hierarchy gets a
 # distinct derivation. Values are arbitrary; they have to be stable and distinct across tags.
-_SUBPROC_SCINT_TAG     = 0x5C17
-_SUBPROC_ROT_TAG       = 0x4074
-_SUBPROC_SEED_TAG      = 0x5EED
-_SUBPROC_FIT_TAG       = 0xF17
+_SUBPROC_SCINT_TAG = 0x5C17
+_SUBPROC_ROT_TAG = 0x4074
+_SUBPROC_SEED_TAG = 0x5EED
+_SUBPROC_FIT_TAG = 0xF17
 
 
 def derive_event_keys(master_seed, job_id, event_idx, interaction_idx=0):
@@ -38,7 +39,7 @@ def derive_event_keys(master_seed, job_id, event_idx, interaction_idx=0):
     it's derived deterministically from the same hierarchy so reruns at
     the same ``master_seed`` are byte-equivalent.
     """
-    base = jax.random.PRNGKey(int(master_seed) % (2 ** 31 - 1))
+    base = jax.random.PRNGKey(int(master_seed) % (2**31 - 1))
     job_key = jax.random.fold_in(base, int(job_id))
     event_key = jax.random.fold_in(job_key, int(event_idx))
     interaction_key = jax.random.fold_in(event_key, int(interaction_idx))
@@ -56,11 +57,11 @@ def derive_event_keys(master_seed, job_id, event_idx, interaction_idx=0):
     seed_key = jax.random.fold_in(interaction_key, _SUBPROC_SEED_TAG)
     fit_key = jax.random.fold_in(interaction_key, _SUBPROC_FIT_TAG)
     return {
-        'vertex_seed': int(jax.random.randint(vertex_key, (), 1, 2**31 - 1)),
-        't0_seed':     int(jax.random.randint(t0_key,     (), 1, 2**31 - 1)),
-        'scint_seed':  int(jax.random.randint(scint_key,  (), 1, 2**31 - 1)),
-        'rot_seed':    int(jax.random.randint(rot_key,    (), 1, 2**31 - 1)),
-        'sim_key':     sim_key,
-        'seed_key':    seed_key,
-        'fit_key':     fit_key,
+        "vertex_seed": int(jax.random.randint(vertex_key, (), 1, 2**31 - 1)),
+        "t0_seed": int(jax.random.randint(t0_key, (), 1, 2**31 - 1)),
+        "scint_seed": int(jax.random.randint(scint_key, (), 1, 2**31 - 1)),
+        "rot_seed": int(jax.random.randint(rot_key, (), 1, 2**31 - 1)),
+        "sim_key": sim_key,
+        "seed_key": seed_key,
+        "fit_key": fit_key,
     }

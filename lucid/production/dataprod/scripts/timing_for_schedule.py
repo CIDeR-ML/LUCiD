@@ -69,10 +69,10 @@ def parse_out(path: Path) -> dict:
         "out_file": str(path),
         "n_events": len(event_totals),
         "lucid_event_median_s": statistics.median(event_totals) if event_totals else None,
-        "lucid_event_mean_s":   statistics.fmean(event_totals)  if event_totals else None,
-        "photonsim_elapsed_s":  log["photonsim_elapsed_s"],
-        "genie_elapsed_s":      log["genie_elapsed_s"],
-        "job_wall_s":           log["job_wall_s"],
+        "lucid_event_mean_s": statistics.fmean(event_totals) if event_totals else None,
+        "photonsim_elapsed_s": log["photonsim_elapsed_s"],
+        "genie_elapsed_s": log["genie_elapsed_s"],
+        "job_wall_s": log["job_wall_s"],
     }
 
 
@@ -86,7 +86,7 @@ def derive_seconds_per_event(stats: dict) -> Optional[float]:
     if not n:
         return None
     lucid = stats["lucid_event_median_s"] or 0.0
-    ps    = (stats["photonsim_elapsed_s"] or 0.0) / n
+    ps = (stats["photonsim_elapsed_s"] or 0.0) / n
     return lucid + ps
 
 
@@ -95,19 +95,34 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--base-dir", type=Path, required=True,
-                   help="<scan_root>/<detector>/  (e.g. timing_20260515/SK_like/)")
-    p.add_argument("--partition", type=str, default="roma",
-                   help="Label only — appears in the markdown table and the "
-                        "printed events_schedule blocks. Default: %(default)s.")
-    p.add_argument("--target-seconds", type=float, default=3600,
-                   help="target_seconds_per_job for the printed events_schedule "
-                        "stubs. Default: %(default)s.")
-    p.add_argument("--events-per-dataset", type=int, default=20000,
-                   help="events_per_dataset for the printed events_schedule "
-                        "stubs. Default: %(default)s.")
-    p.add_argument("--json-only", action="store_true",
-                   help="Skip the markdown table; print only JSON.")
+    p.add_argument(
+        "--base-dir",
+        type=Path,
+        required=True,
+        help="<scan_root>/<detector>/  (e.g. timing_20260515/SK_like/)",
+    )
+    p.add_argument(
+        "--partition",
+        type=str,
+        default="roma",
+        help="Label only — appears in the markdown table and the "
+        "printed events_schedule blocks. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--target-seconds",
+        type=float,
+        default=3600,
+        help="target_seconds_per_job for the printed events_schedule stubs. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--events-per-dataset",
+        type=int,
+        default=20000,
+        help="events_per_dataset for the printed events_schedule stubs. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--json-only", action="store_true", help="Skip the markdown table; print only JSON."
+    )
     args = p.parse_args()
 
     if not args.base_dir.is_dir():
@@ -115,7 +130,7 @@ def main() -> int:
         return 2
 
     rows: list[dict] = []
-    for cdir in sorted(args.base_dir.rglob("config_*")):   # recursive: block/split layers
+    for cdir in sorted(args.base_dir.rglob("config_*")):  # recursive: block/split layers
         m = re.match(r"^config_(\d+)$", cdir.name)
         if not m:
             continue
@@ -128,53 +143,67 @@ def main() -> int:
             continue
         st = parse_out(out)
         s_per = derive_seconds_per_event(st)
-        rows.append({
-            "config_id":            cid,
-            "config_number":        int(m.group(1)),
-            "status":               "OK" if s_per is not None else "EMPTY",
-            "out_file":             st["out_file"],
-            "n_events":             st["n_events"],
-            "lucid_event_median_s": st["lucid_event_median_s"],
-            "photonsim_elapsed_s":  st["photonsim_elapsed_s"],
-            "genie_elapsed_s":      st["genie_elapsed_s"],
-            "job_wall_s":           st["job_wall_s"],
-            "seconds_per_event":    s_per,
-        })
+        rows.append(
+            {
+                "config_id": cid,
+                "config_number": int(m.group(1)),
+                "status": "OK" if s_per is not None else "EMPTY",
+                "out_file": st["out_file"],
+                "n_events": st["n_events"],
+                "lucid_event_median_s": st["lucid_event_median_s"],
+                "photonsim_elapsed_s": st["photonsim_elapsed_s"],
+                "genie_elapsed_s": st["genie_elapsed_s"],
+                "job_wall_s": st["job_wall_s"],
+                "seconds_per_event": s_per,
+            }
+        )
 
     # Markdown table
     if not args.json_only:
-        print(f"## Per-config seconds_per_event on `{args.partition}` "
-              f"(n_events ≈ {rows[0].get('n_events') if rows else '?'})")
+        print(
+            f"## Per-config seconds_per_event on `{args.partition}` "
+            f"(n_events ≈ {rows[0].get('n_events') if rows else '?'})"
+        )
         print()
-        print("| Config | n_events | LUCiD median (s) | PhotonSim/event (s) | "
-              "**seconds_per_event** | Job wall (s) |")
+        print(
+            "| Config | n_events | LUCiD median (s) | PhotonSim/event (s) | "
+            "**seconds_per_event** | Job wall (s) |"
+        )
         print("|---|---:|---:|---:|---:|---:|")
         for r in rows:
             if r["status"] != "OK":
-                print(f"| {r['config_id']} | — | — | — | **—** | — "
-                      f" *({r['status']})* |")
+                print(f"| {r['config_id']} | — | — | — | **—** | —  *({r['status']})* |")
                 continue
             ps_pe = (r["photonsim_elapsed_s"] or 0) / max(r["n_events"], 1)
-            print(f"| {r['config_id']} | {r['n_events']} | "
-                  f"{r['lucid_event_median_s']:.3f} | {ps_pe:.3f} | "
-                  f"**{r['seconds_per_event']:.3f}** | "
-                  f"{r['job_wall_s']:.0f} |")
+            print(
+                f"| {r['config_id']} | {r['n_events']} | "
+                f"{r['lucid_event_median_s']:.3f} | {ps_pe:.3f} | "
+                f"**{r['seconds_per_event']:.3f}** | "
+                f"{r['job_wall_s']:.0f} |"
+            )
         print()
-        print(f"### Suggested `events_schedule` blocks "
-              f"(target_seconds_per_job={int(args.target_seconds)}, "
-              f"events_per_dataset={args.events_per_dataset})")
+        print(
+            f"### Suggested `events_schedule` blocks "
+            f"(target_seconds_per_job={int(args.target_seconds)}, "
+            f"events_per_dataset={args.events_per_dataset})"
+        )
         print()
         for r in rows:
             if r["status"] != "OK":
                 continue
             print(f"<!-- {r['config_id']} -->")
-            print(json.dumps({
-                "events_schedule": {
-                    "events_per_dataset":    args.events_per_dataset,
-                    "target_seconds_per_job": args.target_seconds,
-                    "seconds_per_event":     round(r["seconds_per_event"], 3),
-                }
-            }, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "events_schedule": {
+                            "events_per_dataset": args.events_per_dataset,
+                            "target_seconds_per_job": args.target_seconds,
+                            "seconds_per_event": round(r["seconds_per_event"], 3),
+                        }
+                    },
+                    indent=2,
+                )
+            )
             print()
 
     # Machine-readable JSON dump on stderr (avoids polluting the table on stdout).

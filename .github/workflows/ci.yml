@@ -108,12 +108,10 @@ jobs:
       - run: python examples/hello_multiparticle.py --split
 
   lint:
-    # NOT yet blocking: .pre-commit-config.yaml lands with a backlog of
-    # pre-existing findings; flipping this to blocking is the last step of
-    # clearing that backlog.
-    name: lint (advisory until the backlog clears)
+    # The hooks of .pre-commit-config.yaml on every file, as a local
+    # `pre-commit run --all-files` runs them.
+    name: lint
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

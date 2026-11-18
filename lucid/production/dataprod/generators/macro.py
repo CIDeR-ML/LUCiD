@@ -25,6 +25,7 @@ For monoenergetic with an energy scan, the caller passes
 `override_energy_MeV` to fix the per-run energy; we emit
 `/gun/addPrimary <type> <E> MeV` for each primary.
 """
+
 from __future__ import annotations
 
 from typing import Optional, Tuple
@@ -87,14 +88,17 @@ def generate_macro(
     store_individual = bool(config.get("store_individual_photons", False))
     disable_decays = bool(config.get("disable_decays", False))
     energy_dist = (
-        "monoenergetic" if override_energy_MeV is not None
+        "monoenergetic"
+        if override_energy_MeV is not None
         else config.get("energy_distribution", "uniform")
     )
 
     lines: list[str] = []
 
     # Header
-    header_kind = "Monoenergetic" if energy_dist == "monoenergetic" else "Unified Multi-Primary Workflow"
+    header_kind = (
+        "Monoenergetic" if energy_dist == "monoenergetic" else "Unified Multi-Primary Workflow"
+    )
     lines.append(f"# PhotonSim macro ({header_kind})")
     lines.append(f"# Configuration: {config_name}")
     lines.append(f"# Config Number: {config_number:06d}")
@@ -341,11 +345,15 @@ def _generate_genie_macro(
     lines.append(f"# Material: {material}")
     if is_supernova:
         model = g.get("model") or ", ".join(m.get("name", "?") for m in g.get("models", []))
-        lines.append(f"# Supernova model(s): {model}; distance {g.get('distance_kpc', '?')} kpc; "
-                     f"direction: {'isotropic' if isotropic else 'sntools kinematics'}")
+        lines.append(
+            f"# Supernova model(s): {model}; distance {g.get('distance_kpc', '?')} kpc; "
+            f"direction: {'isotropic' if isotropic else 'sntools kinematics'}"
+        )
     else:
-        lines.append(f"# Probe PDG: {probe}, E range [{emin}, {emax}] GeV, "
-                     f"direction: {'isotropic' if isotropic else 'GENIE beam axis'}")
+        lines.append(
+            f"# Probe PDG: {probe}, E range [{emin}, {emax}] GeV, "
+            f"direction: {'isotropic' if isotropic else 'GENIE beam axis'}"
+        )
     lines.append("")
     lines.append("# Set output filename before initialization")
     lines.append(f"/output/filename {output_root_file}")

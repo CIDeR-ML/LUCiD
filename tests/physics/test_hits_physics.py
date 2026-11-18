@@ -3,13 +3,16 @@
 Tests verify charge conservation, QE scaling, the mean first-arrival time,
 and differentiability of the sensor aggregation pipeline.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
 
 from lucid.simulation.hits import (
-    first_arrival_expected, first_arrival_sampled, photon_list_expected,
+    first_arrival_expected,
+    first_arrival_sampled,
+    photon_list_expected,
 )
 from tests.helpers.params import on_deposits
 
@@ -40,10 +43,12 @@ class TestChargeConservation:
         uniform_corr = jnp.ones(n)
         double_corr = jnp.ones(n).at[0].set(2.0)  # sensor 0 gets 2x
 
-        q_uniform, _ = on_deposits(first_arrival_expected, w, idx, t, n, qe=0.2,
-                                   qe_corrections=uniform_corr)
-        q_double, _ = on_deposits(first_arrival_expected, w, idx, t, n, qe=0.2,
-                                  qe_corrections=double_corr)
+        q_uniform, _ = on_deposits(
+            first_arrival_expected, w, idx, t, n, qe=0.2, qe_corrections=uniform_corr
+        )
+        q_double, _ = on_deposits(
+            first_arrival_expected, w, idx, t, n, qe=0.2, qe_corrections=double_corr
+        )
         # Sensor 0 charge should double
         npt.assert_allclose(q_double[0] / q_uniform[0], 2.0, atol=1e-5)
         # Sensor 3 charge unchanged
@@ -64,8 +69,9 @@ class TestFirstArrivalTiming:
     def test_bright_sensor_reports_its_earliest_deposit(self):
         """50 photo-electrons per deposit: the first is from the earliest one but for e^-50."""
         w, idx, t, n, qe_corr = _make_test_hits()
-        _, times = on_deposits(first_arrival_expected, 50.0 * w, idx, t, n, qe=1.0,
-                               qe_corrections=qe_corr)
+        _, times = on_deposits(
+            first_arrival_expected, 50.0 * w, idx, t, n, qe=1.0, qe_corrections=qe_corr
+        )
         npt.assert_allclose(times[0], 10.0, atol=1e-5)
         npt.assert_allclose(times[3], 8.0, atol=1e-5)
 
@@ -73,35 +79,61 @@ class TestFirstArrivalTiming:
         """At mu -> 0 at most one photo-electron arrives, from deposit i with probability
         w_i / mu: sensor 0's [10, 12, 15] with weights [0.8, 0.6, 0.4] give 11.222 ns."""
         w, idx, t, n, qe_corr = _make_test_hits()
-        _, times = on_deposits(first_arrival_expected, 1e-4 * w, idx, t, n, qe=1.0,
-                               qe_corrections=qe_corr,
-                               threshold=1e-12)
+        _, times = on_deposits(
+            first_arrival_expected,
+            1e-4 * w,
+            idx,
+            t,
+            n,
+            qe=1.0,
+            qe_corrections=qe_corr,
+            threshold=1e-12,
+        )
         npt.assert_allclose(times[0], (0.8 * 10 + 0.6 * 12 + 0.4 * 15) / 1.8, rtol=1e-4)
 
     def test_single_deposit_time_exact(self):
         """One deposit: its own time, whatever its weight, without the spread."""
-        q, times = on_deposits(first_arrival_expected, jnp.array([3.0]), jnp.array([0]),
-                               jnp.array([42.0]), 5, qe=1.0, qe_corrections=jnp.ones(5))
+        q, times = on_deposits(
+            first_arrival_expected,
+            jnp.array([3.0]),
+            jnp.array([0]),
+            jnp.array([42.0]),
+            5,
+            qe=1.0,
+            qe_corrections=jnp.ones(5),
+        )
         npt.assert_allclose(times[0], 42.0, rtol=1e-7)
 
     def test_spread_moves_a_bright_deposit_earlier_and_a_dim_one_not(self):
         """With the spread the first of many smeared photo-electrons comes early; one alone is
         centred on the deposit (the Gaussian is symmetric)."""
+
         def first(weight):
-            return float(on_deposits(first_arrival_expected, jnp.array([weight]), jnp.array([0]),
-                                     jnp.array([42.0]), 2, qe=1.0,
-                                     qe_corrections=jnp.ones(2), tts=2.0,
-                                     threshold=1e-12)[1][0])
+            return float(
+                on_deposits(
+                    first_arrival_expected,
+                    jnp.array([weight]),
+                    jnp.array([0]),
+                    jnp.array([42.0]),
+                    2,
+                    qe=1.0,
+                    qe_corrections=jnp.ones(2),
+                    tts=2.0,
+                    threshold=1e-12,
+                )[1][0]
+            )
+
         npt.assert_allclose(first(1e-4), 42.0, atol=2e-3)
-        assert first(20.0) < 42.0 - 2.0 * 1.5          # E[min of ~20 normals] = -1.87 sigma
+        assert first(20.0) < 42.0 - 2.0 * 1.5  # E[min of ~20 normals] = -1.87 sigma
 
 
 class TestLikelihoodMode:
     def test_log_weights_correct(self):
         """log_w should be log(weight * qe * qe_correction) for valid photons."""
         w, idx, t, n, qe_corr = _make_test_hits()
-        log_w, _, _, _ = on_deposits(photon_list_expected, w, idx, t, n, qe=0.2,
-                                     qe_corrections=qe_corr)
+        log_w, _, _, _ = on_deposits(
+            photon_list_expected, w, idx, t, n, qe=0.2, qe_corrections=qe_corr
+        )
         # Photon 0: weight=0.8, qe=0.2, corr=1.0 → qe_weight=0.16
         npt.assert_allclose(log_w[0], jnp.log(0.16), atol=1e-5)
 
@@ -109,18 +141,20 @@ class TestLikelihoodMode:
         """Likelihood total_charge should match simulation measured_charge."""
         w, idx, t, n, qe_corr = _make_test_hits()
         q_sim, _ = on_deposits(first_arrival_expected, w, idx, t, n, qe=0.2, qe_corrections=qe_corr)
-        _, _, _, q_like = on_deposits(photon_list_expected, w, idx, t, n, qe=0.2,
-                                      qe_corrections=qe_corr)
+        _, _, _, q_like = on_deposits(
+            photon_list_expected, w, idx, t, n, qe=0.2, qe_corrections=qe_corr
+        )
         npt.assert_allclose(q_sim, q_like, atol=1e-6)
 
     def test_invalid_photon_log_weight(self):
         """Photons with zero weight or non-positive time should get -1e10."""
-        w = jnp.array([0.0, 0.5])   # first photon has zero weight
+        w = jnp.array([0.0, 0.5])  # first photon has zero weight
         idx = jnp.array([0, 1])
         t = jnp.array([10.0, -1.0])  # second has negative time
         qe_corr = jnp.ones(5)
-        log_w, _, _, _ = on_deposits(photon_list_expected, w, idx, t, 5, qe=0.2,
-                                     qe_corrections=qe_corr)
+        log_w, _, _, _ = on_deposits(
+            photon_list_expected, w, idx, t, 5, qe=0.2, qe_corrections=qe_corr
+        )
         assert float(log_w[0]) == -1e10  # zero weight
         assert float(log_w[1]) == -1e10  # negative time
 
@@ -130,8 +164,9 @@ class TestDataMode:
         """With qe=1.0, all photons should pass QE sampling."""
         w, idx, t, n, _ = _make_test_hits()
         key = jax.random.PRNGKey(42)
-        q, _ = on_deposits(first_arrival_sampled, w, idx, t, n, qe=1.0,
-                           qe_corrections=jnp.ones(n), key=key)
+        q, _ = on_deposits(
+            first_arrival_sampled, w, idx, t, n, qe=1.0, qe_corrections=jnp.ones(n), key=key
+        )
         # Total charge should equal sum of weights at each sensor
         expected_sensor0 = 0.8 + 0.6 + 0.4
         npt.assert_allclose(q[0], expected_sensor0, atol=1e-5)
@@ -140,8 +175,9 @@ class TestDataMode:
         """With qe≈0, no photons should pass."""
         w, idx, t, n, _ = _make_test_hits()
         key = jax.random.PRNGKey(42)
-        q, _ = on_deposits(first_arrival_sampled, w, idx, t, n, qe=1e-10,
-                           qe_corrections=jnp.ones(n), key=key)
+        q, _ = on_deposits(
+            first_arrival_sampled, w, idx, t, n, qe=1e-10, qe_corrections=jnp.ones(n), key=key
+        )
         npt.assert_allclose(q, jnp.zeros(n), atol=1e-6)
 
     N_KEYS = 40_000
@@ -149,8 +185,13 @@ class TestDataMode:
     def _vmapped(self, qe, qe_corr):
         w, idx, t, n, _ = _make_test_hits()
         keys = jax.random.split(jax.random.PRNGKey(0), self.N_KEYS)
-        q, tm = jax.jit(jax.vmap(lambda k: on_deposits(first_arrival_sampled,
-            w, idx, t, n, qe=qe, qe_corrections=qe_corr, key=k)))(keys)
+        q, tm = jax.jit(
+            jax.vmap(
+                lambda k: on_deposits(
+                    first_arrival_sampled, w, idx, t, n, qe=qe, qe_corrections=qe_corr, key=k
+                )
+            )
+        )(keys)
         return np.asarray(q, np.float64), np.asarray(tm, np.float64)
 
     def test_binomial_mean_with_per_sensor_corrections(self):
@@ -170,11 +211,15 @@ class TestDataMode:
         p = 0.4
         _, tm = self._vmapped(p, jnp.ones(10))
         t0 = tm[:, 0]
-        for t_k, prob in [(10.0, p), (12.0, (1 - p) * p), (15.0, (1 - p) ** 2 * p),
-                          (0.0, (1 - p) ** 3)]:
-            npt.assert_allclose(np.mean(np.isclose(t0, t_k)), prob, atol=0.012,
-                                err_msg=f"t = {t_k}")
-
+        for t_k, prob in [
+            (10.0, p),
+            (12.0, (1 - p) * p),
+            (15.0, (1 - p) ** 2 * p),
+            (0.0, (1 - p) ** 3),
+        ]:
+            npt.assert_allclose(
+                np.mean(np.isclose(t0, t_k)), prob, atol=0.012, err_msg=f"t = {t_k}"
+            )
 
     def test_a_sensor_smeared_to_a_negative_first_arrival_keeps_its_charge(self):
         """A photon counts when its TRUE time is > 0 (production's rule), and a sensor that any
@@ -183,10 +228,10 @@ class TestDataMode:
         charge and time; the earliest sensors are the brightest. Same sensors as the expected path."""
         w = jnp.ones(102)
         idx = jnp.array([0] * 100 + [1, 2])
-        t = jnp.array([0.3] * 100 + [50.0, -1.0])     # sensor 2's only photon has true time < 0
+        t = jnp.array([0.3] * 100 + [50.0, -1.0])  # sensor 2's only photon has true time < 0
         kw = dict(qe=1.0, qe_corrections=jnp.ones(4), key=jax.random.PRNGKey(3), tts=2.1)
         q, tm = on_deposits(first_arrival_sampled, w, idx, t, 4, **kw)
-        assert float(q[0]) == 100.0 and float(tm[0]) < 0.0   # min of 100 smeared 0.3 ns arrivals
+        assert float(q[0]) == 100.0 and float(tm[0]) < 0.0  # min of 100 smeared 0.3 ns arrivals
         assert float(q[1]) == 1.0 and 40.0 < float(tm[1]) < 60.0
         npt.assert_array_equal(np.asarray(q[2:]), 0.0)
         npt.assert_array_equal(np.asarray(tm[2:]), 0.0)
@@ -197,12 +242,20 @@ class TestDataMode:
 class TestDifferentiability:
     def test_simulation_grad_wrt_weights(self):
         """first_arrival_expected should be differentiable w.r.t. flat_weights."""
+
         def loss(weights):
             qe_corr = jnp.ones(10)
-            q, t = on_deposits(first_arrival_expected, weights, jnp.array([0, 0, 3]),
-                               jnp.array([10.0, 12.0, 8.0]),
-                               10, qe=0.2, qe_corrections=qe_corr)
+            q, t = on_deposits(
+                first_arrival_expected,
+                weights,
+                jnp.array([0, 0, 3]),
+                jnp.array([10.0, 12.0, 8.0]),
+                10,
+                qe=0.2,
+                qe_corrections=qe_corr,
+            )
             return jnp.sum(q)
+
         grad = jax.grad(loss)(jnp.array([0.8, 0.6, 0.9]))
         assert jnp.all(jnp.isfinite(grad))
         # Charge is linear in weights, so gradient should be constant (= qe)
@@ -210,12 +263,19 @@ class TestDifferentiability:
 
     def test_likelihood_grad_wrt_weights(self):
         """photon_list_expected should be differentiable w.r.t. flat_weights."""
+
         def loss(weights):
             qe_corr = jnp.ones(10)
-            log_w, _, _, total_q = on_deposits(photon_list_expected,
-                weights, jnp.array([0, 0, 3]),
+            log_w, _, _, total_q = on_deposits(
+                photon_list_expected,
+                weights,
+                jnp.array([0, 0, 3]),
                 jnp.array([10.0, 12.0, 8.0]),
-                10, qe=0.2, qe_corrections=qe_corr)
+                10,
+                qe=0.2,
+                qe_corrections=qe_corr,
+            )
             return jnp.sum(total_q)
+
         grad = jax.grad(loss)(jnp.array([0.8, 0.6, 0.9]))
         npt.assert_allclose(grad, jnp.array([0.2, 0.2, 0.2]), atol=1e-6)

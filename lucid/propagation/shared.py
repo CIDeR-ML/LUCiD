@@ -9,18 +9,19 @@ Not the only propagator: `lucid/propagation/string/` traverses a per-DOM volume 
 surface grid, and carries its own deposit implementation. The two have diverged: that one clamps
 the closest-approach parameter where this one gates on it, and has no first-hit survival product.
 """
+
 import warnings
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from lucid.overlap import create_overlap_prob
 from lucid.propagation.base import (
     compute_sensor_intersections_base,
-    process_intersection_normals,
     find_closest_sensors,
+    process_intersection_normals,
 )
-from lucid.overlap import create_overlap_prob
 
 
 def first_hit_survival(weights, times):
@@ -62,9 +63,9 @@ def first_hit_survival(weights, times):
     p = weights + jax.lax.stop_gradient(jnp.clip(weights, 0.0, 1.0 - 1e-6) - weights)
     slot = jnp.arange(p.shape[0])
     # before[i, j, n]: candidate j reaches photon n's path before candidate i does
-    before = ((times[None, :, :] < times[:, None, :])
-              | ((times[None, :, :] == times[:, None, :])
-                 & (slot[None, :, None] < slot[:, None, None])))
+    before = (times[None, :, :] < times[:, None, :]) | (
+        (times[None, :, :] == times[:, None, :]) & (slot[None, :, None] < slot[:, None, None])
+    )
     log_survive = jnp.sum(before * jnp.log1p(-p)[None, :, :], axis=1)
     return p * jnp.exp(log_survive)
 
@@ -80,15 +81,19 @@ def max_assignments_per_cell(assignments_geometric, detector, grid):
     # A sensor counts once per distinct cell: neighbour indices clipped at a grid edge repeat
     # its own cell.
     for sensor_cells in fwd:
-        cells = {int(detector.point_to_grid_cell_from_coords(c, grid))
-                 for c in sensor_cells if not np.all(c == -1)}
+        cells = {
+            int(detector.point_to_grid_cell_from_coords(c, grid))
+            for c in sensor_cells
+            if not np.all(c == -1)
+        }
         for cell in cells:
             counts[cell] = counts.get(cell, 0) + 1
     return max(counts.values(), default=0)
 
 
-def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
-                        detector, grid, max_candidates_per_ray):
+def validate_sensor_map(
+    assignments_geometric, inverted_sensor_map, num_sensors, detector, grid, max_candidates_per_ray
+):
     """Check consistency between forward (sensor→cells) and inverse (cell→sensors) maps.
 
     Runs at propagator build time (numpy, not JIT). Raises warnings for
@@ -111,8 +116,8 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
         min_idx, max_idx = int(inv[valid_mask].min()), int(inv[valid_mask].max())
         if min_idx < 0 or max_idx >= num_sensors:
             warnings.warn(
-                f"Sensor map: out-of-range indices [{min_idx}, {max_idx}] "
-                f"for {num_sensors} sensors")
+                f"Sensor map: out-of-range indices [{min_idx}, {max_idx}] for {num_sensors} sensors"
+            )
 
     # --- 2. Cell coverage ---
     cells_with_sensors = int(np.any(valid_mask, axis=1).sum())
@@ -121,7 +126,8 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
         warnings.warn(
             f"Sensor map: low cell coverage — {cells_with_sensors}/{total_cells} "
             f"({coverage_pct:.1f}%) cells have sensors. Photons hitting empty "
-            f"cells will produce zero weights.")
+            f"cells will produce zero weights."
+        )
 
     # --- 3. Sensor visibility ---
     sensors_in_map = set(int(x) for x in inv[valid_mask])
@@ -129,7 +135,8 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
     if missing_sensors:
         warnings.warn(
             f"Sensor map: {len(missing_sensors)}/{num_sensors} sensors do not "
-            f"appear in any cell's inverse map. These sensors can never be hit.")
+            f"appear in any cell's inverse map. These sensors can never be hit."
+        )
 
     # --- 4. Overcrowding (geometric assignments exceed max_candidates_per_ray) ---
     # create_propagator sizes the rows to fit, so this fires only for a map built elsewhere.
@@ -137,7 +144,8 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
     if max_geo > max_candidates_per_ray:
         warnings.warn(
             f"Sensor map: max geometric sensor assignments per cell ({max_geo}) "
-            f"exceeds max_candidates_per_ray={max_candidates_per_ray}; sensors are dropped.")
+            f"exceeds max_candidates_per_ray={max_candidates_per_ray}; sensors are dropped."
+        )
 
     # --- 5. Forward-inverse consistency ---
     n_missing = 0
@@ -158,12 +166,18 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
         warnings.warn(
             f"Sensor map: {n_missing}/{n_checked} geometric assignments are "
             f"missing from the inverse map — likely dropped due to "
-            f"max_candidates_per_ray={max_candidates_per_ray} overflow.")
+            f"max_candidates_per_ray={max_candidates_per_ray} overflow."
+        )
 
 
-def create_propagator(detector, sensor_positions, sensor_radius,
-                      temperature=0.2, max_candidates_per_ray=4,
-                      **grid_params):
+def create_propagator(
+    detector,
+    sensor_positions,
+    sensor_radius,
+    temperature=0.2,
+    max_candidates_per_ray=4,
+    **grid_params,
+):
     """Build a JIT-compiled photon propagator using detector methods.
 
     Parameters
@@ -196,7 +210,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
 
     # The grid, sized for max_candidates_per_ray unless the caller states the cell counts
     # (a caller's own max_candidates_per_ray in grid_params sizes it instead).
-    grid_params.setdefault('max_candidates_per_ray', max_candidates_per_ray)
+    grid_params.setdefault("max_candidates_per_ray", max_candidates_per_ray)
     grid = detector.make_grid(**grid_params)
 
     # 1. Geometric sensor-to-cell assignments
@@ -206,8 +220,10 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     # max_candidates_per_ray would drop sensors from it (they could never be hit through it).
     needed = max_assignments_per_cell(assignments_geometric, detector, grid)
     if needed > max_candidates_per_ray:
-        warnings.warn(f"Sensor map: a grid cell holds {needed} sensors; raising "
-                      f"max_candidates_per_ray from {max_candidates_per_ray} to {needed}.")
+        warnings.warn(
+            f"Sensor map: a grid cell holds {needed} sensors; raising "
+            f"max_candidates_per_ray from {max_candidates_per_ray} to {needed}."
+        )
         max_candidates_per_ray = needed
 
     # 2. Grid cell centers
@@ -215,15 +231,23 @@ def create_propagator(detector, sensor_positions, sensor_radius,
 
     # 3. Distance-based fallback assignments (shared)
     assignments_distance = find_closest_sensors(
-        grid_centers, sensor_positions, max_candidates_per_ray)
+        grid_centers, sensor_positions, max_candidates_per_ray
+    )
 
     # 4. Build inverted sensor map (lucid.propagation.sensor_map, from the geometry's cell table)
     inverted_sensor_map = detector.build_inverted_sensor_map(
-        assignments_geometric, assignments_distance, max_candidates_per_ray, grid)
+        assignments_geometric, assignments_distance, max_candidates_per_ray, grid
+    )
 
     # 4b. Validate the sensor map
-    validate_sensor_map(assignments_geometric, inverted_sensor_map,
-                        num_sensors, detector, grid, max_candidates_per_ray)
+    validate_sensor_map(
+        assignments_geometric,
+        inverted_sensor_map,
+        num_sensors,
+        detector,
+        grid,
+        max_candidates_per_ray,
+    )
 
     # 5. Overlap probability (shared)
     # temperature=None → step function (hard assignment, non-differentiable)
@@ -253,12 +277,15 @@ def create_propagator(detector, sensor_positions, sensor_radius,
              normals, inside_sensor, per_sensor_positions, sensor_normals
         """
         if photon_origins.ndim != 2 or photon_directions.ndim != 2:
-            raise ValueError('propagate_photons takes batches: origins and directions of shape '
-                             f'(n_rays, 3), got {photon_origins.shape} and {photon_directions.shape}')
+            raise ValueError(
+                "propagate_photons takes batches: origins and directions of shape "
+                f"(n_rays, 3), got {photon_origins.shape} and {photon_directions.shape}"
+            )
 
         # a. Ray-geometry intersection
-        intersection_point, t_geometry, grid_info, surface_info = \
-            detector.intersect_ray(photon_origins, photon_directions, grid)
+        intersection_point, t_geometry, grid_info, surface_info = detector.intersect_ray(
+            photon_origins, photon_directions, grid
+        )
 
         # b. Map to grid cell indices
         idx = detector.point_to_grid_cell(grid_info, grid)
@@ -269,42 +296,59 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         # d. Compute sensor intersections (shared, vmapped over sensor slots)
         def compute_for_slot(slot_sensors):
             return compute_sensor_intersections_base(
-                slot_sensors, sensor_positions, sensor_radius,
-                photon_origins, photon_directions,
-                bounds_check, overlap_prob, t_geometry=t_geometry)
+                slot_sensors,
+                sensor_positions,
+                sensor_radius,
+                photon_origins,
+                photon_directions,
+                bounds_check,
+                overlap_prob,
+                t_geometry=t_geometry,
+            )
 
-        (weights, sensor_times, sensor_indices,
-         sensor_normals_all, inside_sensor,
-         sensor_hit_positions) = jax.vmap(
-            compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
+        (
+            weights,
+            sensor_times,
+            sensor_indices,
+            sensor_normals_all,
+            inside_sensor,
+            sensor_hit_positions,
+        ) = jax.vmap(compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
 
         # First-hit semantics: the photon deposits on the first sensor it reaches. See
         # `first_hit_survival` for the cap, its tie-break, and what its hard ordering costs.
         weights = first_hit_survival(
-            weights, jnp.squeeze(sensor_times, -1) if sensor_times.ndim == 3 else sensor_times)
+            weights, jnp.squeeze(sensor_times, -1) if sensor_times.ndim == 3 else sensor_times
+        )
 
         # e. Compute geometry surface normals
         geometry_normals = detector.compute_normal(intersection_point, surface_info)
 
         # f. Process intersection normals (shared)
         final_results = process_intersection_normals(
-            photon_origins, photon_directions, intersection_point,
-            t_geometry, sensor_normals_all, sensor_hit_positions,
-            inside_sensor, geometry_normals)
+            photon_origins,
+            photon_directions,
+            intersection_point,
+            t_geometry,
+            sensor_normals_all,
+            sensor_hit_positions,
+            inside_sensor,
+            geometry_normals,
+        )
 
-        hit_positions = final_results['positions']
-        final_normals = final_results['normals']
+        hit_positions = final_results["positions"]
+        final_normals = final_results["normals"]
 
         # g. Assemble result dict
         result = {
-            'times': sensor_times,
-            'sensor_weights': weights,
-            'sensor_indices': sensor_indices,
-            'per_sensor_positions': sensor_hit_positions,
-            'positions': hit_positions,
-            'normals': final_normals,
-            'sensor_normals': sensor_normals_all,
-            'inside_sensor': inside_sensor,
+            "times": sensor_times,
+            "sensor_weights": weights,
+            "sensor_indices": sensor_indices,
+            "per_sensor_positions": sensor_hit_positions,
+            "positions": hit_positions,
+            "normals": final_normals,
+            "sensor_normals": sensor_normals_all,
+            "inside_sensor": inside_sensor,
         }
 
         return result

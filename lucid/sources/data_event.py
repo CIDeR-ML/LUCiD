@@ -6,14 +6,14 @@ track, so its track argument is never read. :func:`simulate_data_event` is the o
 turns an event's photons into what a detector records; every reconstruction client goes through
 it.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-
 # What a padding slot holds: the simulator masks every slot past the true count N, so it carries
 # no light; its direction is +z so it stays a unit vector, and it belongs to no segment.
-_PAD_FILL = {'photon_directions': (0.0, 0.0, 1.0), 'photon_segment_index': -1}
+_PAD_FILL = {"photon_directions": (0.0, 0.0, 1.0), "photon_segment_index": -1}
 
 
 def pad_photons(photons, nbuf):
@@ -24,7 +24,7 @@ def pad_photons(photons, nbuf):
         a = np.asarray(a)
         out = np.empty((nbuf,) + a.shape[1:], a.dtype)
         out[:] = _PAD_FILL.get(name, 0)
-        out[:len(a)] = a
+        out[: len(a)] = a
         padded[name] = out
     return padded
 
@@ -37,13 +37,14 @@ def pad_photon_data(raw, nbuf):
     pads its buckets); the simulator masks them, so they contribute nothing. Returns the
     ``photon_data`` dict the ``source='photons'`` simulator consumes and ``N``.
     """
-    n = int(np.asarray(raw['photon_origins']).shape[0])
+    n = int(np.asarray(raw["photon_origins"]).shape[0])
     if n > nbuf:
-        raise ValueError(f'the event has {n} photons, more than the buffer nbuf={nbuf}; raise nbuf')
-    names = ('photon_origins', 'photon_directions', 'photon_times') + (
-        ('wavelengths',) if 'wavelengths' in raw else ())
+        raise ValueError(f"the event has {n} photons, more than the buffer nbuf={nbuf}; raise nbuf")
+    names = ("photon_origins", "photon_directions", "photon_times") + (
+        ("wavelengths",) if "wavelengths" in raw else ()
+    )
     pd = {k: jnp.asarray(v) for k, v in pad_photons({k: raw[k] for k in names}, nbuf).items()}
-    pd['N'] = jnp.asarray(n)
+    pd["N"] = jnp.asarray(n)
     return pd, n
 
 
@@ -55,12 +56,15 @@ def place_photons(photons, *, primary_vertex, rotation, vertex):
     :func:`lucid.sources.placement.draw_placement` give them. All in metres, float64 out.
     """
     from lucid.sources.placement import rigid_motion
+
     origins, directions = rigid_motion(
-        np.asarray(photons['photon_origins'], np.float64),
-        np.asarray(photons['photon_directions'], np.float64),
-        pivot=np.asarray(primary_vertex, np.float64), rotation=np.asarray(rotation, np.float64),
-        vertex=np.asarray(vertex, np.float64))
-    return {**photons, 'photon_origins': origins, 'photon_directions': directions}
+        np.asarray(photons["photon_origins"], np.float64),
+        np.asarray(photons["photon_directions"], np.float64),
+        pivot=np.asarray(primary_vertex, np.float64),
+        rotation=np.asarray(rotation, np.float64),
+        vertex=np.asarray(vertex, np.float64),
+    )
+    return {**photons, "photon_origins": origins, "photon_directions": directions}
 
 
 def place_event(root, event, photons, *, region, event_seed, accept, max_tries):
@@ -78,11 +82,17 @@ def place_event(root, event, photons, *, region, event_seed, accept, max_tries):
     from lucid.sources.placement import draw_placement
     from lucid.sources.root_reader import read_primary
     from lucid.sources.seed_utils import derive_event_keys
+
     primary_vertex, primary_direction = read_primary(root, event)
     keys = derive_event_keys(event_seed, 0, event)
     rotation, vertex, direction = draw_placement(
-        primary_direction, region=region, rotation_rng=np.random.default_rng(keys['rot_seed']),
-        vertex_rng=np.random.default_rng(keys['vertex_seed']), accept=accept, max_tries=max_tries)
+        primary_direction,
+        region=region,
+        rotation_rng=np.random.default_rng(keys["rot_seed"]),
+        vertex_rng=np.random.default_rng(keys["vertex_seed"]),
+        accept=accept,
+        max_tries=max_tries,
+    )
     placed = place_photons(photons, primary_vertex=primary_vertex, rotation=rotation, vertex=vertex)
     return placed, vertex, direction, keys
 
@@ -98,4 +108,4 @@ def simulate_data_event(data_sim, photons, key, *, nbuf, t0):
     pd, _ = pad_photon_data(photons, nbuf)
     c, t = jax.lax.stop_gradient(data_sim(key, pd))
     charge = np.asarray(c)
-    return charge, np.where(charge > 0, np.asarray(t) + t0, 0.)
+    return charge, np.where(charge > 0, np.asarray(t) + t0, 0.0)

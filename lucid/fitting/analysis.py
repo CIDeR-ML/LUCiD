@@ -6,6 +6,7 @@ the longitudinal/transverse split were each re-defined in ~5 notebooks). Pure nu
 operates on arrays of per-event fit results. Use from the recon notebooks for convergence and
 resolution summaries.
 """
+
 import numpy as np
 
 from lucid.fitting.recon import vec9_dir
@@ -30,8 +31,9 @@ def bootstrap_ci(x, statistic, *, ci, n_boot, seed):
     The percentile interval assumes no symmetry, which the statistics quoted here (a median, a
     68% containment of non-negative errors) do not have.
     """
-    lo, hi = np.percentile(bootstrap(x, statistic, n_boot=n_boot, seed=seed),
-                           [(100 - ci) / 2, (100 + ci) / 2])
+    lo, hi = np.percentile(
+        bootstrap(x, statistic, n_boot=n_boot, seed=seed), [(100 - ci) / 2, (100 + ci) / 2]
+    )
     return float(lo), float(hi)
 
 
@@ -47,10 +49,14 @@ def resolution_stats(err, ci=68.0, seed=0):
     """
     e = np.asarray(err, float)
     blo, bhi = bootstrap_ci(e, np.median, ci=ci, n_boot=2000, seed=seed)
-    return dict(median=float(np.median(e)), mean=float(e.mean()),
-                rms=float(np.sqrt((e ** 2).mean())),
-                containment=float(np.percentile(np.abs(e), ci)),
-                median_ci=(blo, bhi), n=int(e.size))
+    return dict(
+        median=float(np.median(e)),
+        mean=float(e.mean()),
+        rms=float(np.sqrt((e**2).mean())),
+        containment=float(np.percentile(np.abs(e), ci)),
+        median_ci=(blo, bhi),
+        n=int(e.size),
+    )
 
 
 def vertex_residual(fit_vtx, true_vtx, true_dir):
@@ -61,7 +67,8 @@ def vertex_residual(fit_vtx, true_vtx, true_dir):
     vertex-degenerate along the track); splitting the residual this way is the standard recon
     diagnostic.
     """
-    d = np.asarray(true_dir, float); d = d / (np.linalg.norm(d) + 1e-12)
+    d = np.asarray(true_dir, float)
+    d = d / (np.linalg.norm(d) + 1e-12)
     dv = np.asarray(fit_vtx, float) - np.asarray(true_vtx, float)
     lon = float(dv @ d)
     return lon, float(np.linalg.norm(dv - lon * d))
@@ -69,7 +76,8 @@ def vertex_residual(fit_vtx, true_vtx, true_dir):
 
 def angular_error_deg(fit_dir, true_dir):
     """Opening angle (degrees) between fitted and true directions, along the last axis."""
-    a = np.asarray(fit_dir, float); b = np.asarray(true_dir, float)
+    a = np.asarray(fit_dir, float)
+    b = np.asarray(true_dir, float)
     cos = (a * b).sum(-1) / (np.linalg.norm(a, axis=-1) * np.linalg.norm(b, axis=-1))
     return np.degrees(np.arccos(np.clip(cos, -1, 1)))
 
@@ -83,7 +91,14 @@ def track_errors(vec9, truth_vec9, true_dir):
     true vertex and the direction error the opening angle to ``true_dir``; ``dE = E - E_true`` and
     ``dt0 = t0 - t0_true`` keep their sign, so a bias stays visible (take ``abs`` for a resolution).
     """
-    v = np.asarray(vec9, float); truth = np.asarray(truth_vec9, float)
-    return np.stack([np.linalg.norm(v[..., 1:4] - truth[1:4], axis=-1) * 100.0,
-                     angular_error_deg(vec9_dir(v), true_dir),
-                     v[..., 0] - truth[0], v[..., 8] - truth[8]], -1)
+    v = np.asarray(vec9, float)
+    truth = np.asarray(truth_vec9, float)
+    return np.stack(
+        [
+            np.linalg.norm(v[..., 1:4] - truth[1:4], axis=-1) * 100.0,
+            angular_error_deg(vec9_dir(v), true_dir),
+            v[..., 0] - truth[0],
+            v[..., 8] - truth[8],
+        ],
+        -1,
+    )

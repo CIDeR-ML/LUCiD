@@ -35,8 +35,9 @@ from typing import Iterator, List, Optional, Tuple
 from lucid.dataset.layout import check_batch
 
 
-def is_complete(cell_dir: Path, file_index: int,
-                expected_events: Optional[int]) -> Tuple[bool, str]:
+def is_complete(
+    cell_dir: Path, file_index: int, expected_events: Optional[int]
+) -> Tuple[bool, str]:
     """True iff batch ``file_index`` passes :func:`lucid.dataset.layout.check_batch` with at most
     ``expected_events`` events (fewer is selection, not a failure).
 
@@ -45,8 +46,9 @@ def is_complete(cell_dir: Path, file_index: int,
     ok, messages = check_batch(cell_dir, file_index, max_events=expected_events)
     if ok:
         return True, ""
-    return False, next((m for m in messages if not m.startswith(("OK", "EMPTY_KEPT"))),
-                       "failed the batch check")
+    return False, next(
+        (m for m in messages if not m.startswith(("OK", "EMPTY_KEPT"))), "failed the batch check"
+    )
 
 
 # submit_job_NNNNNN.{sbatch|sub}  -> job_id = int(NNNNNN)
@@ -91,7 +93,7 @@ def expected_n_events(sbatch: Path, override: Optional[int]) -> Optional[int]:
     if override is not None:
         return override
     text = _read_sbatch(sbatch)
-    m = re.search(r'--n-events\s+(\d+)\b', text)
+    m = re.search(r"--n-events\s+(\d+)\b", text)
     if m:
         return int(m.group(1))
     cfg_path = find_config_json_for(sbatch)
@@ -106,8 +108,7 @@ def expected_n_events(sbatch: Path, override: Optional[int]) -> Optional[int]:
 
 def iter_sbatches(scan_dir: Path) -> Iterator[Path]:
     """Every submit_job_*.{sbatch,sub} under the scan dir, sorted."""
-    submits = (list(scan_dir.rglob("submit_job_*.sbatch"))
-               + list(scan_dir.rglob("submit_job_*.sub")))
+    submits = list(scan_dir.rglob("submit_job_*.sbatch")) + list(scan_dir.rglob("submit_job_*.sub"))
     yield from sorted(submits)
 
 
@@ -117,23 +118,29 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
-        "scan_dir", type=Path,
+        "scan_dir",
+        type=Path,
         help="Dataprod output root (e.g. $OUTPUT_BASE_PATH/SK_like). "
-             "Walked recursively for submit_job_*.sbatch.",
+        "Walked recursively for submit_job_*.sbatch.",
     )
     p.add_argument(
-        "--list", action="store_true",
+        "--list",
+        action="store_true",
         help="Print one `[PREPARED] <sbatch>` line per failed job, for "
-             "platform/run_in_container.sh -s to submit.",
+        "platform/run_in_container.sh -s to submit.",
     )
     p.add_argument(
-        "--limit", type=int, default=0,
+        "--limit",
+        type=int,
+        default=0,
         help="If >0, only emit the first N failed sbatches.",
     )
     p.add_argument(
-        "--expected-n-events", type=int, default=None,
+        "--expected-n-events",
+        type=int,
+        default=None,
         help="Override expected n_events_per_job (default: read it from the "
-             "config JSON referenced by each sbatch).",
+        "config JSON referenced by each sbatch).",
     )
     args = p.parse_args()
 
@@ -143,8 +150,7 @@ def main() -> int:
 
     sbatches = list(iter_sbatches(args.scan_dir))
     if not sbatches:
-        print(f"error: no submit_job_*.sbatch under {args.scan_dir}",
-              file=sys.stderr)
+        print(f"error: no submit_job_*.sbatch under {args.scan_dir}", file=sys.stderr)
         return 1
 
     failed: List[Tuple[Path, str]] = []
@@ -167,7 +173,7 @@ def main() -> int:
         return 0
 
     print(f"scan dir:         {args.scan_dir}")
-    print(f"truth check:      4× wc_*.h5 exist AND config/n_events matches")
+    print("truth check:      4× wc_*.h5 exist AND config/n_events matches")
     print(f"total sbatches:   {len(sbatches):,}")
     print(f"complete:         {len(sbatches) - len(failed):,}")
     print(f"failed/missing:   {len(failed):,}")
@@ -181,8 +187,10 @@ def main() -> int:
     if len(failed) > 10:
         print(f"  ... and {len(failed) - 10} more")
     print("")
-    print("To resubmit:  lucid/production/platform/run_in_container.sh "
-          "lucid.production.dataprod.scripts.verify_jobs <scan_dir> --list -s")
+    print(
+        "To resubmit:  lucid/production/platform/run_in_container.sh "
+        "lucid.production.dataprod.scripts.verify_jobs <scan_dir> --list -s"
+    )
     return 0
 
 

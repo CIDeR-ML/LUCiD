@@ -7,6 +7,7 @@ replaces it. :class:`Readout` holds the three, validates the config blocks they 
 answers the questions every event generator asks of them: how wide the dark-noise span must be,
 which digits an event keeps, and what the dataset records about it.
 """
+
 from __future__ import annotations
 
 import difflib
@@ -14,18 +15,24 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from lucid.dataset.schema import EMISSION_PROCESS_DARK
 from lucid.simulation.digitizer import resolve_model_config
 from lucid.simulation.trigger import TriggerConfig, apply_trigger
-from lucid.dataset.schema import EMISSION_PROCESS_DARK
 
 __all__ = ["Readout"]
 
 # Keys `TriggerConfig.from_block` understands. It silently drops anything else, so
 # `"n_threshold": 45` instead of `"n_thr": 45` ran the default n_thr=30 and the only trace was
 # the gate count; `Readout.from_blocks` refuses such a block instead.
-_TRIGGER_BLOCK_KEYS = frozenset({
-    "window_ns", "n_thr", "pad_before_ns", "pad_after_ns", "pad_ns",
-})
+_TRIGGER_BLOCK_KEYS = frozenset(
+    {
+        "window_ns",
+        "n_thr",
+        "pad_before_ns",
+        "pad_after_ns",
+        "pad_ns",
+    }
+)
 
 # Dark-noise readout pad (ns) when no trigger is configured: brackets the physics envelope so
 # single-window (min_physics_hits) events carry dark.
@@ -50,18 +57,18 @@ def _strict_trigger_block(block):
     if block is None:
         return None
     if not isinstance(block, dict):
-        raise ValueError(
-            f"trigger block must be a dict or None, got {type(block).__name__}")
-    unknown = [k for k in block
-               if k not in _TRIGGER_BLOCK_KEYS and not str(k).startswith("_")]
+        raise ValueError(f"trigger block must be a dict or None, got {type(block).__name__}")
+    unknown = [k for k in block if k not in _TRIGGER_BLOCK_KEYS and not str(k).startswith("_")]
     if unknown:
         parts = []
         for k in sorted(unknown):
             near = difflib.get_close_matches(str(k), sorted(_TRIGGER_BLOCK_KEYS), n=1)
             parts.append(f"{k!r}" + (f" (did you mean {near[0]!r}?)" if near else ""))
         raise ValueError(
-            "unknown key(s) in the trigger block: " + ", ".join(parts)
-            + f"; valid keys are {sorted(_TRIGGER_BLOCK_KEYS)}")
+            "unknown key(s) in the trigger block: "
+            + ", ".join(parts)
+            + f"; valid keys are {sorted(_TRIGGER_BLOCK_KEYS)}"
+        )
     return block
 
 
@@ -74,32 +81,32 @@ def _keep_min_physics_hits(sensor_digits, hits_sparse, seg_hits, min_hits):
     ``(sensor_digits, hits_sparse, seg_hits, per_window)`` or ``None`` to drop the event.
     """
     sd = sensor_digits
-    nd = int(np.asarray(sd['sensor_idx']).shape[0])
+    nd = int(np.asarray(sd["sensor_idx"]).shape[0])
     if nd == 0:
         return None
-    hd = np.asarray(hits_sparse['digit_idx'])
-    ep = np.asarray(hits_sparse['emission_process'])
+    hd = np.asarray(hits_sparse["digit_idx"])
+    ep = np.asarray(hits_sparse["emission_process"])
     phys = np.zeros(nd, dtype=bool)
     np.logical_or.at(phys, hd[ep != EMISSION_PROCESS_DARK], True)
     if int(phys.sum()) < min_hits:
         return None
 
-    T = np.asarray(sd['T'])
-    order = np.lexsort((T, np.asarray(sd['sensor_idx'])))   # canonical (sensor, T)
+    T = np.asarray(sd["T"])
+    order = np.lexsort((T, np.asarray(sd["sensor_idx"])))  # canonical (sensor, T)
     remap = np.empty(nd, dtype=np.int64)
     remap[order] = np.arange(nd)
     sd_out = {k: np.asarray(v)[order] for k, v in sd.items()}
     hits_out = dict(hits_sparse)
-    hits_out['digit_idx'] = remap[hd].astype(hd.dtype)
+    hits_out["digit_idx"] = remap[hd].astype(hd.dtype)
     seg_out = None
     if seg_hits is not None:
-        sdi = np.asarray(seg_hits['digit_idx'])
+        sdi = np.asarray(seg_hits["digit_idx"])
         seg_out = dict(seg_hits)
-        seg_out['digit_idx'] = remap[sdi].astype(sdi.dtype)
+        seg_out["digit_idx"] = remap[sdi].astype(sdi.dtype)
     per_window = {
-        'window_start':  np.array([float(T.min())], dtype=np.float64),
-        'window_end':    np.array([float(T.max())], dtype=np.float64),
-        'digit_offsets': np.array([0, nd], dtype=np.int32),
+        "window_start": np.array([float(T.min())], dtype=np.float64),
+        "window_end": np.array([float(T.max())], dtype=np.float64),
+        "digit_offsets": np.array([0, nd], dtype=np.int32),
     }
     return sd_out, hits_out, seg_out, per_window
 
@@ -129,15 +136,18 @@ class Readout:
         if self.trigger is not None and self.min_physics_hits is not None:
             raise ValueError(
                 "the min_physics_hits selection replaces the trigger, so a trigger block with "
-                "it is never applied; set the trigger to null")
+                "it is never applied; set the trigger to null"
+            )
 
     @classmethod
     def from_blocks(cls, digitizer=None, trigger=None, min_physics_hits=None) -> "Readout":
         """Build from config blocks: a ``digitizer`` block (``None`` = ``basic``), a ``trigger``
         block (``None`` = off; unknown keys raise) and the selection threshold."""
-        return cls(resolve_model_config(digitizer),
-                   TriggerConfig.from_block(_strict_trigger_block(trigger)),
-                   min_physics_hits)
+        return cls(
+            resolve_model_config(digitizer),
+            TriggerConfig.from_block(_strict_trigger_block(trigger)),
+            min_physics_hits,
+        )
 
     def dark_pad_ns(self) -> float:
         """Dark-noise pad (ns) so the *whole* trigger gate is populated with dark.
@@ -160,24 +170,27 @@ class Readout:
         ``None``.
         """
         if self.min_physics_hits is not None:
-            return _keep_min_physics_hits(sensor_digits, hits_sparse, seg_hits,
-                                          self.min_physics_hits)
+            return _keep_min_physics_hits(
+                sensor_digits, hits_sparse, seg_hits, self.min_physics_hits
+            )
         if self.trigger is not None:
             return apply_trigger(sensor_digits, hits_sparse, seg_hits, self.trigger)
         return sensor_digits, hits_sparse, seg_hits, None
 
     def meta(self) -> dict:
         """The readout attributes a dataset records in its ``config/`` group."""
-        out = {'digitizer_model': str(self.digitizer['model'])}
+        out = {"digitizer_model": str(self.digitizer["model"])}
         if self.trigger is None:
-            out['trigger'] = 'none'
+            out["trigger"] = "none"
         else:
-            out.update(trigger='sliding_window',
-                       trigger_window_ns=float(self.trigger.window_ns),
-                       trigger_n_thr=int(self.trigger.n_thr),
-                       trigger_pad_before_ns=float(self.trigger.pad_before_ns),
-                       trigger_pad_after_ns=float(self.trigger.pad_after_ns))
+            out.update(
+                trigger="sliding_window",
+                trigger_window_ns=float(self.trigger.window_ns),
+                trigger_n_thr=int(self.trigger.n_thr),
+                trigger_pad_before_ns=float(self.trigger.pad_before_ns),
+                trigger_pad_after_ns=float(self.trigger.pad_after_ns),
+            )
         mph = self.min_physics_hits
-        out['selection'] = 'min_physics_hits' if mph is not None else 'trigger'
-        out['selection_min_physics_hits'] = int(mph) if mph is not None else 0
+        out["selection"] = "min_physics_hits" if mph is not None else "trigger"
+        out["selection_min_physics_hits"] = int(mph) if mph is not None else 0
         return out

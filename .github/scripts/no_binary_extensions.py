@@ -9,22 +9,44 @@ permanent.
 
 Usage: no_binary_extensions.py FILE [FILE ...]   (a pre-commit `local` hook)
 """
+
 import sys
 from pathlib import PurePosixPath
 
 REFUSED = {
-    ".gif", ".mp4", ".mov", ".avi", ".webm",            # renders
-    ".so", ".dylib", ".dll", ".a", ".o", ".pyd",        # build output
-    ".whl", ".jar", ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z",  # archives
-    ".pdf", ".pyc", ".pkl", ".pickle", ".db", ".sqlite",
+    ".gif",
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".webm",  # renders
+    ".so",
+    ".dylib",
+    ".dll",
+    ".a",
+    ".o",
+    ".pyd",  # build output
+    ".whl",
+    ".jar",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".7z",  # archives
+    ".pdf",
+    ".pyc",
+    ".pkl",
+    ".pickle",
+    ".db",
+    ".sqlite",
 }
 
 # Shipped data the project genuinely carries. Keep this short and specific:
 # every entry is a promise that the file is an input, not an artefact.
 ALLOWED = (
-    "config/",                    # detector geometry npz / geofiles
-    "lucid/resources/",           # packaged resources
-    "landing/assets/",            # the project page's own images
+    "config/",  # detector geometry npz / geofiles
+    "lucid/resources/",  # packaged resources
+    "landing/assets/",  # the project page's own images
     "docs/assets/",
 )
 

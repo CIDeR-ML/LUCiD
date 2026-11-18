@@ -7,13 +7,14 @@ transverse part from the time seed and the longitudinal part from the grid seed.
 decomposition backwards gives a seed that looks reasonable and is systematically worse, so the
 tests check the decomposition itself, not the output shape.
 """
+
 import numpy as np
 import pytest
 
 from lucid.fitting import fuse_seeds, pick_by_margin, vec9_dir, vec9_from_track
 
 TRUE_VTX = np.array([1.0, 2.0, -0.5])
-TRUE_DIR = np.array([0.6, 0.0, 0.8])                 # unit
+TRUE_DIR = np.array([0.6, 0.0, 0.8])  # unit
 TRUE = vec9_from_track(500.0, TRUE_VTX, TRUE_DIR, t0=3.0)
 
 
@@ -33,16 +34,16 @@ class TestFuseSeeds:
         vertex must inherit A's (good) longitudinal placement and B's (good) transverse one, so it
         should sit essentially at truth even though NEITHER input does.
         """
-        a = _offset(TRUE, along=0.0, across=2.0)     # first-light grid: longitudinally right
-        b = _offset(TRUE, along=1.5, across=0.0)     # time seed: transversely right
+        a = _offset(TRUE, along=0.0, across=2.0)  # first-light grid: longitudinally right
+        b = _offset(TRUE, along=1.5, across=0.0)  # time seed: transversely right
         f = fuse_seeds(a, b)
 
         d = vec9_dir(a)
         err = f[1:4] - TRUE_VTX
         lon = float(err @ d)
         tra = float(np.linalg.norm(err - lon * d))
-        assert abs(lon) < 1e-9, f'longitudinal error {lon:.3f} m — A''s good component was lost'
-        assert tra < 1e-9, f'transverse error {tra:.3f} m — B''s good component was lost'
+        assert abs(lon) < 1e-9, f"longitudinal error {lon:.3f} m — As good component was lost"
+        assert tra < 1e-9, f"transverse error {tra:.3f} m — Bs good component was lost"
         # and neither input was already this good
         assert np.linalg.norm(a[1:4] - TRUE_VTX) > 1.9
         assert np.linalg.norm(b[1:4] - TRUE_VTX) > 1.4
@@ -68,6 +69,7 @@ class TestFuseSeeds:
     def test_two_identical_seeds_fuse_to_themselves(self):
         a = _offset(TRUE, along=0.7, across=0.3)
         np.testing.assert_allclose(fuse_seeds(a, a), a, rtol=0, atol=1e-12)
+
 
 class TestPickByMargin:
     def test_the_preferred_seed_is_kept_on_a_tie(self):

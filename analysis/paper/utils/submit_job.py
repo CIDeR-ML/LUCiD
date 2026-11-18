@@ -16,6 +16,7 @@ checkout's own ``lucid`` wins because run_study.py inserts the repo root first o
 
 Without ``--submit`` the sbatch scripts are written (to ``<output>/slurm/``) but not queued.
 """
+
 import argparse
 import subprocess
 import sys
@@ -24,17 +25,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
-from analysis.paper.utils import paths                  # noqa: E402
+from analysis.paper.utils import paths  # noqa: E402
 
-TRACKING_DIR = Path(__file__).resolve().parent          # analysis/paper/utils/ — holds run_study.py
+TRACKING_DIR = Path(__file__).resolve().parent  # analysis/paper/utils/ — holds run_study.py
 
 
 def sbatch_text(cfg_path, out_dir, log_dir, a):
     """SLURM batch script for one config."""
     run_script = (TRACKING_DIR / a.run_script).resolve()
     job = a.job_name or f"trk_{cfg_path.stem}"
-    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log = log_dir / f'{job}_{stamp}.log'
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log = log_dir / f"{job}_{stamp}.log"
     return f"""#!/bin/bash
 #SBATCH --job-name={job}
 #SBATCH --output={log}
@@ -65,35 +66,49 @@ echo "=== done  $(date) ==="
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--config', required=True, help='config JSON, or a dir of *.json (one job each)')
-    ap.add_argument('--output', required=True, help='output dir for the HDF5 results')
-    ap.add_argument('--job-name', default=None)
-    ap.add_argument('--run-script', default='run_study.py',
-                    help="script in analysis/paper/utils/ to run (default run_study.py)")
-    ap.add_argument('--extra-args', default='',
-                    help='extra CLI args appended to the run script invocation')
-    ap.add_argument('--partition', default='turing', help='GPU partition (default turing)')
-    ap.add_argument('--account', default='mli:cider-ml')
-    ap.add_argument('--image', default=paths.S3DF_IMAGE)
-    ap.add_argument('--env-base', default=paths.S3DF_ENV_BASE,
-                    help='PYTHONUSERBASE layered in for the CUDA jax wheels')
-    ap.add_argument('--gpus', default='1')
-    ap.add_argument('--cpus', default='4')
-    ap.add_argument('--mem', default='39936')
-    ap.add_argument('--time', default='23:00:00')
-    ap.add_argument('--submit', action='store_true', help='actually queue the jobs')
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--config", required=True, help="config JSON, or a dir of *.json (one job each)"
+    )
+    ap.add_argument("--output", required=True, help="output dir for the HDF5 results")
+    ap.add_argument("--job-name", default=None)
+    ap.add_argument(
+        "--run-script",
+        default="run_study.py",
+        help="script in analysis/paper/utils/ to run (default run_study.py)",
+    )
+    ap.add_argument(
+        "--extra-args", default="", help="extra CLI args appended to the run script invocation"
+    )
+    ap.add_argument("--partition", default="turing", help="GPU partition (default turing)")
+    ap.add_argument("--account", default="mli:cider-ml")
+    ap.add_argument("--image", default=paths.S3DF_IMAGE)
+    ap.add_argument(
+        "--env-base",
+        default=paths.S3DF_ENV_BASE,
+        help="PYTHONUSERBASE layered in for the CUDA jax wheels",
+    )
+    ap.add_argument("--gpus", default="1")
+    ap.add_argument("--cpus", default="4")
+    ap.add_argument("--mem", default="39936")
+    ap.add_argument("--time", default="23:00:00")
+    ap.add_argument("--submit", action="store_true", help="actually queue the jobs")
     args = ap.parse_args()
 
     cfg_arg = Path(args.config)
-    configs = sorted(cfg_arg.glob('*.json')) if cfg_arg.is_dir() else [cfg_arg]
+    configs = sorted(cfg_arg.glob("*.json")) if cfg_arg.is_dir() else [cfg_arg]
     if not configs:
-        print(f"No config JSON found at {cfg_arg}", file=sys.stderr); return 1
+        print(f"No config JSON found at {cfg_arg}", file=sys.stderr)
+        return 1
 
-    out_dir = Path(args.output).resolve(); out_dir.mkdir(parents=True, exist_ok=True)
-    log_dir = out_dir / 'logs'; log_dir.mkdir(exist_ok=True)
-    slurm_dir = out_dir / 'slurm'; slurm_dir.mkdir(exist_ok=True)
+    out_dir = Path(args.output).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = out_dir / "logs"
+    log_dir.mkdir(exist_ok=True)
+    slurm_dir = out_dir / "slurm"
+    slurm_dir.mkdir(exist_ok=True)
 
     print(f"image     : {args.image}")
     print(f"partition : {args.partition}   env-base: {args.env_base}")
@@ -101,19 +116,21 @@ def main():
     print(f"configs   : {len(configs)}\n")
 
     for cfg in configs:
-        script = slurm_dir / f'{cfg.stem}.sh'
+        script = slurm_dir / f"{cfg.stem}.sh"
         script.write_text(sbatch_text(cfg.resolve(), out_dir, log_dir, args))
         script.chmod(0o755)
         if args.submit:
-            subprocess.run(['sbatch', str(script)], check=True)
+            subprocess.run(["sbatch", str(script)], check=True)
             print(f"  submitted {cfg.name}")
         else:
             print(f"  wrote {script}")
 
     if not args.submit:
-        print(f"\nDry run. Re-run with --submit to queue, or: for f in {slurm_dir}/*.sh; do sbatch $f; done")
+        print(
+            f"\nDry run. Re-run with --submit to queue, or: for f in {slurm_dir}/*.sh; do sbatch $f; done"
+        )
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

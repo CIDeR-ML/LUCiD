@@ -1,9 +1,14 @@
 """Unit tests for lucid.simulation.trigger (sliding-window readout trigger)."""
+
 import numpy as np
 import pytest
 
 from lucid.simulation.trigger import (
-    TriggerConfig, find_trigger_gates, assign_windows, hits_in_gates, apply_trigger,
+    TriggerConfig,
+    apply_trigger,
+    assign_windows,
+    find_trigger_gates,
+    hits_in_gates,
 )
 
 
@@ -14,14 +19,15 @@ def test_single_burst_one_gate():
     # noise far away is ignored. (A burst that rises slower than pad_ns would
     # lose its leading edge — the trailing-window pre-trigger is only pad_ns.)
     burst = np.linspace(1000.0, 1005.0, 15)
-    noise = np.array([5000.0, 5001.0, 9000.0])          # only 2-in-W, below n_thr=10
+    noise = np.array([5000.0, 5001.0, 9000.0])  # only 2-in-W, below n_thr=10
     gates = find_trigger_gates(np.concatenate([burst, noise]), cfg)
     assert gates.shape == (1, 2)
     # By hand (hit k at 1000 + k*5/14): the count reaches 10 at the 10th hit
     # (k = 9) and drops below 10 when the 6th hit (k = 5) expires at +200 ns.
     # Gate = [1003.214 - 30, 1201.786 + 30] = [973.214, 1231.786].
-    np.testing.assert_allclose(gates[0], [1000.0 + 9 * 5 / 14 - 30.0,
-                                          1000.0 + 5 * 5 / 14 + 200.0 + 30.0], atol=1e-9)
+    np.testing.assert_allclose(
+        gates[0], [1000.0 + 9 * 5 / 14 - 30.0, 1000.0 + 5 * 5 / 14 + 200.0 + 30.0], atol=1e-9
+    )
     assert hits_in_gates(np.concatenate([burst, noise]), gates)[:15].all()
 
 
@@ -63,7 +69,7 @@ def test_overlapping_padded_gates_merge():
 def test_two_separated_bursts_two_gates():
     cfg = TriggerConfig(window_ns=200.0, n_thr=10, pad_before_ns=30.0, pad_after_ns=30.0)
     b1 = np.linspace(1000.0, 1040.0, 15)
-    b2 = np.linspace(6000.0, 6040.0, 15)                # >> W+pad away
+    b2 = np.linspace(6000.0, 6040.0, 15)  # >> W+pad away
     gates = find_trigger_gates(np.concatenate([b1, b2]), cfg)
     assert gates.shape[0] == 2
     assert gates[0, 1] < gates[1, 0]
@@ -73,28 +79,38 @@ def test_assign_windows_and_keep_mask():
     cfg = TriggerConfig(window_ns=200.0, n_thr=10, pad_before_ns=30.0, pad_after_ns=30.0)
     b1 = np.linspace(1000.0, 1040.0, 15)
     b2 = np.linspace(6000.0, 6040.0, 15)
-    t = np.concatenate([b1, b2, [3000.0]])              # last hit is between gates
+    t = np.concatenate([b1, b2, [3000.0]])  # last hit is between gates
     gates = find_trigger_gates(t, cfg)
     win = assign_windows(t, gates)
-    assert (win[:15] == 0).all()                        # first burst -> window 0
-    assert (win[15:30] == 1).all()                      # second burst -> window 1
-    assert win[-1] == -1                                # the lone in-between hit -> no window
+    assert (win[:15] == 0).all()  # first burst -> window 0
+    assert (win[15:30] == 1).all()  # second burst -> window 1
+    assert win[-1] == -1  # the lone in-between hit -> no window
     keep = hits_in_gates(t, gates)
     assert keep[:30].all() and not keep[-1]
     # gate edges are inclusive
     g = gates[0]
     np.testing.assert_array_equal(
-        assign_windows(np.array([g[0] - 1e-6, g[0], g[1], g[1] + 1e-6]), gates), [-1, 0, 0, -1])
+        assign_windows(np.array([g[0] - 1e-6, g[0], g[1], g[1] + 1e-6]), gates), [-1, 0, 0, -1]
+    )
 
 
 def _synth_event(sensor, T):
     """One-hit-per-digit synthetic (sensor_digits, hits, seg) for apply_trigger."""
     n = len(T)
-    base = dict(sensor_idx=np.asarray(sensor, np.uint16), PE=np.ones(n, np.float32),
-                T=np.asarray(T, np.float32))
-    dec = dict(particle_idx=np.zeros(n, np.int32), digit_idx=np.arange(n, dtype=np.int32),
-               sensor_idx=base["sensor_idx"], PE=base["PE"], T=base["T"],
-               T_reco=base["T"], emission_process=np.zeros(n, np.int8))
+    base = dict(
+        sensor_idx=np.asarray(sensor, np.uint16),
+        PE=np.ones(n, np.float32),
+        T=np.asarray(T, np.float32),
+    )
+    dec = dict(
+        particle_idx=np.zeros(n, np.int32),
+        digit_idx=np.arange(n, dtype=np.int32),
+        sensor_idx=base["sensor_idx"],
+        PE=base["PE"],
+        T=base["T"],
+        T_reco=base["T"],
+        emission_process=np.zeros(n, np.int8),
+    )
     seg = dict(dec, segment_idx=np.zeros(n, np.int32))
     return base, dec, seg
 
@@ -108,9 +124,9 @@ def test_apply_trigger_filters_sorts_remaps():
     res = apply_trigger(sd, hits, seg, cfg)
     assert res is not None
     nsd, nhits, nseg, pw = res
-    assert nsd["sensor_idx"].shape[0] == 24                     # isolated digit dropped
+    assert nsd["sensor_idx"].shape[0] == 24  # isolated digit dropped
     assert pw["window_start"].shape[0] == 2
-    assert list(pw["digit_offsets"]) == [0, 12, 24]            # CSR: 12 per window
+    assert list(pw["digit_offsets"]) == [0, 12, 24]  # CSR: 12 per window
     # canonical sort: window 0 first (T~1000), window 1 (T~6000); sensor-sorted within
     assert (nsd["T"][:12] < 2000).all() and (nsd["T"][12:] > 5000).all()
     assert (np.diff(nsd["sensor_idx"][:12]) >= 0).all()
@@ -128,13 +144,13 @@ def test_apply_trigger_filters_sorts_remaps():
 
 def test_apply_trigger_no_trigger_returns_none():
     cfg = TriggerConfig(window_ns=200.0, n_thr=10, pad_before_ns=30.0, pad_after_ns=30.0)
-    sd, hits, seg = _synth_event(np.arange(5), np.linspace(0, 1000, 5))   # <=2 in any W
+    sd, hits, seg = _synth_event(np.arange(5), np.linspace(0, 1000, 5))  # <=2 in any W
     assert apply_trigger(sd, hits, seg, cfg) is None
 
 
 def test_config_from_block():
     assert TriggerConfig.from_block(None) is None
-    c = TriggerConfig.from_block({"n_thr": 25, "pad_ns": 40})              # pad_ns shorthand
+    c = TriggerConfig.from_block({"n_thr": 25, "pad_ns": 40})  # pad_ns shorthand
     assert c.n_thr == 25 and c.pad_before_ns == 40 and c.pad_after_ns == 40
     c2 = TriggerConfig.from_block({"pad_before_ns": 10, "pad_after_ns": 50})
     assert c2.pad_before_ns == 10 and c2.pad_after_ns == 50
@@ -155,8 +171,7 @@ def test_unknown_trigger_key_raises():
     from lucid.simulation.readout import Readout
 
     assert Readout.from_blocks(trigger=None).trigger is None
-    canonical = {"window_ns": 200.0, "n_thr": 25,
-                 "pad_before_ns": 300.0, "pad_after_ns": 300.0}
+    canonical = {"window_ns": 200.0, "n_thr": 25, "pad_before_ns": 300.0, "pad_after_ns": 300.0}
     assert Readout.from_blocks(trigger=canonical).trigger == TriggerConfig(**canonical)
     # `_`-prefixed comment keys stay allowed: the shipped physics configs use
     # "_note" for their validation provenance.
@@ -173,6 +188,7 @@ def test_unknown_trigger_key_raises():
 def _study_dataset(root, trigger_attrs):
     """One-event dataset: 40 physics digits in 20 ns, as the trigger study reads it."""
     import h5py
+
     for sub in ("sensor", "hits"):
         (root / sub).mkdir(parents=True)
     with h5py.File(root / "sensor" / "wc_sensor_0000.h5", "w") as f:
@@ -188,16 +204,26 @@ def test_trigger_study_needs_a_recorded_or_given_trigger(tmp_path, capsys):
     """An untriggered dataset records no trigger_*; the study used to run W=200, N_thr=30,
     pad 30 (production runs N_thr 25 / 45, pad 300) and report that as the dataset's trigger."""
     from lucid.production.qa import trigger_study
+
     bare = _study_dataset(tmp_path / "bare", {"trigger": "none"})
     with pytest.raises(SystemExit) as e:
         trigger_study.main([bare])
     assert e.value.code == 2
-    assert "records no trigger window_ns, n_thr, pad_before_ns, pad_after_ns" in \
-        capsys.readouterr().err
+    assert (
+        "records no trigger window_ns, n_thr, pad_before_ns, pad_after_ns"
+        in capsys.readouterr().err
+    )
     trigger_study.main([bare, "-W", "200", "-N", "45", "--pad", "300"])
     assert "N_thr=45  pad=300/300ns" in capsys.readouterr().out
-    stamped = _study_dataset(tmp_path / "stamped", {
-        "trigger": "sliding_window", "trigger_window_ns": 200.0, "trigger_n_thr": 25,
-        "trigger_pad_before_ns": 300.0, "trigger_pad_after_ns": 300.0})
+    stamped = _study_dataset(
+        tmp_path / "stamped",
+        {
+            "trigger": "sliding_window",
+            "trigger_window_ns": 200.0,
+            "trigger_n_thr": 25,
+            "trigger_pad_before_ns": 300.0,
+            "trigger_pad_after_ns": 300.0,
+        },
+    )
     trigger_study.main([stamped])
     assert "W=200ns  N_thr=25  pad=300/300ns" in capsys.readouterr().out

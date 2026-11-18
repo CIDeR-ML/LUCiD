@@ -21,6 +21,7 @@ tagged as :data:`lucid.dataset.schema.EMISSION_PROCESS_SCINTILLATION`.
 
 See ``.claude/plans/scintillation-data-mode.md`` for the wider design.
 """
+
 from __future__ import annotations
 
 from typing import Mapping
@@ -45,20 +46,20 @@ def scintillation_medium_params(detector_params, medium) -> dict:
     """
     sc = detector_params.scintillation
     return {
-        'S':           float(sc.S),
-        'kB':          float(sc.kB),
-        'C':           float(sc.C),
-        'tau_rise':    float(sc.tau_rise),
-        'tau_fall':    float(sc.tau_fall),
-        'moyal_loc':   float(medium.moyal_loc),
-        'moyal_scale': float(medium.moyal_scale),
-        'lambda_min':  float(medium.scintillation_lambda_min),
-        'lambda_max':  float(medium.scintillation_lambda_max),
+        "S": float(sc.S),
+        "kB": float(sc.kB),
+        "C": float(sc.C),
+        "tau_rise": float(sc.tau_rise),
+        "tau_fall": float(sc.tau_fall),
+        "moyal_loc": float(medium.moyal_loc),
+        "moyal_scale": float(medium.moyal_scale),
+        "lambda_min": float(medium.scintillation_lambda_min),
+        "lambda_max": float(medium.scintillation_lambda_max),
     }
 
 
-_C_MM_PER_NS = 299.792458    # speed of light in vacuum, mm/ns
-_EPS_DELTA_S_MM = 1e-9       # segments shorter than this contribute zero photons
+_C_MM_PER_NS = 299.792458  # speed of light in vacuum, mm/ns
+_EPS_DELTA_S_MM = 1e-9  # segments shorter than this contribute zero photons
 
 
 # ---------------------------------------------------------------------------
@@ -74,13 +75,14 @@ def _sample_isotropic_np(rng: np.random.Generator, n: int) -> np.ndarray:
     cos_theta = rng.uniform(-1.0, 1.0, size=n)
     phi = rng.uniform(0.0, 2.0 * np.pi, size=n)
     sin_theta = np.sqrt(np.maximum(1.0 - cos_theta * cos_theta, 0.0))
-    return np.stack([sin_theta * np.cos(phi),
-                     sin_theta * np.sin(phi),
-                     cos_theta], axis=1).astype(np.float32)
+    return np.stack([sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta], axis=1).astype(
+        np.float32
+    )
 
 
-def _sample_hypoexp_np(rng: np.random.Generator, n: int,
-                        tau_rise: float, tau_fall: float) -> np.ndarray:
+def _sample_hypoexp_np(
+    rng: np.random.Generator, n: int, tau_rise: float, tau_fall: float
+) -> np.ndarray:
     """Sample ``n`` times from the rise+fall biexp PDF via the hypoexp sum.
 
     ``T = -τ_rise·log(U₁) − τ_fall·log(U₂)`` with ``U₁, U₂ ~ U[0, 1]``.
@@ -89,13 +91,17 @@ def _sample_hypoexp_np(rng: np.random.Generator, n: int,
     tiny = np.finfo(np.float32).tiny
     u1 = rng.uniform(tiny, 1.0, size=n)
     u2 = rng.uniform(tiny, 1.0, size=n)
-    return (-float(tau_rise) * np.log(u1)
-            + -float(tau_fall) * np.log(u2)).astype(np.float32)
+    return (-float(tau_rise) * np.log(u1) + -float(tau_fall) * np.log(u2)).astype(np.float32)
 
 
-def _sample_moyal_np(rng: np.random.Generator, n: int,
-                      moyal_loc: float, moyal_scale: float,
-                      lambda_min: float, lambda_max: float) -> np.ndarray:
+def _sample_moyal_np(
+    rng: np.random.Generator,
+    n: int,
+    moyal_loc: float,
+    moyal_scale: float,
+    lambda_min: float,
+    lambda_max: float,
+) -> np.ndarray:
     """Inverse-CDF Moyal wavelength sample on ``[lambda_min, lambda_max]``, on the track-mode
     surrogate's table (:func:`siren_rays._build_moyal_inverse_cdf`)."""
     cdf, lambda_grid = _build_moyal_inverse_cdf(lambda_min, lambda_max, moyal_loc, moyal_scale)
@@ -111,12 +117,12 @@ def _sample_moyal_np(rng: np.random.Generator, n: int,
 def _empty_photon_dict() -> dict:
     """Zero-row arrays of the correct dtypes for the no-photon-this-event path."""
     return {
-        'photon_origins':           np.zeros((0, 3), dtype=np.float32),
-        'photon_directions':        np.zeros((0, 3), dtype=np.float32),
-        'photon_times':             np.zeros(0, dtype=np.float32),
-        'photon_wavelengths':       np.zeros(0, dtype=np.float32),
-        'photon_segment_index_raw': np.zeros(0, dtype=np.int64),
-        'photon_emission_process':  np.zeros(0, dtype=np.int8),
+        "photon_origins": np.zeros((0, 3), dtype=np.float32),
+        "photon_directions": np.zeros((0, 3), dtype=np.float32),
+        "photon_times": np.zeros(0, dtype=np.float32),
+        "photon_wavelengths": np.zeros(0, dtype=np.float32),
+        "photon_segment_index_raw": np.zeros(0, dtype=np.int64),
+        "photon_emission_process": np.zeros(0, dtype=np.int8),
     }
 
 
@@ -125,9 +131,9 @@ def _empty_photon_dict() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def expand_segments_to_photons(segments: Mapping,
-                                medium_params: Mapping,
-                                rng: np.random.Generator) -> dict:
+def expand_segments_to_photons(
+    segments: Mapping, medium_params: Mapping, rng: np.random.Generator
+) -> dict:
     """Expand a per-event segment table into a per-photon array dict.
 
     Parameters
@@ -188,46 +194,46 @@ def expand_segments_to_photons(segments: Mapping,
     output but the guard makes the function defensible against malformed
     fixtures.
     """
-    sx = np.asarray(segments['start_x_mm'], dtype=np.float64)
-    sy = np.asarray(segments['start_y_mm'], dtype=np.float64)
-    sz = np.asarray(segments['start_z_mm'], dtype=np.float64)
-    ex = np.asarray(segments['end_x_mm'],   dtype=np.float64)
-    ey = np.asarray(segments['end_y_mm'],   dtype=np.float64)
-    ez = np.asarray(segments['end_z_mm'],   dtype=np.float64)
-    edep_MeV = np.asarray(segments['edep'],       dtype=np.float64)
-    seg_time = np.asarray(segments['time'],       dtype=np.float64)
-    beta     = np.asarray(segments['beta_start'], dtype=np.float64)
+    sx = np.asarray(segments["start_x_mm"], dtype=np.float64)
+    sy = np.asarray(segments["start_y_mm"], dtype=np.float64)
+    sz = np.asarray(segments["start_z_mm"], dtype=np.float64)
+    ex = np.asarray(segments["end_x_mm"], dtype=np.float64)
+    ey = np.asarray(segments["end_y_mm"], dtype=np.float64)
+    ez = np.asarray(segments["end_z_mm"], dtype=np.float64)
+    edep_MeV = np.asarray(segments["edep"], dtype=np.float64)
+    seg_time = np.asarray(segments["time"], dtype=np.float64)
+    beta = np.asarray(segments["beta_start"], dtype=np.float64)
     n_seg = int(edep_MeV.shape[0])
 
     if n_seg == 0:
         return _empty_photon_dict()
 
-    dx = ex - sx; dy = ey - sy; dz = ez - sz
+    dx = ex - sx
+    dy = ey - sy
+    dz = ez - sz
     delta_s_mm = np.sqrt(dx * dx + dy * dy + dz * dz)
 
-    S       = float(medium_params['S'])
-    kB      = float(medium_params['kB'])
-    C       = float(medium_params['C'])
-    tau_r   = float(medium_params['tau_rise'])
-    tau_f   = float(medium_params['tau_fall'])
-    moy_loc = float(medium_params['moyal_loc'])
-    moy_sca = float(medium_params['moyal_scale'])
-    lam_lo  = float(medium_params['lambda_min'])
-    lam_hi  = float(medium_params['lambda_max'])
+    S = float(medium_params["S"])
+    kB = float(medium_params["kB"])
+    C = float(medium_params["C"])
+    tau_r = float(medium_params["tau_rise"])
+    tau_f = float(medium_params["tau_fall"])
+    moy_loc = float(medium_params["moyal_loc"])
+    moy_sca = float(medium_params["moyal_scale"])
+    lam_lo = float(medium_params["lambda_min"])
+    lam_hi = float(medium_params["lambda_max"])
 
     # Birks/Chou. d in keV/mm so the medium kB / C (defined in mm/keV and
     # (mm/keV)² per DetectorParams) match dimensionally:
     #     1 MeV/mm = 1000 keV/mm.
     # Masked-out rows use a safe denominator (1.0) so the np.where on N̄
     # never produces a NaN we'd have to scrub later.
-    mask = ((delta_s_mm > _EPS_DELTA_S_MM)
-            & (edep_MeV > 0.0)
-            & (beta > 0.0))
+    mask = (delta_s_mm > _EPS_DELTA_S_MM) & (edep_MeV > 0.0) & (beta > 0.0)
     safe_ds = np.where(mask, delta_s_mm, 1.0)
     dedx_keVmm = np.where(mask, edep_MeV / safe_ds * 1000.0, 0.0)
     N_mean = np.where(
         mask,
-        S * edep_MeV / (1.0 + kB * dedx_keVmm + C * dedx_keVmm ** 2),
+        S * edep_MeV / (1.0 + kB * dedx_keVmm + C * dedx_keVmm**2),
         0.0,
     )
 
@@ -243,7 +249,7 @@ def expand_segments_to_photons(segments: Mapping,
     u = rng.uniform(0.0, 1.0, size=N_total)
 
     start_mm = np.stack([sx, sy, sz], axis=1)
-    end_mm   = np.stack([ex, ey, ez], axis=1)
+    end_mm = np.stack([ex, ey, ez], axis=1)
     origins_mm = start_mm[seg_idx] + u[:, None] * (end_mm - start_mm)[seg_idx]
     photon_origins = (origins_mm / 1000.0).astype(np.float32)
 
@@ -252,17 +258,15 @@ def expand_segments_to_photons(segments: Mapping,
     photon_times = (seg_time[seg_idx] + travel_ns + delay_ns).astype(np.float32)
 
     photon_directions = _sample_isotropic_np(rng, N_total)
-    photon_wavelengths = _sample_moyal_np(
-        rng, N_total, moy_loc, moy_sca, lam_lo, lam_hi)
+    photon_wavelengths = _sample_moyal_np(rng, N_total, moy_loc, moy_sca, lam_lo, lam_hi)
 
-    photon_emission_process = np.full(
-        N_total, EMISSION_PROCESS_SCINTILLATION, dtype=np.int8)
+    photon_emission_process = np.full(N_total, EMISSION_PROCESS_SCINTILLATION, dtype=np.int8)
 
     return {
-        'photon_origins':           photon_origins,
-        'photon_directions':        photon_directions,
-        'photon_times':             photon_times,
-        'photon_wavelengths':       photon_wavelengths,
-        'photon_segment_index_raw': seg_idx,
-        'photon_emission_process':  photon_emission_process,
+        "photon_origins": photon_origins,
+        "photon_directions": photon_directions,
+        "photon_times": photon_times,
+        "photon_wavelengths": photon_wavelengths,
+        "photon_segment_index_raw": seg_idx,
+        "photon_emission_process": photon_emission_process,
     }

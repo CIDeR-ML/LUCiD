@@ -31,33 +31,49 @@ from typing import List, Optional
 # lives on the host, not inside the container), so `lucid` may not be on
 # sys.path. Add the LUCiD checkout root explicitly.
 SCRIPT_DIR = Path(__file__).parent
-LUCID_ROOT = SCRIPT_DIR.resolve().parents[2]   # .../LUCiD/  (real path)
+LUCID_ROOT = SCRIPT_DIR.resolve().parents[2]  # .../LUCiD/  (real path)
 if str(LUCID_ROOT) not in sys.path:
     sys.path.insert(0, str(LUCID_ROOT))
 
 from lucid.production.platform.adapters import get_adapter  # noqa: E402
-from lucid.production.siren_inputs.siren_planning import (  # noqa: E402
-    build_cells, find_photonsim_dir, parse_schedule, write_per_cell_config,
-)
 from lucid.production.platform.user_paths import load_user_paths, missing_settings  # noqa: E402
-
+from lucid.production.siren_inputs.siren_planning import (  # noqa: E402
+    build_cells,
+    find_photonsim_dir,
+    parse_schedule,
+    write_per_cell_config,
+)
 
 USER_PATHS_DEFAULT = SCRIPT_DIR.parent / "platform" / "user_paths.sh"
 
 
-def write_submit(*, adapter, cell_dir: Path, cell_cfg: Path, energy_mev: int,
-                 job_name: str, job_id: int, sb_basename: str,
-                 partition: str, use_gpu: bool,
-                 array_spec: Optional[str] = None) -> Path:
+def write_submit(
+    *,
+    adapter,
+    cell_dir: Path,
+    cell_cfg: Path,
+    energy_mev: int,
+    job_name: str,
+    job_id: int,
+    sb_basename: str,
+    partition: str,
+    use_gpu: bool,
+    array_spec: Optional[str] = None,
+) -> Path:
     """Render and write the cluster's submit-description file for one sub-job.
 
     When `array_spec` is set the file is a single SLURM array covering a whole
     cell (one task per sub-job); otherwise it is one submit file per sub-job.
     """
     body = adapter.render_siren_cell(
-        cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
-        job_name=job_name, job_id=job_id, partition=partition,
-        use_gpu=use_gpu, array_spec=array_spec,
+        cell_dir=cell_dir,
+        cell_cfg=cell_cfg,
+        energy_mev=energy_mev,
+        job_name=job_name,
+        job_id=job_id,
+        partition=partition,
+        use_gpu=use_gpu,
+        array_spec=array_spec,
     )
     out = cell_dir / f"{sb_basename}.{adapter.submit_extension}"
     out.write_text(body)
@@ -97,9 +113,20 @@ def _fmt_hms(seconds: float) -> str:
     return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
-def fan_out_pack(*, adapter, cells, output_base: Path, material: str, name: str,
-                 a_s: float, b_s_per_mev: float, n_bins: int, n_workers: int,
-                 submit: bool, no_skip_existing: bool) -> int:
+def fan_out_pack(
+    *,
+    adapter,
+    cells,
+    output_base: Path,
+    material: str,
+    name: str,
+    a_s: float,
+    b_s_per_mev: float,
+    n_bins: int,
+    n_workers: int,
+    submit: bool,
+    no_skip_existing: bool,
+) -> int:
     """Flatten all un-done units, runtime-bin them into `n_bins` whole-node jobs.
 
     Each bin becomes one `regular` node that runs its units in parallel via the
@@ -108,7 +135,7 @@ def fan_out_pack(*, adapter, cells, output_base: Path, material: str, name: str,
     writes its own output_job_<id>.root, so merge.sh and skip-on-existing
     recovery are unchanged.
     """
-    units = []   # (est_seconds, cell_cfg, cell_dir, job_id, energy_mev)
+    units = []  # (est_seconds, cell_cfg, cell_dir, job_id, energy_mev)
     skipped_cells = skipped_jobs = 0
     for cell in cells:
         cell_dir = output_base / material / cell.particle / f"{cell.energy_mev}MeV"
@@ -118,9 +145,14 @@ def fan_out_pack(*, adapter, cells, output_base: Path, material: str, name: str,
             continue
         cell_name = f"siren_{material}_{cell.particle}_{cell.energy_mev}MeV"
         cell_cfg = write_per_cell_config(
-            cell_dir=cell_dir, material=material, particle=cell.particle,
-            energy_mev=cell.energy_mev, smax_mm=cell.smax_mm,
-            events_per_job=cell.events_per_job, n_jobs=cell.n_jobs, name=cell_name,
+            cell_dir=cell_dir,
+            material=material,
+            particle=cell.particle,
+            energy_mev=cell.energy_mev,
+            smax_mm=cell.smax_mm,
+            events_per_job=cell.events_per_job,
+            n_jobs=cell.n_jobs,
+            name=cell_name,
         )
         for job_id in range(1, cell.n_jobs + 1):
             if (cell_dir / f"output_job_{job_id:06d}.root").is_file() and not no_skip_existing:
@@ -130,11 +162,13 @@ def fan_out_pack(*, adapter, cells, output_base: Path, material: str, name: str,
             units.append((est, str(cell_cfg), str(cell_dir), job_id, cell.energy_mev))
 
     if not units:
-        print(f"Nothing to pack — all units done (skipped {skipped_cells} cells, "
-              f"{skipped_jobs} jobs).")
+        print(
+            f"Nothing to pack — all units done (skipped {skipped_cells} cells, "
+            f"{skipped_jobs} jobs)."
+        )
         return 0
 
-    units.sort(reverse=True)                       # longest first
+    units.sort(reverse=True)  # longest first
     n_bins = max(1, min(n_bins, len(units)))
     bins: List[list] = [[] for _ in range(n_bins)]
     load = [0.0] * n_bins
@@ -150,17 +184,17 @@ def fan_out_pack(*, adapter, cells, output_base: Path, material: str, name: str,
     run_script.write_text(PACK_WORKER_SH)
     run_script.chmod(0o755)
 
-    print(f"submit mode:   node-pack ({len(bins)} whole-node 'regular' jobs, "
-          f"{n_workers} workers/node, {len(units)} units)")
+    print(
+        f"submit mode:   node-pack ({len(bins)} whole-node 'regular' jobs, "
+        f"{n_workers} workers/node, {len(units)} units)"
+    )
     print(f"pack dir:      {pack_dir}")
     print("")
 
     prepared = submitted = 0
     for bi, b in enumerate(bins, 1):
         manifest = pack_dir / f"node_{bi:03d}.manifest"
-        manifest.write_text(
-            "".join(f"{cfg} {cdir} {jid} {E}\n" for (_, cfg, cdir, jid, E) in b)
-        )
+        manifest.write_text("".join(f"{cfg} {cdir} {jid} {E}\n" for (_, cfg, cdir, jid, E) in b))
         bin_total = sum(u[0] for u in b)
         longest = max(u[0] for u in b)
         # Wall = max(longest single unit, perfectly-parallel time) + margin.
@@ -169,27 +203,38 @@ def fan_out_pack(*, adapter, cells, output_base: Path, material: str, name: str,
         wall = _fmt_hms(wall_s)
         job_name = f"siren_pack_{name}_n{bi:03d}"
         sb = pack_dir / f"node_{bi:03d}.sbatch"
-        sb.write_text(adapter.render_siren_pack(
-            job_name=job_name, log_dir=pack_dir, manifest=manifest,
-            run_script=run_script, n_workers=n_workers, wall=wall,
-        ))
+        sb.write_text(
+            adapter.render_siren_pack(
+                job_name=job_name,
+                log_dir=pack_dir,
+                manifest=manifest,
+                run_script=run_script,
+                n_workers=n_workers,
+                wall=wall,
+            )
+        )
         sb.chmod(0o755)
         print(f"[PREPARED] {sb}")
         prepared += 1
         compute_h = bin_total / n_workers / 3600.0
         if submit:
-            r = subprocess.run([adapter.submit_cmd, str(sb)],
-                               capture_output=True, text=True)
+            r = subprocess.run([adapter.submit_cmd, str(sb)], capture_output=True, text=True)
             if r.returncode != 0:
-                print(f"  FAILED {adapter.submit_cmd} for {job_name}: "
-                      f"{r.stderr.strip()}", file=sys.stderr)
+                print(
+                    f"  FAILED {adapter.submit_cmd} for {job_name}: {r.stderr.strip()}",
+                    file=sys.stderr,
+                )
                 continue
             submitted += 1
-            print(f"  submitted {job_name}  ({len(b)} units, ~{compute_h:.1f}h "
-                  f"compute, wall {wall})  -> {r.stdout.strip()}")
+            print(
+                f"  submitted {job_name}  ({len(b)} units, ~{compute_h:.1f}h "
+                f"compute, wall {wall})  -> {r.stdout.strip()}"
+            )
         else:
-            print(f"  prepared  {job_name}  ({len(b)} units, ~{compute_h:.1f}h "
-                  f"compute, wall {wall})  -> {sb}")
+            print(
+                f"  prepared  {job_name}  ({len(b)} units, ~{compute_h:.1f}h "
+                f"compute, wall {wall})  -> {sb}"
+            )
 
     print("")
     print("=== Pack fan-out complete ===")
@@ -206,57 +251,111 @@ def fan_out_pack(*, adapter, cells, output_base: Path, material: str, name: str,
 
 # --- Driver ------------------------------------------------------------------
 
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("-c", "--config", type=Path, required=True,
-                   help="SIREN-input JSON config "
-                        "(see configs/water_mu_test.json for an example).")
-    p.add_argument("-s", "--submit", action="store_true",
-                   help="Submit jobs to SLURM (default: prepare sbatch only).")
-    p.add_argument("--array", action="store_true",
-                   help="Submit one SLURM job array per cell (one task per "
-                        "sub-job) instead of one sbatch per sub-job. Collapses "
-                        "the submission count from total-jobs to total-cells; "
-                        "re-running only re-submits still-missing task ids. "
-                        "SLURM clusters only.")
-    p.add_argument("--pack", nargs="?", type=int, const=10, default=None,
-                   metavar="N",
-                   help="Pack all work units into N whole-node 'regular' jobs "
-                        "(default 10), each running its units in parallel across "
-                        "the node's cores. Far fewer scheduler units than --array "
-                        "and much better throughput when the shared partition is "
-                        "oversubscribed. NERSC only; mutually exclusive with --array.")
-    p.add_argument("-t", "--test", action="store_true",
-                   help="Test mode: only the first (particle, energy) cell.")
-    p.add_argument("-o", "--output-base", type=Path, default=None,
-                   help="Output root override. Default: "
-                        "<SIREN_OUTPUT_BASE_PATH>/training_inputs if set, "
-                        "else OUTPUT_BASE_PATH.")
-    p.add_argument("-P", "--partition", type=str, default=None,
-                   help="Override SLURM_PARTITION from user_paths.sh. "
-                        "Comma-separated values (e.g. 'roma,milano') round-"
-                        "robin sub-jobs across partitions to drain faster.")
-    p.add_argument("-g", "--gpu", action="store_true",
-                   help="Request 1 GPU per job (default: DEFAULT_GPUS).")
-    p.add_argument("--user-paths", type=Path, default=USER_PATHS_DEFAULT,
-                   help="Path to user_paths.sh (default: %(default)s).")
-    p.add_argument("--photonsim-dir", type=Path, default=None,
-                   help="PhotonSim checkout (overrides PHOTONSIM_DEV_PATH).")
-    p.add_argument("--include-extrapolated", action="store_true",
-                   help="Process energies below the fit's fit_min_mev "
-                        "(default: skip with a warning).")
-    p.add_argument("--no-skip-existing", action="store_true",
-                   help="Re-run cells that already have photonsim.root "
-                        "(default: skip them).")
-    p.add_argument("--min-energy", type=int, default=None,
-                   help="Filter the config's energy_list to E >= this value "
-                        "(MeV). Useful for restricted re-runs.")
-    p.add_argument("--max-energy", type=int, default=None,
-                   help="Filter the config's energy_list to E < this value "
-                        "(MeV). Useful for restricted re-runs (e.g. when only "
-                        "low-E cells need regenerating after a piecewise "
-                        "smax refit).")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        required=True,
+        help="SIREN-input JSON config (see configs/water_mu_test.json for an example).",
+    )
+    p.add_argument(
+        "-s",
+        "--submit",
+        action="store_true",
+        help="Submit jobs to SLURM (default: prepare sbatch only).",
+    )
+    p.add_argument(
+        "--array",
+        action="store_true",
+        help="Submit one SLURM job array per cell (one task per "
+        "sub-job) instead of one sbatch per sub-job. Collapses "
+        "the submission count from total-jobs to total-cells; "
+        "re-running only re-submits still-missing task ids. "
+        "SLURM clusters only.",
+    )
+    p.add_argument(
+        "--pack",
+        nargs="?",
+        type=int,
+        const=10,
+        default=None,
+        metavar="N",
+        help="Pack all work units into N whole-node 'regular' jobs "
+        "(default 10), each running its units in parallel across "
+        "the node's cores. Far fewer scheduler units than --array "
+        "and much better throughput when the shared partition is "
+        "oversubscribed. NERSC only; mutually exclusive with --array.",
+    )
+    p.add_argument(
+        "-t",
+        "--test",
+        action="store_true",
+        help="Test mode: only the first (particle, energy) cell.",
+    )
+    p.add_argument(
+        "-o",
+        "--output-base",
+        type=Path,
+        default=None,
+        help="Output root override. Default: "
+        "<SIREN_OUTPUT_BASE_PATH>/training_inputs if set, "
+        "else OUTPUT_BASE_PATH.",
+    )
+    p.add_argument(
+        "-P",
+        "--partition",
+        type=str,
+        default=None,
+        help="Override SLURM_PARTITION from user_paths.sh. "
+        "Comma-separated values (e.g. 'roma,milano') round-"
+        "robin sub-jobs across partitions to drain faster.",
+    )
+    p.add_argument(
+        "-g", "--gpu", action="store_true", help="Request 1 GPU per job (default: DEFAULT_GPUS)."
+    )
+    p.add_argument(
+        "--user-paths",
+        type=Path,
+        default=USER_PATHS_DEFAULT,
+        help="Path to user_paths.sh (default: %(default)s).",
+    )
+    p.add_argument(
+        "--photonsim-dir",
+        type=Path,
+        default=None,
+        help="PhotonSim checkout (overrides PHOTONSIM_DEV_PATH).",
+    )
+    p.add_argument(
+        "--include-extrapolated",
+        action="store_true",
+        help="Process energies below the fit's fit_min_mev (default: skip with a warning).",
+    )
+    p.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Re-run cells that already have photonsim.root (default: skip them).",
+    )
+    p.add_argument(
+        "--min-energy",
+        type=int,
+        default=None,
+        help="Filter the config's energy_list to E >= this value "
+        "(MeV). Useful for restricted re-runs.",
+    )
+    p.add_argument(
+        "--max-energy",
+        type=int,
+        default=None,
+        help="Filter the config's energy_list to E < this value "
+        "(MeV). Useful for restricted re-runs (e.g. when only "
+        "low-E cells need regenerating after a piecewise "
+        "smax refit).",
+    )
     return p.parse_args(argv)
 
 
@@ -277,64 +376,66 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.max_energy is not None:
         energies = [e for e in energies if e < args.max_energy]
     if not energies:
-        print("error: no energies left after --min-energy/--max-energy filter",
-              file=sys.stderr)
+        print("error: no energies left after --min-energy/--max-energy filter", file=sys.stderr)
         return 2
-    include_extrapolated = bool(
-        args.include_extrapolated or cfg.get("include_extrapolated", False)
-    )
+    include_extrapolated = bool(args.include_extrapolated or cfg.get("include_extrapolated", False))
     events_per_cell, events_ranges, target_s, a_s, b_s_per_mev = parse_schedule(cfg)
 
     env = load_user_paths(args.user_paths)
     adapter = get_adapter(env)
     missing = missing_settings(env, "LUCID_IMAGE_PATH")
-    if not args.output_base and not (env.get("SIREN_OUTPUT_BASE_PATH")
-                                     or env.get("OUTPUT_BASE_PATH")):
+    if not args.output_base and not (
+        env.get("SIREN_OUTPUT_BASE_PATH") or env.get("OUTPUT_BASE_PATH")
+    ):
         missing.append("SIREN_OUTPUT_BASE_PATH (or OUTPUT_BASE_PATH, or -o)")
     if missing:
         print(f"error: not set in {args.user_paths}: {', '.join(missing)}", file=sys.stderr)
         return 2
     if args.array and adapter.submit_cmd != "sbatch":
-        print("error: --array is only supported on SLURM clusters (sbatch).",
-              file=sys.stderr)
+        print("error: --array is only supported on SLURM clusters (sbatch).", file=sys.stderr)
         return 2
     if args.pack is not None:
         if args.array:
-            print("error: --pack and --array are mutually exclusive.",
-                  file=sys.stderr)
+            print("error: --pack and --array are mutually exclusive.", file=sys.stderr)
             return 2
         if adapter.submit_cmd != "sbatch" or not hasattr(adapter, "render_siren_pack"):
-            print(f"error: --pack is not supported on cluster {adapter.name!r} "
-                  "(needs a SLURM adapter implementing render_siren_pack).",
-                  file=sys.stderr)
+            print(
+                f"error: --pack is not supported on cluster {adapter.name!r} "
+                "(needs a SLURM adapter implementing render_siren_pack).",
+                file=sys.stderr,
+            )
             return 2
     if args.submit and shutil.which(adapter.submit_cmd) is None:
-        print(f"error: {adapter.submit_cmd} not found on PATH; "
-              f"submission requires this cluster.", file=sys.stderr)
+        print(
+            f"error: {adapter.submit_cmd} not found on PATH; submission requires this cluster.",
+            file=sys.stderr,
+        )
         return 2
 
     # find_photonsim_dir walks up looking for a sibling PhotonSim/ checkout;
     # use the resolved location so the walk happens off the real path.
-    photonsim_dir = find_photonsim_dir(env, args.photonsim_dir,
-                                        SCRIPT_DIR.resolve())
+    photonsim_dir = find_photonsim_dir(env, args.photonsim_dir, SCRIPT_DIR.resolve())
 
     if args.output_base:
         output_base = args.output_base.resolve()
     elif env.get("SIREN_OUTPUT_BASE_PATH"):
         # Stage-specific subdir under the SIREN root keeps siren_inputs
         # outputs disjoint from smax outputs (both layer <material>/...).
-        output_base = (Path(env["SIREN_OUTPUT_BASE_PATH"])
-                       / "training_inputs").resolve()
+        output_base = (Path(env["SIREN_OUTPUT_BASE_PATH"]) / "training_inputs").resolve()
     else:
         output_base = Path(env["OUTPUT_BASE_PATH"]).resolve()
     # `partition` is SLURM-flavoured terminology; HTCondor reads the equivalent
     # from CONDOR_JOB_FLAVOUR via the adapter. The CLI -P / env var is
     # interpreted by the adapter's render_* method.
-    partition_spec = args.partition or env.get("SLURM_PARTITION") or env.get("CONDOR_JOB_FLAVOUR", "")
+    partition_spec = (
+        args.partition or env.get("SLURM_PARTITION") or env.get("CONDOR_JOB_FLAVOUR", "")
+    )
     if not partition_spec:
-        print("error: queue partition/flavour not set "
-              "(SLURM_PARTITION or CONDOR_JOB_FLAVOUR in user_paths.sh, or -P).",
-              file=sys.stderr)
+        print(
+            "error: queue partition/flavour not set "
+            "(SLURM_PARTITION or CONDOR_JOB_FLAVOUR in user_paths.sh, or -P).",
+            file=sys.stderr,
+        )
         return 2
     partitions = [p.strip() for p in partition_spec.split(",") if p.strip()]
     if not partitions:
@@ -345,28 +446,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"cluster:      {adapter.name}")
     print(f"material:     {material}")
     print(f"particles:    {particles}")
-    print(f"energies:     {len(energies)} cells, "
-          f"{energies[0]}..{energies[-1]} MeV")
+    print(f"energies:     {len(energies)} cells, {energies[0]}..{energies[-1]} MeV")
     if events_ranges:
         ranges_desc = ", ".join(f"<{e}MeV→{n:,}" for e, n in events_ranges)
         print(f"events/cell:  {events_per_cell:,} (default; ranges: {ranges_desc})")
     else:
         print(f"events/cell:  {events_per_cell:,}")
     if target_s is not None:
-        print(f"target/job:   {target_s:.0f} s "
-              f"(time model: t/event = {a_s:g} + {b_s_per_mev:g} * E_MeV)")
+        print(
+            f"target/job:   {target_s:.0f} s "
+            f"(time model: t/event = {a_s:g} + {b_s_per_mev:g} * E_MeV)"
+        )
     print(f"output base:  {output_base}")
     print(f"PhotonSim:    {photonsim_dir}")
-    print(f"partition:    {partition_spec}"
-          + (f"  (round-robin across {len(partitions)} partitions)"
-             if len(partitions) > 1 else ""))
+    print(
+        f"partition:    {partition_spec}"
+        + (f"  (round-robin across {len(partitions)} partitions)" if len(partitions) > 1 else "")
+    )
     print("")
 
     cells, skipped = build_cells(
-        particles=particles, energies=energies, photonsim_dir=photonsim_dir,
-        material=material, events_per_cell=events_per_cell,
+        particles=particles,
+        energies=energies,
+        photonsim_dir=photonsim_dir,
+        material=material,
+        events_per_cell=events_per_cell,
         events_per_cell_ranges=events_ranges,
-        target_seconds_per_job=target_s, a_s=a_s, b_s_per_mev=b_s_per_mev,
+        target_seconds_per_job=target_s,
+        a_s=a_s,
+        b_s_per_mev=b_s_per_mev,
         include_extrapolated=include_extrapolated,
     )
 
@@ -374,9 +482,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         cells = cells[:1]
 
     if not cells:
-        print("error: no cells to submit "
-              f"(skipped {len(skipped)}). Use --include-extrapolated to force.",
-              file=sys.stderr)
+        print(
+            "error: no cells to submit "
+            f"(skipped {len(skipped)}). Use --include-extrapolated to force.",
+            file=sys.stderr,
+        )
         for s in skipped:
             print(f"  SKIP {s}", file=sys.stderr)
         return 1
@@ -387,16 +497,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"total jobs:    {total_jobs}")
     print(f"total events:  {total_events:,}")
     if args.array:
-        print(f"submit mode:   job arrays (1 sbatch/cell -> "
-              f"{len(cells)} submissions, {total_jobs} tasks)")
+        print(
+            f"submit mode:   job arrays (1 sbatch/cell -> "
+            f"{len(cells)} submissions, {total_jobs} tasks)"
+        )
     print("")
 
     if args.pack is not None:
         return fan_out_pack(
-            adapter=adapter, cells=cells, output_base=output_base,
-            material=material, name=name, a_s=a_s, b_s_per_mev=b_s_per_mev,
-            n_bins=args.pack, n_workers=int(env.get("PACK_WORKERS", "128")),
-            submit=args.submit, no_skip_existing=args.no_skip_existing,
+            adapter=adapter,
+            cells=cells,
+            output_base=output_base,
+            material=material,
+            name=name,
+            a_s=a_s,
+            b_s_per_mev=b_s_per_mev,
+            n_bins=args.pack,
+            n_workers=int(env.get("PACK_WORKERS", "128")),
+            submit=args.submit,
+            no_skip_existing=args.no_skip_existing,
         )
 
     prepared = submitted = skipped_existing = skipped_jobs = 0
@@ -413,9 +532,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         cell_name = f"siren_{material}_{cell.particle}_{cell.energy_mev}MeV"
         cell_cfg = write_per_cell_config(
-            cell_dir=cell_dir, material=material, particle=cell.particle,
-            energy_mev=cell.energy_mev, smax_mm=cell.smax_mm,
-            events_per_job=cell.events_per_job, n_jobs=cell.n_jobs,
+            cell_dir=cell_dir,
+            material=material,
+            particle=cell.particle,
+            energy_mev=cell.energy_mev,
+            smax_mm=cell.smax_mm,
+            events_per_job=cell.events_per_job,
+            n_jobs=cell.n_jobs,
             name=cell_name,
         )
 
@@ -438,29 +561,40 @@ def main(argv: Optional[List[str]] = None) -> int:
             array_spec = format_array_spec(missing, cell.n_jobs)
             sub_partition = partitions[n_emitted % len(partitions)]
             sb = write_submit(
-                adapter=adapter, cell_dir=cell_dir, cell_cfg=cell_cfg,
-                energy_mev=cell.energy_mev, job_name=cell_name, job_id=1,
-                sb_basename="submit_array", partition=sub_partition,
-                use_gpu=args.gpu, array_spec=array_spec,
+                adapter=adapter,
+                cell_dir=cell_dir,
+                cell_cfg=cell_cfg,
+                energy_mev=cell.energy_mev,
+                job_name=cell_name,
+                job_id=1,
+                sb_basename="submit_array",
+                partition=sub_partition,
+                use_gpu=args.gpu,
+                array_spec=array_spec,
             )
             print(f"[PREPARED] {sb}")
             n_emitted += 1
             prepared += len(missing)
 
             if args.submit:
-                r = subprocess.run([adapter.submit_cmd, str(sb)],
-                                   capture_output=True, text=True)
+                r = subprocess.run([adapter.submit_cmd, str(sb)], capture_output=True, text=True)
                 if r.returncode != 0:
-                    print(f"  FAILED {adapter.submit_cmd} for {cell_name}: "
-                          f"{r.stderr.strip()}", file=sys.stderr)
+                    print(
+                        f"  FAILED {adapter.submit_cmd} for {cell_name}: {r.stderr.strip()}",
+                        file=sys.stderr,
+                    )
                     continue
                 submitted += len(missing)
-                print(f"  submitted {cell_name}  (s_max={cell.smax_mm:.1f} mm, "
-                      f"{cell.events_per_job} evts/task, array={array_spec})  "
-                      f"-> {r.stdout.strip()}")
+                print(
+                    f"  submitted {cell_name}  (s_max={cell.smax_mm:.1f} mm, "
+                    f"{cell.events_per_job} evts/task, array={array_spec})  "
+                    f"-> {r.stdout.strip()}"
+                )
             else:
-                print(f"  prepared  {cell_name}  (s_max={cell.smax_mm:.1f} mm, "
-                      f"{cell.events_per_job} evts/task, array={array_spec})  -> {sb}")
+                print(
+                    f"  prepared  {cell_name}  (s_max={cell.smax_mm:.1f} mm, "
+                    f"{cell.events_per_job} evts/task, array={array_spec})  -> {sb}"
+                )
             continue
 
         for job_id in range(1, cell.n_jobs + 1):
@@ -479,9 +613,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             sub_partition = partitions[n_emitted % len(partitions)]
             sb = write_submit(
-                adapter=adapter, cell_dir=cell_dir, cell_cfg=cell_cfg,
-                energy_mev=cell.energy_mev, job_name=job_label, job_id=job_id,
-                sb_basename=sb_basename, partition=sub_partition,
+                adapter=adapter,
+                cell_dir=cell_dir,
+                cell_cfg=cell_cfg,
+                energy_mev=cell.energy_mev,
+                job_name=job_label,
+                job_id=job_id,
+                sb_basename=sb_basename,
+                partition=sub_partition,
                 use_gpu=args.gpu,
             )
             # Stable marker for the bash shim's host-side submission pass.
@@ -490,18 +629,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             prepared += 1
 
             if args.submit:
-                r = subprocess.run([adapter.submit_cmd, str(sb)],
-                                   capture_output=True, text=True)
+                r = subprocess.run([adapter.submit_cmd, str(sb)], capture_output=True, text=True)
                 if r.returncode != 0:
-                    print(f"  FAILED {adapter.submit_cmd} for {job_label}: "
-                          f"{r.stderr.strip()}", file=sys.stderr)
+                    print(
+                        f"  FAILED {adapter.submit_cmd} for {job_label}: {r.stderr.strip()}",
+                        file=sys.stderr,
+                    )
                     continue
                 submitted += 1
-                print(f"  submitted {job_label}  (s_max={cell.smax_mm:.1f} mm, "
-                      f"{cell.events_per_job} evts)  -> {r.stdout.strip()}")
+                print(
+                    f"  submitted {job_label}  (s_max={cell.smax_mm:.1f} mm, "
+                    f"{cell.events_per_job} evts)  -> {r.stdout.strip()}"
+                )
             else:
-                print(f"  prepared  {job_label}  (s_max={cell.smax_mm:.1f} mm, "
-                      f"{cell.events_per_job} evts)  -> {sb}")
+                print(
+                    f"  prepared  {job_label}  (s_max={cell.smax_mm:.1f} mm, "
+                    f"{cell.events_per_job} evts)  -> {sb}"
+                )
 
     for s in skipped:
         print(f"  SKIP {s}")

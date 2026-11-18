@@ -10,15 +10,15 @@ depends on the STEP INDEX. Each is a place the drivers could differ while the to
 
 The forward is an analytic stub so this runs on CPU; everything between forward and iterate is real.
 """
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 
-from lucid.fitting import gauss_newton, FieldParams
+from lucid.fitting import FieldParams, gauss_newton
 from lucid.fitting.calib import CalibrationForward, CalibrationProblem
 from lucid.fitting.minimize import minimize
 from lucid.fitting.transforms import damped_gauss_newton
-
 from tests.helpers import calib_toy as toy
 from tests.helpers.calib_toy import FIELDS
 
@@ -52,12 +52,13 @@ def _problem(record=None):
         def spy(theta, step, refresh=True):
             record.append((step, bool(refresh)))
             return inner(theta, step, refresh)
+
         prob.grad_metric_loss = spy
     start = np.asarray(params.theta_from_physical(), dtype=np.float32) + 0.25
     return prob, jnp.asarray(start, dtype=jnp.float32), th
 
 
-KW = dict(max_step=0.5, refresh=2, readout='final')
+KW = dict(max_step=0.5, refresh=2, readout="final")
 
 
 def test_the_two_drivers_agree_on_the_real_calibration_problem():
@@ -65,13 +66,14 @@ def test_the_two_drivers_agree_on_the_real_calibration_problem():
     pb, sb, _ = _problem()
     a = gauss_newton(pa, sa, 12, lam=LAM, mu=MU, lr=LR, **KW)
     b = minimize(pb, sb, 12, damped_gauss_newton(LAM, MU, learning_rate=LR), **KW)
-    ha, hb = np.asarray(a['history'], float), np.asarray(b['history'], float)
+    ha, hb = np.asarray(a["history"], float), np.asarray(b["history"], float)
     assert ha.shape == hb.shape
     rel = np.abs(ha - hb).max()
     # theta is log-space here, so an absolute difference IS a relative one on the physical value.
     assert rel < 1e-4, (
-        f'the drivers diverge by {rel:.2e} in log-parameter units on the real problem — the toy '
-        f'agreement did not survive jnp arrays and a float32 iterate')
+        f"the drivers diverge by {rel:.2e} in log-parameter units on the real problem — the toy "
+        f"agreement did not survive jnp arrays and a float32 iterate"
+    )
 
 
 def test_the_real_problem_is_asked_for_the_same_steps():
@@ -81,7 +83,7 @@ def test_the_real_problem_is_asked_for_the_same_steps():
     pb, sb, _ = _problem(record=rb)
     gauss_newton(pa, sa, 10, lam=LAM, mu=MU, lr=LR, **KW)
     minimize(pb, sb, 10, damped_gauss_newton(LAM, MU, learning_rate=LR), **KW)
-    assert ra == rb, f'different (step, refresh) sequences\n  gn: {ra}\n  mz: {rb}'
+    assert ra == rb, f"different (step, refresh) sequences\n  gn: {ra}\n  mz: {rb}"
 
 
 def test_a_first_order_rule_takes_exactly_the_sgd_steps_on_the_real_problem():
@@ -97,6 +99,7 @@ def test_a_first_order_rule_takes_exactly_the_sgd_steps_on_the_real_problem():
     first-order rule goes through the same plumbing.
     """
     import optax
+
     lr, steps = 3e-3, 20
     pb, sb, _ = _problem()
     res = minimize(pb, sb, steps, optax.sgd(lr), needs_metric=False, **KW)
@@ -105,29 +108,33 @@ def test_a_first_order_rule_takes_exactly_the_sgd_steps_on_the_real_problem():
     want = [np.asarray(theta, np.float64)]
     for k in range(steps):
         g = np.asarray(pr.grad_metric_loss(theta, k, refresh=(k % 2 == 0))[0], np.float64)
-        du = np.clip(-lr * g, -KW['max_step'], KW['max_step'])
+        du = np.clip(-lr * g, -KW["max_step"], KW["max_step"])
         theta = theta + jnp.asarray(du, jnp.float32)
         want.append(np.asarray(theta, np.float64))
-    hist = np.asarray(res['history'], np.float64)
+    hist = np.asarray(res["history"], np.float64)
     assert hist.shape == (steps + 1, len(want[0]))
     np.testing.assert_allclose(hist, np.stack(want), rtol=0, atol=2e-6)
-    assert np.abs(hist[-1] - hist[0]).max() > 1e-3, 'the rule must actually move theta'
+    assert np.abs(hist[-1] - hist[0]).max() > 1e-3, "the rule must actually move theta"
 
-    loss = np.asarray(res['loss'], float)
-    assert loss[-1] < loss[0], f'20 SGD steps should reduce the loss: {loss[0]:.6g} -> {loss[-1]:.6g}'
+    loss = np.asarray(res["loss"], float)
+    assert loss[-1] < loss[0], (
+        f"20 SGD steps should reduce the loss: {loss[0]:.6g} -> {loss[-1]:.6g}"
+    )
 
 
 # --------------------------------------------------------- the public entry point, calibrate()
+
 
 def test_calibrate_is_minimize_on_the_default_chain():
     """``calibrate(problem, theta0)`` must take exactly the steps ``minimize`` takes with
     ``gauss_newton_tx(0.01, 0.1)`` on the same problem: the default is that chain, not a lookalike."""
     from lucid.fitting import calibrate, gauss_newton_tx
+
     pa, sa, _ = _problem()
     pb, sb, _ = _problem()
     a = calibrate(pa, sa, steps=12, refresh=2, max_step=0.5, polyak=0)
-    b = minimize(pb, sb, 12, gauss_newton_tx(LAM, MU), max_step=0.5, refresh=2, readout='final')
-    np.testing.assert_array_equal(np.asarray(a['history']), np.asarray(b['history']))
+    b = minimize(pb, sb, 12, gauss_newton_tx(LAM, MU), max_step=0.5, refresh=2, readout="final")
+    np.testing.assert_array_equal(np.asarray(a["history"]), np.asarray(b["history"]))
 
 
 def test_calibrate_runs_a_first_order_rule_on_the_same_problem():
@@ -135,7 +142,9 @@ def test_calibrate_runs_a_first_order_rule_on_the_same_problem():
     The reference is the plain optax loop over ``grad_metric_loss`` on a fresh problem, with the
     driver's refresh cadence and step clip."""
     import optax
+
     from lucid.fitting import calibrate
+
     lr, steps = 1e-2, 15
     pa, sa, _ = _problem()
     res = calibrate(pa, sa, tx=optax.adam(lr), steps=steps, refresh=2, max_step=0.5, polyak=0)
@@ -147,6 +156,5 @@ def test_calibrate_runs_a_first_order_rule_on_the_same_problem():
         g = np.asarray(pr.grad_metric_loss(theta, k, refresh=(k % 2 == 0))[0])
         du, state = opt.update(g, state, np.asarray(theta))
         theta = theta + jnp.asarray(np.clip(np.asarray(du), -0.5, 0.5), jnp.float32)
-    np.testing.assert_allclose(np.asarray(res['history'][-1]), np.asarray(theta),
-                               rtol=0, atol=1e-6)
-    assert res['loss'][-1] < res['loss'][0]
+    np.testing.assert_allclose(np.asarray(res["history"][-1]), np.asarray(theta), rtol=0, atol=1e-6)
+    assert res["loss"][-1] < res["loss"][0]

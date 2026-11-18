@@ -37,12 +37,13 @@ sources to a ``pmap``. That is an execution strategy, not physics, so it is inje
 ``map_fn`` rather than baked in. The default is a serial loop over sources, which is also what
 the reference itself falls back to below 7 devices.
 """
+
 import functools
 
 import jax
 import jax.numpy as jnp
 
-__all__ = ['CalibrationForward', 'CalibrationProblem', 'profile_gains', 'neyman_residual']
+__all__ = ["CalibrationForward", "CalibrationProblem", "profile_gains", "neyman_residual"]
 
 ROLE_TRUTH, ROLE_FORWARD, ROLE_JACOBIAN, ROLE_READOUT = range(4)
 
@@ -77,14 +78,16 @@ class CalibrationForward:
         self.S = self.W * self.n_sources
         self.map_fn = map_fn
 
-        def _mbody(theta, src, keys, gains):                      # (W, NS); vmap over wavelengths
+        def _mbody(theta, src, keys, gains):  # (W, NS); vmap over wavelengths
             return jax.vmap(lambda wl, k: sim(src, params.to_dp(theta, wl, gains), k)[0])(
-                jnp.arange(self.W), keys)
+                jnp.arange(self.W), keys
+            )
 
-        def _jbody(theta, src, wl, lk, key, q_cfg, q_floor):      # (NS, P); see `jacobian`
+        def _jbody(theta, src, wl, lk, key, q_cfg, q_floor):  # (NS, P); see `jacobian`
             def sm(th):
                 mu = sim(src, params.to_dp(th, wl, jnp.ones(self.NS)), key)[0]
                 return jnp.exp(lk) * mu / jnp.sqrt(jnp.clip(q_cfg, q_floor, None))
+
             return jax.jacfwd(sm)(theta)
 
         self._mbody = _mbody
@@ -117,13 +120,14 @@ class CalibrationForward:
         self._group_fns, self._jgroup_fns, self._group_stacks = [], [], []
         for idx, stack in self._groups:
             if len(idx) == 1:
-                self._group_fns.append(None)            # singleton: use self._single
+                self._group_fns.append(None)  # singleton: use self._single
                 self._jgroup_fns.append(None)
                 self._group_stacks.append(None)
                 continue
             self._group_fns.append(self._make_map(_mbody, (None, 0, 0, None), len(idx)))
-            self._jgroup_fns.append(self._make_map(_jbody, (None, 0, None, None, 0, 0, None),
-                                                   len(idx)))
+            self._jgroup_fns.append(
+                self._make_map(_jbody, (None, 0, None, None, 0, 0, None), len(idx))
+            )
             self._group_stacks.append(stack)
 
     def _make_map(self, fn, in_axes, n):
@@ -151,7 +155,7 @@ class CalibrationForward:
 
         slots = [None] * self.n_sources
         for (idx, _), fn, stack in zip(self._groups, self._group_fns, self._group_stacks):
-            if fn is None:                                   # singleton
+            if fn is None:  # singleton
                 i = idx[0]
                 # Put a singleton on its own card so it overlaps a grouped pmap rather than
                 # queueing behind shard 0 (see __init__).
@@ -159,15 +163,17 @@ class CalibrationForward:
                 if d is None:
                     slots[i] = self._single(theta, self.sources[i], allk[i], gains)
                 else:
-                    slots[i] = self._single(jax.device_put(theta, d),
-                                            jax.device_put(self.sources[i], d),
-                                            jax.device_put(allk[i], d),
-                                            jax.device_put(gains, d))
+                    slots[i] = self._single(
+                        jax.device_put(theta, d),
+                        jax.device_put(self.sources[i], d),
+                        jax.device_put(allk[i], d),
+                        jax.device_put(gains, d),
+                    )
                 continue
-            out = fn(theta, stack, allk[jnp.asarray(idx)], gains)    # (len(idx), W, NS)
+            out = fn(theta, stack, allk[jnp.asarray(idx)], gains)  # (len(idx), W, NS)
             for j, i in enumerate(idx):
                 slots[i] = out[j]
-        per = jnp.stack([jnp.asarray(v) for v in slots])      # (n, W, NS), SOURCE order
+        per = jnp.stack([jnp.asarray(v) for v in slots])  # (n, W, NS), SOURCE order
         return jnp.transpose(per, (1, 0, 2)).reshape(self.S, self.NS)
 
     def average(self, theta, key, gains, n_draws):
@@ -221,34 +227,68 @@ class CalibrationForward:
             base = wl * self.n_sources
             slots = [None] * self.n_sources
             for (idx, _), fn, stack in zip(self._groups, self._jgroup_fns, self._group_stacks):
-                if fn is None:                                   # singleton
+                if fn is None:  # singleton
                     i = idx[0]
                     # Placed like the forward's singleton (see __init__). Value-neutral.
                     d = self._laser_dev if i == self._placed else None
                     if d is None:
-                        slots[i] = sum(self._jsingle(theta, self.sources[i], wl, lk,
-                                                     draw_keys[h][i, wl], data[base + i],
-                                                     q_floor) for h in draws) / nh
+                        slots[i] = (
+                            sum(
+                                self._jsingle(
+                                    theta,
+                                    self.sources[i],
+                                    wl,
+                                    lk,
+                                    draw_keys[h][i, wl],
+                                    data[base + i],
+                                    q_floor,
+                                )
+                                for h in draws
+                            )
+                            / nh
+                        )
                     else:
                         th_l, lk_l = jax.device_put(theta, d), jax.device_put(lk, d)
                         src_l = jax.device_put(self.sources[i], d)
                         q_l = jax.device_put(data[base + i], d)
-                        slots[i] = sum(self._jsingle(
-                            th_l, src_l, wl, lk_l,
-                            jax.device_put(draw_keys[h][i, wl], d), q_l, q_floor)
-                            for h in draws) / nh
+                        slots[i] = (
+                            sum(
+                                self._jsingle(
+                                    th_l,
+                                    src_l,
+                                    wl,
+                                    lk_l,
+                                    jax.device_put(draw_keys[h][i, wl], d),
+                                    q_l,
+                                    q_floor,
+                                )
+                                for h in draws
+                            )
+                            / nh
+                        )
                     continue
-                out = sum(fn(theta, stack, wl, lk,
-                             draw_keys[h][jnp.asarray(idx), wl],
-                             jnp.stack([data[base + i] for i in idx]), q_floor)
-                          for h in draws) / nh
+                out = (
+                    sum(
+                        fn(
+                            theta,
+                            stack,
+                            wl,
+                            lk,
+                            draw_keys[h][jnp.asarray(idx), wl],
+                            jnp.stack([data[base + i] for i in idx]),
+                            q_floor,
+                        )
+                        for h in draws
+                    )
+                    / nh
+                )
                 for j, i in enumerate(idx):
                     slots[i] = out[j]
-            rows.append(jnp.stack([jnp.asarray(v) for v in slots]))       # (n, NS, P)
+            rows.append(jnp.stack([jnp.asarray(v) for v in slots]))  # (n, NS, P)
         return jnp.concatenate(rows, axis=0)
 
 
-def profile_gains(model_charge, observed_sum, gauge='log', clip_min=1e-6):
+def profile_gains(model_charge, observed_sum, gauge="log", clip_min=1e-6):
     """Closed-form per-PMT gains ``k = ΣQ / ΣM``, gauged — the nuisance, solved not fitted.
 
     There is one gain per sensor (order 10^4 of them). Fitting them jointly would swamp the
@@ -278,9 +318,9 @@ def profile_gains(model_charge, observed_sum, gauge='log', clip_min=1e-6):
                  dim sensors. Not the published choice; adopting it would move published numbers.
     """
     k = jnp.clip(observed_sum / model_charge, clip_min, None)
-    if gauge == 'linear':
+    if gauge == "linear":
         return k / jnp.mean(k)
-    if gauge == 'log':
+    if gauge == "log":
         return jnp.exp(jnp.log(k) - jnp.log(k).mean())
     raise ValueError(f"gauge must be 'log' or 'linear', got {gauge!r}")
 
@@ -340,12 +380,23 @@ class CalibrationProblem:
         Jacobian draws averaged per refresh, on the independent stream.
     """
 
-    def __init__(self, forward, data, *, seed=0, q_floor_frac=0.01, gauge='log',
-                 n_forward_draws=1, jacobian_draws=8):
+    def __init__(
+        self,
+        forward,
+        data,
+        *,
+        seed=0,
+        q_floor_frac=0.01,
+        gauge="log",
+        n_forward_draws=1,
+        jacobian_draws=8,
+    ):
         data = jnp.asarray(data)
         if data.shape[0] != forward.S:
-            raise ValueError(f'data has {data.shape[0]} rows but the forward produces '
-                             f'{forward.S} ({forward.W} wavelengths x {forward.n_sources} sources)')
+            raise ValueError(
+                f"data has {data.shape[0]} rows but the forward produces "
+                f"{forward.S} ({forward.W} wavelengths x {forward.n_sources} sources)"
+            )
         self.forward = forward
         self.data = data
         self.data_sum = data.sum(0)
@@ -357,7 +408,7 @@ class CalibrationProblem:
         self._forward_root = jax.random.fold_in(root, ROLE_FORWARD)
         self._jacobian_root = jax.random.fold_in(root, ROLE_JACOBIAN)
         self.n_configs = int(data.shape[0])
-        self._J = None                                     # cached between refreshes
+        self._J = None  # cached between refreshes
 
     def forward_key(self, step):
         """The residual's key on step ``step``; its draws fold in below it (:meth:`average`)."""
@@ -369,8 +420,9 @@ class CalibrationProblem:
 
     def predict(self, theta, step=0):
         """Model charge at unit gain, ``(S, n_sensors)``, on step ``step``'s draw."""
-        return self.forward.average(theta, self.forward_key(step), jnp.ones(self.data.shape[1]),
-                                    self.n_forward_draws)
+        return self.forward.average(
+            theta, self.forward_key(step), jnp.ones(self.data.shape[1]), self.n_forward_draws
+        )
 
     def _gains(self, mu):
         return profile_gains(mu.sum(0) + 1e-12, self.data_sum, gauge=self.gauge)
@@ -385,8 +437,14 @@ class CalibrationProblem:
         return neyman_residual(self._gains(mu)[None, :] * mu, self.data, self.q_floor)
 
     def _jacobian(self, theta, lk, step):
-        return self.forward.jacobian(theta, lk, self.jacobian_key(step), self.data, self.q_floor,
-                                     draws=range(self.jacobian_draws))
+        return self.forward.jacobian(
+            theta,
+            lk,
+            self.jacobian_key(step),
+            self.data,
+            self.q_floor,
+            draws=range(self.jacobian_draws),
+        )
 
     def jacobian(self, theta, step=0):
         """``∂r/∂θ``, ``(S, n_sensors, P)``, on the Jacobian's own stream; ``∂k/∂θ`` is dropped
@@ -411,14 +469,14 @@ class CalibrationProblem:
             self._J = self._jacobian(theta, jnp.log(k), step)
         J = self._J
         n = self.n_configs
-        g = jnp.einsum('gnp,gn->p', J, r) / n
-        H = jnp.einsum('gnp,gnq->pq', J, J) / n
-        loss = float(jnp.sum(r ** 2) / n)
+        g = jnp.einsum("gnp,gn->p", J, r) / n
+        H = jnp.einsum("gnp,gnq->pq", J, J) / n
+        loss = float(jnp.sum(r**2) / n)
         return g, H, loss
 
     def nuisance(self, theta, step=0):
         """The profiled nuisance at ``theta``: ``{'gains': (n_sensors,)}``."""
-        return {'gains': self.gains(theta, step)}
+        return {"gains": self.gains(theta, step)}
 
 
 @functools.partial(jax.jit, static_argnums=(1, 2))
@@ -439,7 +497,7 @@ def _group_by_structure(sources):
     be mapped together precisely when they can be stacked, which is a property of their pytree,
     not of their class.
     """
-    groups = []                       # [(treedef, [indices])]
+    groups = []  # [(treedef, [indices])]
     for i, src in enumerate(sources):
         td = jax.tree_util.tree_structure(src)
         for g_td, ix in groups:
@@ -450,8 +508,11 @@ def _group_by_structure(sources):
             groups.append((td, [i]))
     out = []
     for _, ix in groups:
-        stack = (jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *[sources[i] for i in ix])
-                 if len(ix) > 1 else None)
+        stack = (
+            jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *[sources[i] for i in ix])
+            if len(ix) > 1
+            else None
+        )
         out.append((ix, stack))
     return out
 
@@ -467,8 +528,10 @@ def _serial_map(fn, in_axes, n):
     def serial(*args):
         outs = []
         for i in range(n):
-            a = [jax.tree_util.tree_map(lambda x: x[i], arg) if ax == 0 else arg
-                 for arg, ax in zip(args, in_axes)]
+            a = [
+                jax.tree_util.tree_map(lambda x: x[i], arg) if ax == 0 else arg
+                for arg, ax in zip(args, in_axes)
+            ]
             outs.append(jf(*a))
         return jnp.stack(outs)
 

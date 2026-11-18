@@ -65,13 +65,13 @@ a clean ``(sensor_idx, PE, T)`` list.
 This module is pure NumPy (no JAX) — digitization is inherently variable-length
 per sensor and runs host-side after the simulation kernel.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Union
 
 import numpy as np
-
 
 # --- Single-photoelectron (SPE) charge spectra -------------------------------
 # Gaussian+exponential (Bellamy 1994) fits to WCSim's tabulated SPE CDF
@@ -91,17 +91,41 @@ _SPE_HK = dict(w=0.2026, mu=1.1019, sig=0.3495, tau=0.5857, fit_mean=0.997)  # K
 #                 on the digitised charge floored at jitter_floor_pe; tdc_ns is the
 #                 electronics timing truncation applied after.
 MODEL_PRESETS: dict[str, dict] = {
-    "basic": dict(integration_window_ns=None, deadtime_ns=0.0, threshold_pe=0.0,
-                  charge_model="legacy", charge_res="sk_like",
-                  time_model="none", tdc_ns=0.0, dark_rate_khz=0.0, provisional=False),
-    "ski":  dict(integration_window_ns=200.0, deadtime_ns=0.0, threshold_pe=0.25,
-                 charge_model="spe", spe=_SPE_SK,
-                 time_model="sk_gauss", jitter_floor_pe=0.5, tdc_ns=0.4, dark_rate_khz=4.2,
-                 provisional=False),
-    "hk":   dict(integration_window_ns=200.0, deadtime_ns=0.0, threshold_pe=0.25,
-                 charge_model="spe", spe=_SPE_HK,
-                 time_model="hk_emg", jitter_floor_pe=0.5, tdc_ns=0.4, dark_rate_khz=4.2,
-                 provisional=False),
+    "basic": dict(
+        integration_window_ns=None,
+        deadtime_ns=0.0,
+        threshold_pe=0.0,
+        charge_model="legacy",
+        charge_res="sk_like",
+        time_model="none",
+        tdc_ns=0.0,
+        dark_rate_khz=0.0,
+        provisional=False,
+    ),
+    "ski": dict(
+        integration_window_ns=200.0,
+        deadtime_ns=0.0,
+        threshold_pe=0.25,
+        charge_model="spe",
+        spe=_SPE_SK,
+        time_model="sk_gauss",
+        jitter_floor_pe=0.5,
+        tdc_ns=0.4,
+        dark_rate_khz=4.2,
+        provisional=False,
+    ),
+    "hk": dict(
+        integration_window_ns=200.0,
+        deadtime_ns=0.0,
+        threshold_pe=0.25,
+        charge_model="spe",
+        spe=_SPE_HK,
+        time_model="hk_emg",
+        jitter_floor_pe=0.5,
+        tdc_ns=0.4,
+        dark_rate_khz=4.2,
+        provisional=False,
+    ),
 }
 
 # emission_process encoding for the hits.h5 decomposition: the writer's schema (DARK tags noise).
@@ -134,9 +158,10 @@ class DigitizeResult:
     during deadtime) — the caller uses it to build the per-(source, sensor,
     digit) decomposition for ``hits.h5``.
     """
+
     digit_sensor_idx: np.ndarray  # (D,) int32
-    digit_pe_true: np.ndarray     # (D,) float32 — summed detected charge
-    digit_time: np.ndarray        # (D,) _T_DTYPE (float64) — first-arrival time in window
+    digit_pe_true: np.ndarray  # (D,) float32 — summed detected charge
+    digit_time: np.ndarray  # (D,) _T_DTYPE (float64) — first-arrival time in window
     photon_digit_idx: np.ndarray  # (P,) int32 — input photon -> digit, -1 if dropped
 
     @property
@@ -231,8 +256,11 @@ def digitize_event(
     photon_digit_idx = np.full(n_ph, -1, dtype=np.int32)
     if n_ph == 0:
         return DigitizeResult(
-            digit_sensor_idx=np.empty(0, np.int32), digit_pe_true=np.empty(0, np.float32),
-            digit_time=np.empty(0, _T_DTYPE), photon_digit_idx=photon_digit_idx)
+            digit_sensor_idx=np.empty(0, np.int32),
+            digit_pe_true=np.empty(0, np.float32),
+            digit_time=np.empty(0, _T_DTYPE),
+            photon_digit_idx=photon_digit_idx,
+        )
 
     # Sort by (sensor, time); find per-sensor group boundaries. Vectorized.
     order = np.lexsort((times, sensor_idx))
@@ -247,7 +275,7 @@ def digitize_event(
     gend[:-1] = gstart[1:]
     gend[-1] = n_ph
     gsize = gend - gstart
-    first_t = t_sorted[gstart]                        # min time (sorted) per group
+    first_t = t_sorted[gstart]  # min time (sorted) per group
     span = t_sorted[gend - 1] - first_t
     gcharge = np.add.reduceat(q_sorted, gstart)
     # A group is "simple" if all its light fits in one integration window —
@@ -284,7 +312,7 @@ def digitize_event(
                 pe += gq[j]
                 j += 1
             if pe >= threshold:
-                pdi_sorted[i0 + i:i0 + j] = digit_counter
+                pdi_sorted[i0 + i : i0 + j] = digit_counter
                 d_sensor.append(np.int32(s_val))
                 d_pe.append(np.float32(pe))
                 d_t.append(_T_DTYPE(t0))
@@ -297,11 +325,14 @@ def digitize_event(
     photon_digit_idx[order] = pdi_sorted
     return DigitizeResult(
         digit_sensor_idx=np.concatenate([np.atleast_1d(a) for a in d_sensor]).astype(np.int32)
-            if digit_counter else np.empty(0, np.int32),
+        if digit_counter
+        else np.empty(0, np.int32),
         digit_pe_true=np.concatenate([np.atleast_1d(a) for a in d_pe]).astype(np.float32)
-            if digit_counter else np.empty(0, np.float32),
+        if digit_counter
+        else np.empty(0, np.float32),
         digit_time=np.concatenate([np.atleast_1d(a) for a in d_t]).astype(_T_DTYPE)
-            if digit_counter else np.empty(0, _T_DTYPE),
+        if digit_counter
+        else np.empty(0, _T_DTYPE),
         photon_digit_idx=photon_digit_idx,
     )
 
@@ -321,19 +352,20 @@ def _sample_spe_charge(pe_true: np.ndarray, spe: dict, rng: np.random.Generator)
     reco charge equals the photoelectron count.
     """
     q = np.asarray(pe_true, dtype=np.float64)
-    n = np.maximum(1, np.rint(q)).astype(np.int64)          # photoelectron count
+    n = np.maximum(1, np.rint(q)).astype(np.int64)  # photoelectron count
     w, mu, sig, tau = spe["w"], spe["mu"], spe["sig"], spe["tau"]
-    k = rng.binomial(n, 1.0 - w)                            # Gaussian-core pes
-    nmk = n - k                                             # exponential-tail pes
-    charge = rng.normal(k * mu, np.sqrt(k) * sig)           # Σ Gaussians (0 if k=0)
+    k = rng.binomial(n, 1.0 - w)  # Gaussian-core pes
+    nmk = n - k  # exponential-tail pes
+    charge = rng.normal(k * mu, np.sqrt(k) * sig)  # Σ Gaussians (0 if k=0)
     tail = nmk > 0
     if tail.any():
-        charge[tail] += rng.gamma(nmk[tail], tau)          # Σ Exp(tau) = Gamma
+        charge[tail] += rng.gamma(nmk[tail], tau)  # Σ Exp(tau) = Gamma
     return np.clip(charge / spe["fit_mean"], 0.0, None)
 
 
-def _sample_time_jitter(digit_time: np.ndarray, digit_pe: np.ndarray,
-                        model: dict, rng: np.random.Generator) -> np.ndarray:
+def _sample_time_jitter(
+    digit_time: np.ndarray, digit_pe: np.ndarray, model: dict, rng: np.random.Generator
+) -> np.ndarray:
     """Charge-dependent PMT time jitter + electronics TDC truncation.
 
     ``digit_pe`` is the digitised charge, floored at the model's ``jitter_floor_pe``.
@@ -354,12 +386,12 @@ def _sample_time_jitter(digit_time: np.ndarray, digit_pe: np.ndarray,
         sig = np.maximum(0.58, 0.33 + np.sqrt(10.0 / Q))
         t = t + rng.normal(0.0, sig)
     elif tm == "hk_emg":
-        s = (0.6314, 0.06260, 0.5711, 23.96)               # WCSim sig_param
+        s = (0.6314, 0.06260, 0.5711, 23.96)  # WCSim sig_param
         sig_low = s[0] * (np.exp(-s[1] * Q) + s[2])
         hc0 = 2 * s[0] * s[1] * s[3] * np.sqrt(s[3]) * np.exp(-s[1] * s[3])
         hc1 = s[0] * ((1 - 2 * s[1] * s[3]) * np.exp(-s[1] * s[3]) + s[2])
         sig = np.where(Q < s[3], sig_low, hc0 / np.sqrt(Q) + hc1)
-        lam = 0.4113 + 0.07827 * Q                         # WCSim lambda_param
+        lam = 0.4113 + 0.07827 * Q  # WCSim lambda_param
         t = t + rng.normal(-0.2, sig) - np.log(1.0 - rng.random(t.shape)) / lam
     tdc = float(model.get("tdc_ns", 0.0))
     if tdc > 0.0:
@@ -422,7 +454,7 @@ def _encode_keys(key_cols):
     for c in key_cols:
         c = np.asarray(c, dtype=np.int64)
         mn = int(c.min()) if c.size else 0
-        s = c - mn                                   # -> non-negative (handles -1)
+        s = c - mn  # -> non-negative (handles -1)
         shifted.append(s)
         radices.append((int(s.max()) + 1) if s.size else 1)
     prod = 1
@@ -447,8 +479,12 @@ def _group_reduce(key_cols: tuple, pe: np.ndarray, t: np.ndarray, t_reco: np.nda
     n = pe.shape[0]
     if n == 0:
         empty = np.empty(0, dtype=np.int64)
-        return (tuple(empty for _ in key_cols),
-                np.empty(0, np.float64), np.empty(0, np.float64), np.empty(0, np.float64))
+        return (
+            tuple(empty for _ in key_cols),
+            np.empty(0, np.float64),
+            np.empty(0, np.float64),
+            np.empty(0, np.float64),
+        )
     composite, ok = _encode_keys(key_cols)
     if ok:
         order = np.argsort(composite, kind="stable")
@@ -466,18 +502,30 @@ def _group_reduce(key_cols: tuple, pe: np.ndarray, t: np.ndarray, t_reco: np.nda
     cols_s = [np.asarray(c)[order] for c in key_cols]
     pe_s, t_s, tr_s = pe[order], t[order], t_reco[order]
     starts = np.flatnonzero(change)
-    return ([c[starts] for c in cols_s],
-            np.add.reduceat(pe_s, starts),
-            np.minimum.reduceat(t_s, starts),
-            np.minimum.reduceat(tr_s, starts))
+    return (
+        [c[starts] for c in cols_s],
+        np.add.reduceat(pe_s, starts),
+        np.minimum.reduceat(t_s, starts),
+        np.minimum.reduceat(tr_s, starts),
+    )
 
 
 def digitize_and_decompose(
     *,
-    sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process,
-    n_sensors: int, model: dict, rng: np.random.Generator,
-    dark_rate_khz: float = 0.0, readout_pad_ns: float = 100.0,
-    apply_resolution: bool = True, t_ref=None,
+    sensor_idx,
+    charge,
+    t_true,
+    t_reco,
+    particle_idx,
+    segment_idx,
+    emission_process,
+    n_sensors: int,
+    model: dict,
+    rng: np.random.Generator,
+    dark_rate_khz: float = 0.0,
+    readout_pad_ns: float = 100.0,
+    apply_resolution: bool = True,
+    t_ref=None,
 ):
     """Full host-side hit-making: per-photon deposits -> digits + decomposition.
 
@@ -525,8 +573,17 @@ def digitize_and_decompose(
     finite = valid & ((t_reco - ref) < _MAX_DIGIT_TIME_NS)
     if not finite.all():
         sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process = (
-            a[finite] for a in (sensor_idx, charge, t_true, t_reco,
-                                particle_idx, segment_idx, emission_process))
+            a[finite]
+            for a in (
+                sensor_idx,
+                charge,
+                t_true,
+                t_reco,
+                particle_idx,
+                segment_idx,
+                emission_process,
+            )
+        )
 
     # Dark noise, over the event's readout span (± pad), tagged as DARK.
     if dark_rate_khz > 0.0 and t_reco.size:
@@ -541,12 +598,14 @@ def digitize_and_decompose(
             particle_idx = np.concatenate([particle_idx, np.full(d_s.size, -1, np.int64)])
             segment_idx = np.concatenate([segment_idx, np.full(d_s.size, -1, np.int64)])
             emission_process = np.concatenate(
-                [emission_process, np.full(d_s.size, EMISSION_PROCESS_DARK, np.int64)])
+                [emission_process, np.full(d_s.size, EMISSION_PROCESS_DARK, np.int64)]
+            )
 
     res = digitize_event(sensor_idx, t_reco, charge, n_sensors, model)
     if apply_resolution:
         pe_reco, t_reco_digit = apply_readout_resolution(
-            res.digit_pe_true, res.digit_time, model, rng)
+            res.digit_pe_true, res.digit_time, model, rng
+        )
     else:
         # No readout smearing (mirrors the legacy apply_smearing=False path):
         # digits carry true integrated charge and first-arrival time.
@@ -583,11 +642,17 @@ def digitize_and_decompose(
     hmask = (didx >= 0) & ((particle_idx >= 0) | is_dark)
     hk, hPE, hT, hTR = _group_reduce(
         (particle_idx[hmask], sensor_idx[hmask], didx[hmask], emission_process[hmask]),
-        charge[hmask], t_true[hmask], t_reco[hmask])
+        charge[hmask],
+        t_true[hmask],
+        t_reco[hmask],
+    )
     hits_sparse = {
-        "particle_idx": hk[0].astype(np.int32), "sensor_idx": hk[1].astype(np.uint16),
-        "digit_idx": hk[2].astype(np.int32), "emission_process": hk[3].astype(np.int8),
-        "PE": hPE.astype(np.float32), "T": hT.astype(_T_DTYPE),
+        "particle_idx": hk[0].astype(np.int32),
+        "sensor_idx": hk[1].astype(np.uint16),
+        "digit_idx": hk[2].astype(np.int32),
+        "emission_process": hk[3].astype(np.int8),
+        "PE": hPE.astype(np.float32),
+        "T": hT.astype(_T_DTYPE),
         "T_reco": hTR.astype(_T_DTYPE),
     }
 
@@ -595,11 +660,17 @@ def digitize_and_decompose(
     smask = (didx >= 0) & (segment_idx >= 0)
     sk, sPE, sT, sTR = _group_reduce(
         (segment_idx[smask], sensor_idx[smask], didx[smask], emission_process[smask]),
-        charge[smask], t_true[smask], t_reco[smask])
+        charge[smask],
+        t_true[smask],
+        t_reco[smask],
+    )
     seg_hits = {
-        "segment_idx": sk[0].astype(np.int32), "sensor_idx": sk[1].astype(np.uint16),
-        "digit_idx": sk[2].astype(np.int32), "emission_process": sk[3].astype(np.int8),
-        "PE": sPE.astype(np.float32), "T": sT.astype(_T_DTYPE),
+        "segment_idx": sk[0].astype(np.int32),
+        "sensor_idx": sk[1].astype(np.uint16),
+        "digit_idx": sk[2].astype(np.int32),
+        "emission_process": sk[3].astype(np.int8),
+        "PE": sPE.astype(np.float32),
+        "T": sT.astype(_T_DTYPE),
         "T_reco": sTR.astype(_T_DTYPE),
     }
     return sensor_digits, hits_sparse, seg_hits

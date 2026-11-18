@@ -13,29 +13,33 @@ N_PH it can sit in a grid corner. The properties below are budget-independent in
 Needs no downloaded data (laser sources and in-repo geometry, not the SIREN emitter). Runs on a
 reduced grid; compile and detector construction dominate, not the grid points.
 """
+
 import numpy as np
 import pytest
 
 pytestmark = pytest.mark.slow
 
-FIELDS = ('L', 'Gx', 'Gy', 'Fxx', 'Fxy', 'Fyy')
+FIELDS = ("L", "Gx", "Gy", "Fxx", "Fxy", "Fyy")
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def surfaces(tmp_path_factory):
     """The same grid computed twice: in one shard, and split across two shards then combined."""
     from analysis.paper.utils import calibration
     from analysis.paper.utils.combine_2d import combine
     from analysis.paper.utils.compute_2d_neyman import surface_shard
+
     # Reduced from LANDSCAPE: enough grid to have interior points and a Fisher at each.
-    recipe = {**calibration.LANDSCAPE,
-              **dict(ngrid=5, hwf=0.4, k=3, n_ph=100_000, nk_truth=2, nk_sim=2)}
+    recipe = {
+        **calibration.LANDSCAPE,
+        **dict(ngrid=5, hwf=0.4, k=3, n_ph=100_000, nk_truth=2, nk_sim=2),
+    }
     whole = surface_shard(recipe, 0, 1)
-    tmp = tmp_path_factory.mktemp('sharded')
+    tmp = tmp_path_factory.mktemp("sharded")
     parts, paths = [], []
     for s in (0, 1):
         parts.append(surface_shard(recipe, s, 2))
-        paths.append(tmp / f'landscape2d_neyman_part{s}.npz')
+        paths.append(tmp / f"landscape2d_neyman_part{s}.npz")
         np.savez(paths[-1], **parts[-1])
     return whole, combine(paths), parts
 
@@ -46,8 +50,13 @@ class TestSharding:
         it in one process, the figure is an artifact of how it was parallelised."""
         whole, combined, _ = surfaces
         for f in FIELDS:
-            np.testing.assert_allclose(combined[f], whole[f], rtol=0, atol=0,
-                                       err_msg=f'{f}: sharded result differs from unsharded')
+            np.testing.assert_allclose(
+                combined[f],
+                whole[f],
+                rtol=0,
+                atol=0,
+                err_msg=f"{f}: sharded result differs from unsharded",
+            )
 
     def test_the_shards_cover_every_point_exactly_once(self, surfaces):
         """`combine_2d` SUMS the partials, so overlap would double-count silently.
@@ -56,18 +65,18 @@ class TestSharding:
         point was computed, so its nonzero pattern IS the shard's support.
         """
         _, _, parts = surfaces
-        support = [np.asarray(p['Fxx']) != 0.0 for p in parts]
+        support = [np.asarray(p["Fxx"]) != 0.0 for p in parts]
         overlap = support[0] & support[1]
-        assert not overlap.any(), f'{overlap.sum()} point(s) computed by BOTH shards'
+        assert not overlap.any(), f"{overlap.sum()} point(s) computed by BOTH shards"
         covered = support[0] | support[1]
-        assert covered.all(), f'{(~covered).sum()} point(s) computed by NEITHER shard'
+        assert covered.all(), f"{(~covered).sum()} point(s) computed by NEITHER shard"
 
     def test_each_shard_did_a_fair_share(self, surfaces):
         """Round-robin over 25 points and 2 shards is 13/12 — a shard doing all or none would
         still satisfy disjoint-and-complete."""
         _, _, parts = surfaces
-        counts = sorted(int((np.asarray(p['Fxx']) != 0.0).sum()) for p in parts)
-        assert counts == [12, 13], f'shard point counts {counts}, expected [12, 13]'
+        counts = sorted(int((np.asarray(p["Fxx"]) != 0.0).sum()) for p in parts)
+        assert counts == [12, 13], f"shard point counts {counts}, expected [12, 13]"
 
 
 class TestTheSurface:
@@ -75,13 +84,14 @@ class TestTheSurface:
         """F = 2 sum J J / Q is PSD by construction, so this catches a sign error or a transposed
         einsum rather than a physics mistake — which is exactly the failure a refactor introduces."""
         whole, _, _ = surfaces
-        fxx, fxy, fyy = (np.asarray(whole[k], float) for k in ('Fxx', 'Fxy', 'Fyy'))
-        assert (fxx >= 0).all(), 'Fxx has negative entries'
-        assert (fyy >= 0).all(), 'Fyy has negative entries'
-        det = fxx * fyy - fxy ** 2
-        assert (det >= -1e-6 * np.abs(fxx * fyy).max()).all(), \
-            'the 2x2 Fisher is indefinite at some grid point'
-        assert (fxx > 0).all() and (fyy > 0).all(), 'a direction has no curvature at all'
+        fxx, fxy, fyy = (np.asarray(whole[k], float) for k in ("Fxx", "Fxy", "Fyy"))
+        assert (fxx >= 0).all(), "Fxx has negative entries"
+        assert (fyy >= 0).all(), "Fyy has negative entries"
+        det = fxx * fyy - fxy**2
+        assert (det >= -1e-6 * np.abs(fxx * fyy).max()).all(), (
+            "the 2x2 Fisher is indefinite at some grid point"
+        )
+        assert (fxx > 0).all() and (fyy > 0).all(), "a direction has no curvature at all"
 
     def test_the_ad_gradient_agrees_with_the_surface_it_belongs_to(self, surfaces):
         """`L` is evaluated and `Gx, Gy` come from AD — two independent computations of the same
@@ -92,28 +102,30 @@ class TestTheSurface:
         realistic refactor error — inverts the sign everywhere.
         """
         whole, _, _ = surfaces
-        L = np.asarray(whole['L'], float)
-        x, y = np.asarray(whole['X'], float), np.asarray(whole['Y'], float)
+        L = np.asarray(whole["L"], float)
+        x, y = np.asarray(whole["X"], float), np.asarray(whole["Y"], float)
         fd_x, fd_y = np.gradient(L, x, y)
-        gx, gy = np.asarray(whole['Gx'], float), np.asarray(whole['Gy'], float)
+        gx, gy = np.asarray(whole["Gx"], float), np.asarray(whole["Gy"], float)
         inner = (slice(1, -1), slice(1, -1))
-        assert np.sign(fd_x[inner]) == pytest.approx(np.sign(gx[inner])), \
-            'dL/dX from AD disagrees in sign with the surface'
-        assert np.sign(fd_y[inner]) == pytest.approx(np.sign(gy[inner])), \
-            'dL/dY from AD disagrees in sign with the surface'
+        assert np.sign(fd_x[inner]) == pytest.approx(np.sign(gx[inner])), (
+            "dL/dX from AD disagrees in sign with the surface"
+        )
+        assert np.sign(fd_y[inner]) == pytest.approx(np.sign(gy[inner])), (
+            "dL/dY from AD disagrees in sign with the surface"
+        )
 
     def test_the_surface_is_not_degenerate(self, surfaces):
         """Every assertion above would pass on a constant surface."""
         whole, _, _ = surfaces
-        L = np.asarray(whole['L'], float)
+        L = np.asarray(whole["L"], float)
         assert np.isfinite(L).all()
-        assert L.min() > 0, 'a Neyman chi-square went non-positive'
-        assert L.max() / L.min() > 1.2, 'the surface is nearly flat over +-40% of truth'
+        assert L.min() > 0, "a Neyman chi-square went non-positive"
+        assert L.max() / L.min() > 1.2, "the surface is nearly flat over +-40% of truth"
 
     def test_the_grid_is_centred_on_truth(self, surfaces):
         """The axes are built as truth*(1 +- HWF), so truth must sit at the centre — this is what
         makes the figure's axes mean what the caption says, independent of where the MINIMUM is."""
         whole, _, _ = surfaces
-        x, y = np.asarray(whole['X'], float), np.asarray(whole['Y'], float)
-        assert x[len(x) // 2] == pytest.approx(float(whole['truth_x']), rel=1e-6)
-        assert y[len(y) // 2] == pytest.approx(float(whole['truth_y']), rel=1e-6)
+        x, y = np.asarray(whole["X"], float), np.asarray(whole["Y"], float)
+        assert x[len(x) // 2] == pytest.approx(float(whole["truth_x"]), rel=1e-6)
+        assert y[len(y) // 2] == pytest.approx(float(whole["truth_y"]), rel=1e-6)

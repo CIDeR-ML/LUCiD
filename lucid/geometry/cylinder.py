@@ -6,30 +6,36 @@ import os
 from typing import NamedTuple
 
 import numpy as np
-from .base import Detector
-from .utils import generate_concentric_hexagons
-from .registry import register_detector
 
+from .base import Detector
+from .registry import register_detector
+from .utils import generate_concentric_hexagons
 
 _FROM_FILE_REQUIRED_ARRAYS = (
-    'positions_mm', 'directions', 'surfaces', 'pmt_id',
+    "positions_mm",
+    "directions",
+    "surfaces",
+    "pmt_id",
 )
 _FROM_FILE_REQUIRED_SCALARS = (
-    'radius', 'height', 'sensor_radius',
+    "radius",
+    "height",
+    "sensor_radius",
 )
 _FROM_FILE_RESERVED = set(_FROM_FILE_REQUIRED_ARRAYS) | set(_FROM_FILE_REQUIRED_SCALARS)
 _FROM_FILE_MM_TO_M = 0.001
-_INACTIVE_PREFIX = 'inactive_'
+_INACTIVE_PREFIX = "inactive_"
 
 
 class CylinderGrid(NamedTuple):
     """The propagation grid, frozen: cells per cap side, around the barrel, and along it."""
+
     n_cap: int
     n_angular: int
     n_height: int
 
 
-@register_detector('cylinder')
+@register_detector("cylinder")
 class Cylinder(Detector):
     """Cylindrical detector geometry.
 
@@ -46,7 +52,7 @@ class Cylinder(Detector):
     def __init__(self, radius, height, n_sensors, sensor_radius):
         """
         Initialize cylindrical detector.
-        
+
         Parameters:
         -----------
         radius : float
@@ -63,8 +69,7 @@ class Cylinder(Detector):
         self.H = height
         self.place_photosensors()
 
-    def make_grid(self, n_cap=None, n_angular=None, n_height=None,
-                  max_candidates_per_ray=4):
+    def make_grid(self, n_cap=None, n_angular=None, n_height=None, max_candidates_per_ray=4):
         """The propagation grid for this layout, as a :class:`CylinderGrid`.
 
         The default sizing rule keeps each grid-cell edge **no longer
@@ -93,12 +98,15 @@ class Cylinder(Detector):
         allowed to hold ~4× more sensors.
         """
         import math
+
         target = self._grid_cell_target(max_candidates_per_ray)
         return CylinderGrid(
             n_cap=n_cap if n_cap is not None else max(10, int(math.ceil(2 * self.r / target))),
-            n_angular=n_angular if n_angular is not None else max(
-                10, int(math.ceil(2 * math.pi * self.r / target))),
-            n_height=n_height if n_height is not None else max(10, int(math.ceil(self.H / target))))
+            n_angular=n_angular
+            if n_angular is not None
+            else max(10, int(math.ceil(2 * math.pi * self.r / target))),
+            n_height=n_height if n_height is not None else max(10, int(math.ceil(self.H / target))),
+        )
 
     def place_photosensors(self):
         """Position the photo sensor centers proportionally by surface area."""
@@ -106,30 +114,32 @@ class Cylinder(Detector):
         barrel_area = 2 * np.pi * self.r * self.H
         caps_area = 2 * np.pi * self.r**2  # Both caps combined
         total_area = barrel_area + caps_area
-        
+
         # Distribute sensors proportionally
         n_barrel = int(self.n_sensors * barrel_area / total_area)
         n_caps = self.n_sensors - n_barrel
         n_per_cap = n_caps // 2  # Split equally between top and bottom
-        
+
         # Place barrel sensors
         self.barr_points = self._place_barrel_sensors(n_barrel)
-        
+
         # Place cap sensors
-        self.tcap_points = self._place_cap_sensors(n_per_cap, self.H/2)  # Top cap
-        self.bcap_points = self._place_cap_sensors(n_per_cap, -self.H/2)  # Bottom cap
-        
+        self.tcap_points = self._place_cap_sensors(n_per_cap, self.H / 2)  # Top cap
+        self.bcap_points = self._place_cap_sensors(n_per_cap, -self.H / 2)  # Bottom cap
+
         # Combine all points
-        self.all_points = np.concatenate([self.barr_points, self.tcap_points, self.bcap_points], axis=0)
-        
+        self.all_points = np.concatenate(
+            [self.barr_points, self.tcap_points, self.bcap_points], axis=0
+        )
+
         # Create ID mappings
         self.ID_to_position = {i: self.all_points[i] for i in range(len(self.all_points))}
-        
+
         # Create case mappings (0=barrel, 1=top cap, 2=bottom cap)
         self.ID_to_case = {}
         n_barr = len(self.barr_points)
         n_tcap = len(self.tcap_points)
-        
+
         for i in range(len(self.all_points)):
             if i < n_barr:
                 self.ID_to_case[i] = 0
@@ -141,10 +151,11 @@ class Cylinder(Detector):
     @classmethod
     def from_config(cls, geometry, config_dir):
         """Measured PMTs when ``geometry`` names an ``npz_file_path``, else the algorithmic layout."""
-        if 'npz_file_path' in geometry:
-            return cls.from_pmt_file(os.path.join(config_dir, geometry['npz_file_path']))
-        return cls(geometry['radius'], geometry['height'],
-                   geometry['n_sensors'], geometry['sensor_radius'])
+        if "npz_file_path" in geometry:
+            return cls.from_pmt_file(os.path.join(config_dir, geometry["npz_file_path"]))
+        return cls(
+            geometry["radius"], geometry["height"], geometry["n_sensors"], geometry["sensor_radius"]
+        )
 
     # ── Construction from a PMT-positions npz file ────────────────────
 
@@ -186,9 +197,9 @@ class Cylinder(Detector):
                     f"key '{key}'. See docs/reference/pmt-npz-schema.md."
                 )
 
-        positions_m = data['positions_mm'].astype(float) * _FROM_FILE_MM_TO_M
-        directions = data['directions'].astype(float)
-        surfaces = np.asarray(data['surfaces'])
+        positions_m = data["positions_mm"].astype(float) * _FROM_FILE_MM_TO_M
+        directions = data["directions"].astype(float)
+        surfaces = np.asarray(data["surfaces"])
         n = positions_m.shape[0]
         if directions.shape != (n, 3):
             raise ValueError(
@@ -201,9 +212,9 @@ class Cylinder(Detector):
                 f"{surfaces.shape} does not match positions count {n}."
             )
 
-        sensor_radius = float(data['sensor_radius'])
-        radius = float(data['radius'])
-        height = float(data['height'])
+        sensor_radius = float(data["sensor_radius"])
+        radius = float(data["radius"])
+        height = float(data["height"])
 
         # ── Build the instance, bypassing __init__ (which would do
         # the algorithmic placement) ──
@@ -215,13 +226,15 @@ class Cylinder(Detector):
         instance.snap_to_wall = bool(snap_to_wall)
 
         # ── Reorder to (barrel, top, bottom) and place ──
-        order = np.concatenate([
-            np.where(surfaces == 'barrel')[0],
-            np.where(surfaces == 'top')[0],
-            np.where(surfaces == 'bottom')[0],
-        ])
+        order = np.concatenate(
+            [
+                np.where(surfaces == "barrel")[0],
+                np.where(surfaces == "top")[0],
+                np.where(surfaces == "bottom")[0],
+            ]
+        )
         if order.size != n:
-            unknown = np.setdiff1d(surfaces, ['barrel', 'top', 'bottom'])
+            unknown = np.setdiff1d(surfaces, ["barrel", "top", "bottom"])
             raise ValueError(
                 f"PMT npz '{npz_file_path}': unknown surface labels "
                 f"in active block: {unknown.tolist()}"
@@ -233,12 +246,12 @@ class Cylinder(Detector):
         if instance.snap_to_wall:
             positions_ord = instance._snap_to_wall(positions_ord, surfaces[order])
 
-        n_barrel = int(np.sum(surfaces == 'barrel'))
-        n_top    = int(np.sum(surfaces == 'top'))
+        n_barrel = int(np.sum(surfaces == "barrel"))
+        n_top = int(np.sum(surfaces == "top"))
         instance.all_points = positions_ord
         instance.barr_points = positions_ord[:n_barrel]
-        instance.tcap_points = positions_ord[n_barrel:n_barrel + n_top]
-        instance.bcap_points = positions_ord[n_barrel + n_top:]
+        instance.tcap_points = positions_ord[n_barrel : n_barrel + n_top]
+        instance.bcap_points = positions_ord[n_barrel + n_top :]
 
         # PMT viewing directions, reordered. Not used by the propagator
         # today (which uses the cylinder normal), but kept for any
@@ -246,18 +259,16 @@ class Cylinder(Detector):
         instance.pmt_directions = directions[order]
 
         # Standard mappings
-        instance.ID_to_position = {
-            i: instance.all_points[i] for i in range(n)
-        }
+        instance.ID_to_position = {i: instance.all_points[i] for i in range(n)}
         case = np.empty(n, dtype=int)
         case[:n_barrel] = 0
-        case[n_barrel:n_barrel + n_top] = 1
-        case[n_barrel + n_top:] = 2
+        case[n_barrel : n_barrel + n_top] = 1
+        case[n_barrel + n_top :] = 2
         instance.ID_to_case = {i: int(case[i]) for i in range(n)}
 
         # PMT-id → sequential index lookup (always built; convenient
         # for indexing real-data hits back into all_points order).
-        pmt_id = np.asarray(data['pmt_id'])[order]
+        pmt_id = np.asarray(data["pmt_id"])[order]
         instance.pmt_id = pmt_id
         instance.pmt_id_to_idx = {int(pid): i for i, pid in enumerate(pmt_id)}
 
@@ -265,7 +276,7 @@ class Cylinder(Detector):
         # Per-active-PMT arrays (first dim == N) get reordered;
         # inactive_* arrays and scalars are stored as-is.
         for key in data.files:
-            if key in _FROM_FILE_RESERVED or key == 'pmt_id':
+            if key in _FROM_FILE_RESERVED or key == "pmt_id":
                 continue
             arr = data[key]
             if key.startswith(_INACTIVE_PREFIX):
@@ -283,13 +294,13 @@ class Cylinder(Detector):
         axially onto ``z=±self.H/2``. ``positions`` and ``surfaces``
         must already share the same row order."""
         out = positions.copy()
-        barrel = surfaces == 'barrel'
+        barrel = surfaces == "barrel"
         xy = out[barrel, :2]
         r_xy = np.linalg.norm(xy, axis=1, keepdims=True)
         r_xy = np.where(r_xy > 0, r_xy, 1.0)  # guard against r=0
         out[barrel, :2] = xy * (self.r / r_xy)
-        out[surfaces == 'top', 2] = self.H / 2
-        out[surfaces == 'bottom', 2] = -self.H / 2
+        out[surfaces == "top", 2] = self.H / 2
+        out[surfaces == "bottom", 2] = -self.H / 2
         return out
 
     # ── Algorithmic placement helpers ──────────────────────────────────
@@ -298,16 +309,16 @@ class Cylinder(Detector):
         """Place sensors on barrel surface with rectangular grid."""
         if n_sensors == 0:
             return np.array([]).reshape(0, 3)
-            
+
         # Calculate effective dimensions (with margins)
         height_eff = self.H - 3 * self.S_radius  # Top and bottom margins
         circumference_eff = 2 * np.pi * self.r
-        
+
         # Find optimal rows and columns for approximately square spacing
         aspect_ratio = height_eff / circumference_eff
         n_rows = int(np.sqrt(n_sensors * aspect_ratio))
         n_cols = n_sensors // n_rows
-        
+
         # Adjust to get closer to target
         while n_rows * n_cols < n_sensors and n_rows > 1:
             if (n_rows + 1) * n_cols <= n_sensors:
@@ -316,46 +327,47 @@ class Cylinder(Detector):
                 n_cols += 1
             else:
                 break
-        
+
         # Generate grid
-        z_positions = np.linspace(-height_eff/2, height_eff/2, n_rows) + self.C[2]
-        theta_positions = np.linspace(0, 2*np.pi, n_cols, endpoint=False)
-        
+        z_positions = np.linspace(-height_eff / 2, height_eff / 2, n_rows) + self.C[2]
+        theta_positions = np.linspace(0, 2 * np.pi, n_cols, endpoint=False)
+
         points = []
         for z in z_positions:
             for theta in theta_positions:
                 x = self.r * np.cos(theta) + self.C[0]
                 y = self.r * np.sin(theta) + self.C[1]
                 points.append([x, y, z])
-        
+
         return np.array(points[:n_sensors])  # Trim to exact count
 
     def _place_cap_sensors(self, n_sensors, z_position):
         """Place sensors on cap surface with concentric hexagonal rings."""
         if n_sensors == 0:
             return np.array([]).reshape(0, 3)
-            
+
         # Calculate effective radius (with margin)
         radius_eff = self.r - 1.5 * self.S_radius
-        
+
         if radius_eff <= 0:
             return np.array([]).reshape(0, 3)
-        
+
         # Generate concentric hexagonal pattern
         hex_points = generate_concentric_hexagons(n_sensors, radius_eff)
-        
+
         # Convert to 3D and translate
         points_3d = np.zeros((len(hex_points), 3))
         points_3d[:, 0] = hex_points[:, 0] + self.C[0]
         points_3d[:, 1] = hex_points[:, 1] + self.C[1]
         points_3d[:, 2] = z_position + self.C[2]
-        
+
         return points_3d
 
     @property
     def volume(self):
         """The instrumented volume (:mod:`lucid.geometry.volume`), built from ``r`` and ``H``."""
         from lucid.geometry.volume import CylinderVolume
+
         return CylinderVolume(self.r, -self.H / 2, self.H / 2)
 
     def bounds_check(self, positions):
@@ -367,8 +379,10 @@ class Cylinder(Detector):
     def intersect_ray(self, origins, directions, grid):
         """Batch ray-cylinder intersection with grid indexing."""
         from lucid.propagation.cylinder import batch_intersect_cylinder_with_grid
+
         results = batch_intersect_cylinder_with_grid(
-            origins, directions, self.r, self.H, grid.n_cap, grid.n_angular, grid.n_height)
+            origins, directions, self.r, self.H, grid.n_cap, grid.n_angular, grid.n_height
+        )
         # Returns: (intersects, t, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point)
         intersects, t, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point = results
         grid_info = (is_wall, is_top_cap, wall_indices, cap_indices)
@@ -378,12 +392,14 @@ class Cylinder(Detector):
     def compute_normal(self, intersection_point, surface_info):
         """Compute outward cylinder surface normals."""
         from lucid.propagation.cylinder import calculate_cylinder_normals
+
         is_wall, is_top_cap = surface_info
         return calculate_cylinder_normals(intersection_point, is_wall, is_top_cap)
 
     def point_to_grid_cell(self, grid_info, grid):
         """Map cylinder intersection to linear grid cell index."""
         import jax.numpy as jnp
+
         is_wall, is_top_cap, wall_indices, cap_indices = grid_info
         n_cap, n_angular, n_height = grid
 
@@ -391,22 +407,28 @@ class Cylinder(Detector):
         cap_linear = cap_indices[:, 0] * n_cap + cap_indices[:, 1]
         n_wall_cells = n_angular * n_height
 
-        idx = jnp.where(is_wall, wall_linear,
-                        jnp.where(is_top_cap,
-                                  n_wall_cells + cap_linear,
-                                  n_wall_cells + n_cap * n_cap + cap_linear))
+        idx = jnp.where(
+            is_wall,
+            wall_linear,
+            jnp.where(
+                is_top_cap, n_wall_cells + cap_linear, n_wall_cells + n_cap * n_cap + cap_linear
+            ),
+        )
         total_cells = n_wall_cells + 2 * n_cap * n_cap
         return jnp.clip(idx, 0, total_cells - 1)
 
     def assign_sensor_to_cells(self, sensors, sensor_radius, grid):
         """Map sensors to overlapping cylinder grid cells."""
         from lucid.propagation.cylinder import assign_sensors_to_grid
+
         return assign_sensors_to_grid(
-            sensors, sensor_radius, self.r, self.H, grid.n_cap, grid.n_angular, grid.n_height)
+            sensors, sensor_radius, self.r, self.H, grid.n_cap, grid.n_angular, grid.n_height
+        )
 
     def grid_cell_centers(self, grid):
         """Compute centers of all cylinder grid cells."""
         from lucid.propagation.cylinder import calculate_grid_centers
+
         return calculate_grid_centers(self.r, self.H, grid.n_cap, grid.n_angular, grid.n_height)
 
     def total_grid_cells(self, grid):
@@ -427,12 +449,16 @@ class Cylinder(Detector):
         else:  # bottom cap
             return n_wall + grid.n_cap * grid.n_cap + cell_i * grid.n_cap + cell_j
 
-    def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, grid):
+    def build_inverted_sensor_map(
+        self, assignments_geometric, assignments_distance, max_candidates_per_ray, grid
+    ):
         """Build cell→sensor lookup table for cylinder."""
         from lucid.propagation.cylinder import cylinder_grid_cells
         from lucid.propagation.sensor_map import build_inverted_sensor_map
+
         return build_inverted_sensor_map(
-            assignments_geometric, assignments_distance,
+            assignments_geometric,
+            assignments_distance,
             cylinder_grid_cells(grid.n_cap, grid.n_angular, grid.n_height),
-            max_candidates_per_ray)
+            max_candidates_per_ray,
+        )

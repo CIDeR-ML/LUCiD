@@ -20,9 +20,13 @@ Every batch of SRC is relabelled.
 
 Usage: relabel_segments.py SRC DST THETA_DEG
 """
-import sys, os, shutil
-import numpy as np
+
+import os
+import shutil
+import sys
+
 import h5py
+import numpy as np
 
 from lucid.dataset.layout import batch_paths, list_batches
 from lucid.dataset.schema import EMISSION_PROCESS_DARK
@@ -31,30 +35,40 @@ EM = {11, -11, 22}
 
 
 class UF:
-    def __init__(s, n): s.p = list(range(n))
+    def __init__(s, n):
+        s.p = list(range(n))
+
     def find(s, x):
-        while s.p[x] != x: s.p[x] = s.p[s.p[x]]; x = s.p[x]
+        while s.p[x] != x:
+            s.p[x] = s.p[s.p[x]]
+            x = s.p[x]
         return x
-    def union(s, a, b): s.p[s.find(a)] = s.find(b)
+
+    def union(s, a, b):
+        s.p[s.find(a)] = s.find(b)
 
 
 def relabel_event(labl_f, step_f, hits_f, ev, cos_thr):
     """Rewrite one event in place; returns its new number of particles."""
     with h5py.File(step_f, "r") as h:
         g = h[ev]
-        seg_track = g["track_idx"][:]                     # per-segment -> per_track row
+        seg_track = g["track_idx"][:]  # per-segment -> per_track row
         seg_dir = np.stack([g["dir_x"][:], g["dir_y"][:], g["dir_z"][:]], 1).astype(np.float64)
         seg_time = g["time"][:]
         seg_contained = g["contained"][:]
         sh = g["sensor_hits"]
-        sh_seg = sh["segment_idx"][:]; sh_sensor = sh["sensor_idx"][:]
-        sh_pe = sh["PE"][:]; sh_t = sh["T"][:]
+        sh_seg = sh["segment_idx"][:]
+        sh_sensor = sh["sensor_idx"][:]
+        sh_pe = sh["PE"][:]
+        sh_t = sh["T"][:]
         sh_treco = sh["T_reco"][:] if "T_reco" in sh else sh["T"][:]
         sh_emis = sh["emission_process"][:]
         sh_digit = sh["digit_idx"][:]
     with h5py.File(labl_f, "r") as h:
         pt = h[ev]["per_track"]
-        track_id = pt["track_id"][:]; parent_id = pt["parent_id"][:]; pdg = pt["pdg"][:]
+        track_id = pt["track_id"][:]
+        parent_id = pt["parent_id"][:]
+        pdg = pt["pdg"][:]
         old_pid = pt["particle_idx"][:]
         old_cat = h[ev]["per_particle"]["category"][:]
 
@@ -62,26 +76,30 @@ def relabel_event(labl_f, step_f, hits_f, ev, cos_thr):
     row_of_tid = {int(track_id[i]): i for i in range(nT)}
 
     # per-track start/end direction (earliest / latest segment by time)
-    start_dir = np.zeros((nT, 3)); end_dir = np.zeros((nT, 3)); has_seg = np.zeros(nT, bool)
+    start_dir = np.zeros((nT, 3))
+    end_dir = np.zeros((nT, 3))
+    has_seg = np.zeros(nT, bool)
     for t in range(nT):
         m = np.where(seg_track == t)[0]
-        if m.size == 0: continue
+        if m.size == 0:
+            continue
         has_seg[t] = True
         order = m[np.argsort(seg_time[m])]
-        start_dir[t] = seg_dir[order[0]]; end_dir[t] = seg_dir[order[-1]]
+        start_dir[t] = seg_dir[order[0]]
+        end_dir[t] = seg_dir[order[-1]]
 
     # union-find grouping under the theta rule
     uf = UF(nT)
     for t in range(nT):
         p = row_of_tid.get(int(parent_id[t]))
-        if p is None:                      # primary / parent not meaningful -> own particle
+        if p is None:  # primary / parent not meaningful -> own particle
             continue
         if int(pdg[t]) in EM:
-            uf.union(t, p)                 # absorb EM into source
-        else:                              # hadron: split on deflection angle
+            uf.union(t, p)  # absorb EM into source
+        else:  # hadron: split on deflection angle
             if has_seg[t] and has_seg[p]:
                 cosang = float(np.clip(end_dir[p] @ start_dir[t], -1, 1))
-                if cosang >= cos_thr:      # junction angle < theta -> continuation
+                if cosang >= cos_thr:  # junction angle < theta -> continuation
                     uf.union(t, p)
             # else: leave as its own particle (a new split)
 
@@ -115,34 +133,46 @@ def relabel_event(labl_f, step_f, hits_f, ev, cos_thr):
         pp.create_dataset("category", data=cat_new)
         pp.create_dataset("contained", data=contained_new)
         pp.create_dataset("interaction_idx", data=np.zeros(N, np.int32))
-        gen = np.array([track_id[rep[c]] for c in range(N)], dtype=np.int32)   # one-entry genealogy = rep track_id
+        gen = np.array(
+            [track_id[rep[c]] for c in range(N)], dtype=np.int32
+        )  # one-entry genealogy = rep track_id
         off = np.arange(N + 1, dtype=np.uint32)
         for nm in ("genealogy", "ext_genealogy"):
             pp.create_dataset(f"{nm}_data", data=gen)
             pp.create_dataset(f"{nm}_offsets", data=off)
-        h[ev].attrs["n_particles"] = np.int64(N)        # <-- keep the count attr in sync
+        h[ev].attrs["n_particles"] = np.int64(N)  # <-- keep the count attr in sync
 
     # ---- re-aggregate hits from sensor_hits under new particle def ----
-    seg_to_newp = new_pid[seg_track]                       # per-segment -> new particle
+    seg_to_newp = new_pid[seg_track]  # per-segment -> new particle
     hit_newp = seg_to_newp[sh_seg]
     key = {}
     for i in range(len(sh_seg)):
         k = (int(hit_newp[i]), int(sh_sensor[i]), int(sh_digit[i]), int(sh_emis[i]))
         a = key.get(k)
-        if a is None: key[k] = [sh_pe[i], sh_t[i], sh_treco[i]]
+        if a is None:
+            key[k] = [sh_pe[i], sh_t[i], sh_treco[i]]
         else:
-            a[0] += sh_pe[i]; a[1] = min(a[1], sh_t[i]); a[2] = min(a[2], sh_treco[i])
+            a[0] += sh_pe[i]
+            a[1] = min(a[1], sh_t[i])
+            a[2] = min(a[2], sh_treco[i])
     ks = list(key.keys())
     hp = np.array([k[0] for k in ks], np.int32)
     hs = np.array([k[1] for k in ks], np.uint16)
-    hd = np.array([k[2] for k in ks], np.int32)          # digit_idx (FK preserved)
+    hd = np.array([k[2] for k in ks], np.int32)  # digit_idx (FK preserved)
     he = np.array([k[3] for k in ks], np.int8)
     hpe = np.array([key[k][0] for k in ks], np.float32)
-    ht = np.array([key[k][1] for k in ks], np.float64)    # absolute time stays float64
+    ht = np.array([key[k][1] for k in ks], np.float64)  # absolute time stays float64
     htr = np.array([key[k][2] for k in ks], np.float64)
     _cols = ("particle_idx", "digit_idx", "sensor_idx", "PE", "T", "T_reco", "emission_process")
-    _phys = {"particle_idx": hp, "digit_idx": hd, "sensor_idx": hs,
-             "PE": hpe, "T": ht, "T_reco": htr, "emission_process": he}
+    _phys = {
+        "particle_idx": hp,
+        "digit_idx": hd,
+        "sensor_idx": hs,
+        "PE": hpe,
+        "T": ht,
+        "T_reco": htr,
+        "emission_process": he,
+    }
     with h5py.File(hits_f, "r+") as h:
         g = h[ev]
         # Dark-noise hits (emission_process==2) exist only in hits/ — sensor_hits
@@ -151,7 +181,8 @@ def relabel_event(labl_f, step_f, hits_f, ev, cos_thr):
         dark = g["emission_process"][:] == EMISSION_PROCESS_DARK
         keep = {nm: g[nm][:][dark] for nm in _cols}
         for nm in _cols:
-            if nm in g: del g[nm]
+            if nm in g:
+                del g[nm]
         for nm in _cols:
             g.create_dataset(nm, data=np.concatenate([_phys[nm], keep[nm]]))
         g.attrs["n_particle_hits"] = np.int64(len(hp) + int(dark.sum()))
@@ -175,8 +206,10 @@ def main():
         for ev in evs:
             counts.append(relabel_event(paths["labl"], paths["step"], paths["hits"], ev, cos_thr))
     counts = np.array(counts) if counts else np.zeros(1, int)
-    print(f"[theta={theta:.0f}] particles/event min/med/max = "
-          f"{counts.min()}/{int(np.median(counts))}/{counts.max()}; wrote {dst}")
+    print(
+        f"[theta={theta:.0f}] particles/event min/med/max = "
+        f"{counts.min()}/{int(np.median(counts))}/{counts.max()}; wrote {dst}"
+    )
 
 
 if __name__ == "__main__":

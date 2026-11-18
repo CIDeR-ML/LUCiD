@@ -15,6 +15,7 @@ random stream that draws ``u``.
 ``clip(points)`` is the nearest point of the volume to each point, numpy ``(..., 3)``: a point
 inside is returned unchanged, one outside lands on the surface (to rounding).
 """
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -22,6 +23,7 @@ import numpy as np
 
 def _is_jax(points):
     import jax
+
     return isinstance(points, jax.Array)
 
 
@@ -31,13 +33,14 @@ class CylinderVolume:
 
     Detector cylinders are centred on the origin; a string array's envelope is not.
     """
+
     radius: float
     z_min: float
     z_max: float
 
     def contains(self, points):
         x, y, z = points[..., 0], points[..., 1], points[..., 2]
-        return ((x ** 2 + y ** 2) <= self.radius ** 2) & ((z >= self.z_min) & (z <= self.z_max))
+        return ((x**2 + y**2) <= self.radius**2) & ((z >= self.z_min) & (z <= self.z_max))
 
     def scaled(self, factor):
         """Radius and half-height times ``factor``, about the volume's own centre."""
@@ -55,8 +58,10 @@ class CylinderVolume:
 
     def bounding_box(self):
         """``(lo, hi)`` corners of the axis-aligned box around the volume."""
-        return (np.array([-self.radius, -self.radius, self.z_min]),
-                np.array([self.radius, self.radius, self.z_max]))
+        return (
+            np.array([-self.radius, -self.radius, self.z_min]),
+            np.array([self.radius, self.radius, self.z_max]),
+        )
 
     def clip(self, points):
         """Radius and z clamped separately: the two constraints are independent."""
@@ -72,11 +77,13 @@ class CylinderVolume:
 @dataclass(frozen=True)
 class SphereVolume:
     """Sphere of ``radius`` about the origin (metres)."""
+
     radius: float
 
     def contains(self, points):
         if _is_jax(points):
             import jax.numpy as jnp
+
             return jnp.linalg.norm(points, axis=-1) <= self.radius
         return np.sqrt(np.sum(np.asarray(points) ** 2, axis=-1)) <= self.radius
 
@@ -103,21 +110,29 @@ class SphereVolume:
 @dataclass(frozen=True)
 class BoxVolume:
     """Axis-aligned box about the origin, given by its half-extents (metres)."""
+
     half_x: float
     half_y: float
     half_z: float
 
     def contains(self, points):
         x, y, z = points[..., 0], points[..., 1], points[..., 2]
-        return ((x >= -self.half_x) & (x <= self.half_x) &
-                (y >= -self.half_y) & (y <= self.half_y) &
-                (z >= -self.half_z) & (z <= self.half_z))
+        return (
+            (x >= -self.half_x)
+            & (x <= self.half_x)
+            & (y >= -self.half_y)
+            & (y <= self.half_y)
+            & (z >= -self.half_z)
+            & (z <= self.half_z)
+        )
 
     def scaled(self, factor):
         return BoxVolume(self.half_x * factor, self.half_y * factor, self.half_z * factor)
 
     def from_unit(self, u):
-        return (2.0 * np.asarray(u, float) - 1.0) * np.array([self.half_x, self.half_y, self.half_z])
+        return (2.0 * np.asarray(u, float) - 1.0) * np.array(
+            [self.half_x, self.half_y, self.half_z]
+        )
 
     def bounding_box(self):
         h = np.array([self.half_x, self.half_y, self.half_z])

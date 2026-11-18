@@ -1,11 +1,17 @@
 """Unit tests for lucid.simulation.digitizer."""
+
 import numpy as np
 import pytest
 
 from lucid.simulation.digitizer import (
-    MODEL_PRESETS, resolve_model_config, digitize_event, generate_dark_noise,
-    charge_resolution_sigma, apply_readout_resolution, digitize_and_decompose,
     EMISSION_PROCESS_DARK,
+    MODEL_PRESETS,
+    apply_readout_resolution,
+    charge_resolution_sigma,
+    digitize_and_decompose,
+    digitize_event,
+    generate_dark_noise,
+    resolve_model_config,
 )
 
 
@@ -32,8 +38,7 @@ def test_basic_collapses_to_one_digit_per_sensor():
     sensor = np.array([0, 0, 0, 1, 1])
     times = np.array([100.0, 101.0, 5000.0, 200.0, 202.0])
     charges = np.array([1.0, 2.0, 3.0, 0.5, 0.5])
-    r = digitize_event(sensor, times, charges, n_sensors=2,
-                       model=resolve_model_config("basic"))
+    r = digitize_event(sensor, times, charges, n_sensors=2, model=resolve_model_config("basic"))
     assert r.n_digits == 2
     # sensor 0: sum 6, first arrival 100; sensor 1: sum 1.0, first 200
     order = np.argsort(r.digit_sensor_idx)
@@ -55,8 +60,7 @@ def test_multi_hit_and_deadtime_veto():
     sensor = np.full(6, 7)
     times = np.array([1000.0, 1100.0, 1200.0, 1600.0, 2000.0, 3000.0])
     charges = np.array([1.0, 1.0, 0.5, 5.0, 0.75, 1.5])
-    r = digitize_event(sensor, times, charges, n_sensors=8,
-                       model=resolve_model_config("ski"))
+    r = digitize_event(sensor, times, charges, n_sensors=8, model=resolve_model_config("ski"))
     order = np.argsort(r.digit_time)
     np.testing.assert_allclose(r.digit_time[order], [1000.0, 1600.0, 2000.0, 3000.0])
     np.testing.assert_allclose(r.digit_pe_true[order], [2.5, 5.0, 0.75, 1.5])
@@ -87,12 +91,13 @@ def test_windowing_does_not_apply_the_discriminator():
 
     # The cut lives here instead, on the digitised charge.
     from lucid.simulation.digitizer import apply_discriminator
+
     keep = apply_discriminator(np.array([0.1, 1.0]), model)
     np.testing.assert_array_equal(keep, [False, True])
     # basic has no discriminator, so nothing is ever dropped.
     np.testing.assert_array_equal(
-        apply_discriminator(np.array([0.0, 0.1]), resolve_model_config("basic")),
-        [True, True])
+        apply_discriminator(np.array([0.0, 0.1]), resolve_model_config("basic")), [True, True]
+    )
 
 
 def test_discriminator_drops_digits_and_remaps_digit_idx():
@@ -105,11 +110,16 @@ def test_discriminator_drops_digits_and_remaps_digit_idx():
     n = 400
     sd, hits, seg = digitize_and_decompose(
         sensor_idx=rng.integers(0, 30, size=n),
-        charge=np.ones(n), t_true=rng.uniform(0, 3000, size=n),
+        charge=np.ones(n),
+        t_true=rng.uniform(0, 3000, size=n),
         t_reco=rng.uniform(0, 3000, size=n),
-        particle_idx=np.zeros(n, np.int64), segment_idx=np.zeros(n, np.int64),
+        particle_idx=np.zeros(n, np.int64),
+        segment_idx=np.zeros(n, np.int64),
         emission_process=np.zeros(n, np.int64),
-        n_sensors=30, model=resolve_model_config("ski"), rng=rng)
+        n_sensors=30,
+        model=resolve_model_config("ski"),
+        rng=rng,
+    )
 
     n_digits = sd["PE"].size
     # Every surviving digit clears the threshold ...
@@ -141,8 +151,10 @@ def test_charge_sigma_models():
     # sk_like piecewise fractional resolution, arXiv:1307.0162 Table 2:
     # 1.2% below 20 p.e., 0.75% from 20 to 130 p.e., 0.5% above (edges at 20 and 130)
     q = np.array([10.0, 19.9, 20.0, 50.0, 129.9, 130.0, 200.0])
-    np.testing.assert_allclose(charge_resolution_sigma(q, "sk_like"),
-                               q * np.array([0.012, 0.012, 0.0075, 0.0075, 0.0075, 0.005, 0.005]))
+    np.testing.assert_allclose(
+        charge_resolution_sigma(q, "sk_like"),
+        q * np.array([0.012, 0.012, 0.0075, 0.0075, 0.0075, 0.005, 0.005]),
+    )
     # float-override path (legacy/basic only): single-pe sigma f, scales f*sqrt(Q)
     np.testing.assert_allclose(charge_resolution_sigma(np.array([1.0]), 0.1), [0.1])
     np.testing.assert_allclose(charge_resolution_sigma(np.array([4.0]), 0.1), [0.2])
@@ -152,8 +164,9 @@ def test_dark_noise_generation_and_labelling():
     rng = np.random.default_rng(7)
     n_sensors = 1000
     # 10 kHz over a 1 ms window → mu=10 per sensor → ~10k hits
-    s, t, q = generate_dark_noise(n_sensors, rate_khz=10.0,
-                                  t_start_ns=0.0, t_end_ns=1_000_000.0, rng=rng)
+    s, t, q = generate_dark_noise(
+        n_sensors, rate_khz=10.0, t_start_ns=0.0, t_end_ns=1_000_000.0, rng=rng
+    )
     # total ~ Poisson(10^4): sigma 100, so +-5 sigma = [9500, 10500] (a 20% rate
     # error is 20 sigma out)
     assert 9500 < s.size < 10500
@@ -169,14 +182,17 @@ def test_dark_noise_generation_and_labelling():
     assert s0.size == 0
     # concatenating dark with real photons and digitizing: dark photons that
     # fall alone on an otherwise-empty sensor form their own (dark) digits.
-    real_s = np.array([5]); real_t = np.array([100.0]); real_q = np.array([2.0])
-    dark_s = np.array([5]); dark_t = np.array([100000.0]); dark_q = np.array([1.0])
+    real_s = np.array([5])
+    real_t = np.array([100.0])
+    real_q = np.array([2.0])
+    dark_s = np.array([5])
+    dark_t = np.array([100000.0])
+    dark_q = np.array([1.0])
     cat_s = np.concatenate([real_s, dark_s])
     cat_t = np.concatenate([real_t, dark_t])
     cat_q = np.concatenate([real_q, dark_q])
     is_dark = np.array([False, True])
-    r = digitize_event(cat_s, cat_t, cat_q, n_sensors=10,
-                       model=resolve_model_config("ski"))
+    r = digitize_event(cat_s, cat_t, cat_q, n_sensors=10, model=resolve_model_config("ski"))
     assert r.n_digits == 2
     # the dark photon lands in a distinct (later) digit; caller can tag it
     dark_digit = r.photon_digit_idx[is_dark][0]
@@ -208,7 +224,8 @@ def test_spe_charge_is_unbiased(name, q):
     model = resolve_model_config({"model": name, "tdc_ns": 0.0})
     spe = model["spe"]
     assert spe["fit_mean"] == pytest.approx(
-        spe["w"] * spe["tau"] + (1 - spe["w"]) * spe["mu"], rel=5e-3)
+        spe["w"] * spe["tau"] + (1 - spe["w"]) * spe["mu"], rel=5e-3
+    )
     n = 200_000
     pr, _ = apply_readout_resolution(np.full(n, q), np.zeros(n), model, _rng())
     assert pr.mean() / q == pytest.approx(1.0, abs=0.01)
@@ -224,6 +241,7 @@ def test_single_pe_survives_the_discriminator_at_the_documented_rate(name, expec
     tolerance 0.01 (the two PMTs are 0.15 apart).
     """
     from lucid.simulation.digitizer import apply_discriminator
+
     model = resolve_model_config(name)
     n = 200_000
     pr, _ = apply_readout_resolution(np.ones(n), np.zeros(n), model, _rng())
@@ -238,7 +256,7 @@ def test_tdc_truncates_times_to_its_step():
     _, t = apply_readout_resolution(np.full(1000, 3.0), t_in, model, _rng())
     k = t / 0.4
     np.testing.assert_allclose(k, np.round(k), atol=1e-6)
-    assert np.unique(t).size > 3          # jitter still spreads them over several steps
+    assert np.unique(t).size > 3  # jitter still spreads them over several steps
 
 
 def test_time_jitter_follows_the_digitised_charge():
@@ -267,6 +285,7 @@ def test_hk_jitter_is_a_gaussian_with_a_late_exponential_tail():
     0.003 ns; tolerance 0.02 ns.
     """
     from lucid.simulation.digitizer import _sample_time_jitter
+
     model = resolve_model_config({"model": "hk", "tdc_ns": 0.0})
     n = 200_000
     t = _sample_time_jitter(np.zeros(n), np.full(n, 5.0), model, _rng())
@@ -295,10 +314,18 @@ def test_decompose_basic_single_digit_and_conserves():
     segment = np.array([0, 0, 5])
     emp = np.array([0, 0, 0])
     sd, hits, seg = digitize_and_decompose(
-        sensor_idx=sensor, charge=charge, t_true=t_true, t_reco=t_reco,
-        particle_idx=particle, segment_idx=segment, emission_process=emp,
-        n_sensors=2, model=resolve_model_config("basic"), rng=_rng())
-    assert sd["sensor_idx"].shape[0] == 2          # one digit per sensor
+        sensor_idx=sensor,
+        charge=charge,
+        t_true=t_true,
+        t_reco=t_reco,
+        particle_idx=particle,
+        segment_idx=segment,
+        emission_process=emp,
+        n_sensors=2,
+        model=resolve_model_config("basic"),
+        rng=_rng(),
+    )
+    assert sd["sensor_idx"].shape[0] == 2  # one digit per sensor
     # hits: (p0,s0,d?) PE=3 ; (p1,s1,d?) PE=3
     assert hits["particle_idx"].tolist() == [0, 1]
     np.testing.assert_allclose(sorted(hits["PE"]), [3.0, 3.0])
@@ -325,10 +352,19 @@ def test_late_light_cap_is_measured_from_each_interaction():
     """
     t = np.array([5.0, 2e5, 1e9 + 5.0, 1e9 + 2e5])
     ref = np.array([0.0, 0.0, 1e9, 1e9])
-    kw = dict(sensor_idx=np.array([0, 1, 2, 3]), charge=np.ones(4), t_true=t, t_reco=t,
-              particle_idx=np.array([0, 0, 1, 1]), segment_idx=np.array([0, 0, 1, 1]),
-              emission_process=np.zeros(4, np.int64), n_sensors=4,
-              model=resolve_model_config("basic"), rng=_rng(), apply_resolution=False)
+    kw = dict(
+        sensor_idx=np.array([0, 1, 2, 3]),
+        charge=np.ones(4),
+        t_true=t,
+        t_reco=t,
+        particle_idx=np.array([0, 0, 1, 1]),
+        segment_idx=np.array([0, 0, 1, 1]),
+        emission_process=np.zeros(4, np.int64),
+        n_sensors=4,
+        model=resolve_model_config("basic"),
+        rng=_rng(),
+        apply_resolution=False,
+    )
     sd, hits, _ = digitize_and_decompose(t_ref=ref, **kw)
     np.testing.assert_array_equal(np.sort(sd["sensor_idx"]), [0, 2])
     np.testing.assert_allclose(np.sort(sd["T"]), [5.0, 1e9 + 5.0])
@@ -345,43 +381,61 @@ def test_decompose_multihit_splits_digit_idx():
     charge = np.array([2.0, 1.5])
     t = np.array([1000.0, 3000.0])
     sd, hits, seg = digitize_and_decompose(
-        sensor_idx=sensor, charge=charge, t_true=t, t_reco=t,
-        particle_idx=np.array([0, 0]), segment_idx=np.array([0, 1]),
+        sensor_idx=sensor,
+        charge=charge,
+        t_true=t,
+        t_reco=t,
+        particle_idx=np.array([0, 0]),
+        segment_idx=np.array([0, 1]),
         emission_process=np.array([0, 0]),
-        n_sensors=8, model=resolve_model_config("ski"), rng=_rng())
+        n_sensors=8,
+        model=resolve_model_config("ski"),
+        rng=_rng(),
+    )
     assert sd["sensor_idx"].shape[0] == 2
     assert (hits["sensor_idx"] == 4).all()
-    assert sorted(hits["digit_idx"].tolist()) == [0, 1]   # split across digits
+    assert sorted(hits["digit_idx"].tolist()) == [0, 1]  # split across digits
     np.testing.assert_allclose(sorted(hits["PE"]), [1.5, 2.0])
 
 
 def test_decompose_dark_is_labelled():
     rng = np.random.default_rng(0)
     # one real deposit + dark noise on a big detector over a long window
-    sensor = np.array([2]); charge = np.array([3.0])
+    sensor = np.array([2])
+    charge = np.array([3.0])
     t = np.array([500.0])
     sd, hits, seg = digitize_and_decompose(
-        sensor_idx=sensor, charge=charge, t_true=t, t_reco=t,
-        particle_idx=np.array([0]), segment_idx=np.array([0]),
+        sensor_idx=sensor,
+        charge=charge,
+        t_true=t,
+        t_reco=t,
+        particle_idx=np.array([0]),
+        segment_idx=np.array([0]),
         emission_process=np.array([0]),
-        n_sensors=2000, model=resolve_model_config("ski"), rng=rng,
-        dark_rate_khz=50.0, readout_pad_ns=1e6)   # force plenty of dark hits
+        n_sensors=2000,
+        model=resolve_model_config("ski"),
+        rng=rng,
+        dark_rate_khz=50.0,
+        readout_pad_ns=1e6,
+    )  # force plenty of dark hits
     dark_rows = hits["emission_process"] == EMISSION_PROCESS_DARK
     assert dark_rows.any(), "expected dark-labelled hits rows"
     # dark rows carry particle_idx = -1 and never appear in the segment table
     assert (hits["particle_idx"][dark_rows] == -1).all()
-    assert (seg["segment_idx"] >= 0).all()   # seg table has no dark
+    assert (seg["segment_idx"] >= 0).all()  # seg table has no dark
     # the real deposit is still present and correctly attributed
-    real = (hits["particle_idx"] == 0)
+    real = hits["particle_idx"] == 0
     assert real.any() and np.isclose(hits["PE"][real].sum(), 3.0)
 
 
 # --- per-photon scatter tag (fiTQun scattering table) -------------------------
 
+
 def test_resolve_first_detection_tags_only_detected_photons():
     """The tag is meaningful only where a photon was actually detected."""
-    import jax.numpy as jnp
     import jax
+    import jax.numpy as jnp
+
     from lucid.simulation.hits import _resolve_first_detection
 
     # Two photons, one slot each: the first is detectable, the second is not.
@@ -392,9 +446,15 @@ def test_resolve_first_detection_tags_only_detected_photons():
     flat_indirect = jnp.array([True, True])
 
     detected, sensor_id, hit_time, indirect = _resolve_first_detection(
-        flat_weights, flat_indices, flat_times, n_photons=2,
-        per_photon_qe=qe, qe_key=jax.random.PRNGKey(0), threshold=1e-10,
-        flat_indirect=flat_indirect)
+        flat_weights,
+        flat_indices,
+        flat_times,
+        n_photons=2,
+        per_photon_qe=qe,
+        qe_key=jax.random.PRNGKey(0),
+        threshold=1e-10,
+        flat_indirect=flat_indirect,
+    )
 
     assert bool(detected[0]) and not bool(detected[1])
     # An undetected photon is never tagged, whatever the propagation said.
@@ -402,6 +462,12 @@ def test_resolve_first_detection_tags_only_detected_photons():
 
     # Omitting the tag keeps the old 3-value behaviour, all-False.
     *_, none_dev = _resolve_first_detection(
-        flat_weights, flat_indices, flat_times, n_photons=2,
-        per_photon_qe=qe, qe_key=jax.random.PRNGKey(0), threshold=1e-10)
+        flat_weights,
+        flat_indices,
+        flat_times,
+        n_photons=2,
+        per_photon_qe=qe,
+        qe_key=jax.random.PRNGKey(0),
+        threshold=1e-10,
+    )
     assert not bool(none_dev.any())

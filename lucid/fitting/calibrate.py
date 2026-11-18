@@ -24,20 +24,32 @@ The estimator
 * **Damped Gauss-Newton** by default (:func:`lucid.fitting.gn.gauss_newton_tx`), on the loop
   reconstruction also runs (:func:`lucid.fitting.minimize.minimize`).
 """
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 
 from lucid.fitting.calib import ROLE_TRUTH
 from lucid.fitting.gn import gauss_newton_tx
 from lucid.fitting.minimize import minimize
 
-__all__ = ['calibrate', 'closure_data']
+__all__ = ["calibrate", "closure_data"]
 
 
-def calibrate(problem, theta0, *, tx=None, steps=600, refresh=20, max_step=0.5, polyak=50,
-              fix=(), scale=None, on_step=None):
+def calibrate(
+    problem,
+    theta0,
+    *,
+    tx=None,
+    steps=600,
+    refresh=20,
+    max_step=0.5,
+    polyak=50,
+    fix=(),
+    scale=None,
+    on_step=None,
+):
     """Fit detector parameters: run ``tx`` on ``problem`` from ``theta0``.
 
     The defaults are the published calibration recipe.
@@ -76,15 +88,30 @@ def calibrate(problem, theta0, *, tx=None, steps=600, refresh=20, max_step=0.5, 
     rows, the start included), ``loss``, ``gnorm``, and ``problem``.
     """
     tx = gauss_newton_tx(lam=0.01, mu=0.1) if tx is None else tx
-    res = minimize(problem, jnp.asarray(theta0, dtype=jnp.float32), steps,
-                   optax.with_extra_args_support(tx), max_step=max_step, scale=scale,
-                   refresh=refresh, readout='polyak' if polyak else 'final', polyak=polyak,
-                   fix=fix, on_step=on_step)
-    theta = res['theta']
+    res = minimize(
+        problem,
+        jnp.asarray(theta0, dtype=jnp.float32),
+        steps,
+        optax.with_extra_args_support(tx),
+        max_step=max_step,
+        scale=scale,
+        refresh=refresh,
+        readout="polyak" if polyak else "final",
+        polyak=polyak,
+        fix=fix,
+        on_step=on_step,
+    )
+    theta = res["theta"]
     nuisance = problem.nuisance(jnp.asarray(theta, dtype=jnp.float32), steps)
-    return dict(theta=theta, real=problem.forward.params.to_real(theta),
-                **{k: np.asarray(v) for k, v in nuisance.items()},
-                history=res['history'], loss=res['loss'], gnorm=res['gnorm'], problem=problem)
+    return dict(
+        theta=theta,
+        real=problem.forward.params.to_real(theta),
+        **{k: np.asarray(v) for k, v in nuisance.items()},
+        history=res["history"],
+        loss=res["loss"],
+        gnorm=res["gnorm"],
+        problem=problem,
+    )
 
 
 def closure_data(forward, theta_true, gains=None, *, n_draws=8, seed=0):

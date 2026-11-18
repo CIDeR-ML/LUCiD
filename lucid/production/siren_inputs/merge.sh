@@ -22,7 +22,7 @@
 #   --force   Re-merge cells that already have photonsim.root.
 #   -j N      Parallel hadd workers inside the container (default 4).
 
-set -eu -o pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 USER_PATHS="${SCRIPT_DIR}/../platform/user_paths.sh"

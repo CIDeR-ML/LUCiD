@@ -68,8 +68,8 @@ RUN_JOB = REPO / "lucid" / "production" / "dataprod" / "run_job.py"
 CONFIGS_DIR = REPO / "lucid" / "production" / "dataprod" / "configs"
 
 DEFAULT_CONFIGS = [
-    "GeV/02_mu.json",                 # single mu — baseline
-    "Solar/01_e_low_energy.json",     # low-E electron — fast, EM-dominated
+    "GeV/02_mu.json",  # single mu — baseline
+    "Solar/01_e_low_energy.json",  # low-E electron — fast, EM-dominated
 ]
 
 
@@ -104,8 +104,12 @@ def run_with_line_timing(cmd: list[str], env: dict) -> tuple[int, list, float]:
     """
     t0 = time.perf_counter()
     p = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1, env=env,
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env=env,
     )
     timeline = []
     assert p.stdout is not None
@@ -217,13 +221,20 @@ def measure_config(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        sys.executable, str(RUN_JOB),
-        "--config", str(config_path),
-        "--detector", detector_for(config_path),
-        "--n-events", str(n_events),
-        "--job-id", "1",
-        "--master-seed", "42",
-        "--output-dir", str(out_dir),
+        sys.executable,
+        str(RUN_JOB),
+        "--config",
+        str(config_path),
+        "--detector",
+        detector_for(config_path),
+        "--n-events",
+        str(n_events),
+        "--job-id",
+        "1",
+        "--master-seed",
+        "42",
+        "--output-dir",
+        str(out_dir),
     ]
     env = os.environ.copy()
     if photonsim_bin:
@@ -259,14 +270,18 @@ def write_markdown(report: dict, out_md: Path) -> None:
     lines.append(f"- python:     `{m['python']}`")
     lines.append(f"- n events:   `{m['n_events']}`")
     lines.append("")
-    lines.append("Single-run-per-config harvest of per-event timings from "
-                 "the writer's existing per-event prints (LUCiD has 10 ms "
-                 "resolution; PhotonSim only reports its total internal "
-                 "elapsed time, so per-event distribution is not available "
-                 "for that stage). All times in seconds.\n")
+    lines.append(
+        "Single-run-per-config harvest of per-event timings from "
+        "the writer's existing per-event prints (LUCiD has 10 ms "
+        "resolution; PhotonSim only reports its total internal "
+        "elapsed time, so per-event distribution is not available "
+        "for that stage). All times in seconds.\n"
+    )
 
     # Per-stage summary table.
-    lines.append("| config | stage | wall (s) | init (s) | per-event mean (s) | per-event min/max (s) |")
+    lines.append(
+        "| config | stage | wall (s) | init (s) | per-event mean (s) | per-event min/max (s) |"
+    )
     lines.append("|---|---|---:|---:|---:|---:|")
     for cfg, data in report["configs"].items():
         if data.get("skipped"):
@@ -287,12 +302,9 @@ def write_markdown(report: dict, out_md: Path) -> None:
                 hi = sd.get("per_event_total_max_s")
                 mm = f"{lo:.3f} / {hi:.3f}" if lo is not None else "—"
                 lines.append(
-                    f"| `{cfg}` | {stage} | "
-                    f"{_fmt(wall)} | {_fmt(init)} | "
-                    f"{_fmt(mean)} | {mm} |"
+                    f"| `{cfg}` | {stage} | {_fmt(wall)} | {_fmt(init)} | {_fmt(mean)} | {mm} |"
                 )
             elif stage == "photonsim":
-                init_elapsed = sd.get("internal_elapsed_s")
                 mean = sd.get("per_event_avg_s")
                 lines.append(
                     f"| `{cfg}` | {stage} | "
@@ -316,10 +328,12 @@ def write_markdown(report: dict, out_md: Path) -> None:
     )
     if any_stages:
         lines.append("## Per-stage LUCiD breakdown\n")
-        lines.append("Event 0 vs events 1+ for each in-process LUCiD sub-stage. "
-                     "Stages should sum to roughly the per-event total; a large "
-                     "event-0 vs events-1+ gap on `simulate` indicates JIT "
-                     "compile cost on the first event.\n")
+        lines.append(
+            "Event 0 vs events 1+ for each in-process LUCiD sub-stage. "
+            "Stages should sum to roughly the per-event total; a large "
+            "event-0 vs events-1+ gap on `simulate` indicates JIT "
+            "compile cost on the first event.\n"
+        )
         lines.append("| config | stage | event 0 (s) | mean 1+ (s) | min 1+ (s) | max 1+ (s) | n |")
         lines.append("|---|---|---:|---:|---:|---:|---:|")
         for cfg, data in report["configs"].items():
@@ -381,33 +395,51 @@ def main(argv=None) -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--configs", nargs="*", default=None,
-                   help=f"Config filenames under {CONFIGS_DIR.relative_to(REPO)}. "
-                        f"Default: {DEFAULT_CONFIGS}")
-    p.add_argument("--n-events", type=int, default=20,
-                   help="Events to simulate per config (default 20).")
-    p.add_argument("--photonsim-bin", default=os.environ.get("PHOTONSIM_BIN"),
-                   help="Path to PhotonSim binary. Defaults to $PHOTONSIM_BIN.")
-    p.add_argument("--work-dir", default=None,
-                   help="Where to put per-config output dirs. Default: a tempdir.")
-    p.add_argument("--keep-work", action="store_true",
-                   help="Don't delete the work dir on exit (useful for debugging).")
-    p.add_argument("--out-json", required=True, type=Path,
-                   help="Path for the JSON report.")
-    p.add_argument("--out-md", type=Path, default=None,
-                   help="Optional Markdown summary path.")
-    p.add_argument("--logs-dir", type=Path, default=None,
-                   help="Directory for per-config raw stdout logs (one "
-                        "<config_stem>.log per config, with leading "
-                        "wall-time-relative-to-launch column). Defaults to "
-                        "the parent of --out-json. Pass --no-logs to skip.")
-    p.add_argument("--no-logs", action="store_true",
-                   help="Don't save raw stdout logs (default is to save them).")
+    p.add_argument(
+        "--configs",
+        nargs="*",
+        default=None,
+        help=f"Config filenames under {CONFIGS_DIR.relative_to(REPO)}. Default: {DEFAULT_CONFIGS}",
+    )
+    p.add_argument(
+        "--n-events", type=int, default=20, help="Events to simulate per config (default 20)."
+    )
+    p.add_argument(
+        "--photonsim-bin",
+        default=os.environ.get("PHOTONSIM_BIN"),
+        help="Path to PhotonSim binary. Defaults to $PHOTONSIM_BIN.",
+    )
+    p.add_argument(
+        "--work-dir", default=None, help="Where to put per-config output dirs. Default: a tempdir."
+    )
+    p.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="Don't delete the work dir on exit (useful for debugging).",
+    )
+    p.add_argument("--out-json", required=True, type=Path, help="Path for the JSON report.")
+    p.add_argument("--out-md", type=Path, default=None, help="Optional Markdown summary path.")
+    p.add_argument(
+        "--logs-dir",
+        type=Path,
+        default=None,
+        help="Directory for per-config raw stdout logs (one "
+        "<config_stem>.log per config, with leading "
+        "wall-time-relative-to-launch column). Defaults to "
+        "the parent of --out-json. Pass --no-logs to skip.",
+    )
+    p.add_argument(
+        "--no-logs",
+        action="store_true",
+        help="Don't save raw stdout logs (default is to save them).",
+    )
     args = p.parse_args(argv)
 
     configs = list(args.configs) if args.configs else list(DEFAULT_CONFIGS)
 
-    work_root = Path(args.work_dir) if args.work_dir else Path(tempfile.mkdtemp(prefix="lucid_speed_"))
+    work_root = (
+        Path(args.work_dir) if args.work_dir else Path(tempfile.mkdtemp(prefix="lucid_speed_"))
+    )
     work_root.mkdir(parents=True, exist_ok=True)
 
     report = {
@@ -463,7 +495,9 @@ def main(argv=None) -> int:
     print("\n=== summary ===")
     for name, data in report["configs"].items():
         if data.get("skipped") or data.get("error") or not data.get("ok"):
-            note = data.get("skipped") or data.get("error") or f"failed (rc={data.get('returncode')})"
+            note = (
+                data.get("skipped") or data.get("error") or f"failed (rc={data.get('returncode')})"
+            )
             print(f"  {name}: {note}")
             continue
         print(f"  {name}:")
@@ -473,16 +507,20 @@ def main(argv=None) -> int:
                 init = sd.get("init_s") or 0
                 lo = sd.get("per_event_total_min_s") or 0
                 hi = sd.get("per_event_total_max_s") or 0
-                print(f"    {stage}: init={init:.2f}s  per_event mean={mean*1000:.1f}ms "
-                      f"(min {lo*1000:.1f}, max {hi*1000:.1f})")
+                print(
+                    f"    {stage}: init={init:.2f}s  per_event mean={mean * 1000:.1f}ms "
+                    f"(min {lo * 1000:.1f}, max {hi * 1000:.1f})"
+                )
             elif stage == "photonsim":
                 ie = sd.get("internal_elapsed_s") or 0
                 avg = sd.get("per_event_avg_s") or 0
-                print(f"    {stage}: internal={ie:.2f}s  per_event avg={avg*1000:.1f}ms (no distribution)")
+                print(
+                    f"    {stage}: internal={ie:.2f}s  per_event avg={avg * 1000:.1f}ms (no distribution)"
+                )
             else:
                 wall = sd.get("wall_s") or 0
                 avg = sd.get("per_event_avg_s") or 0
-                print(f"    {stage}: wall={wall:.2f}s  per_event avg={avg*1000:.1f}ms")
+                print(f"    {stage}: wall={wall:.2f}s  per_event avg={avg * 1000:.1f}ms")
 
     if not args.keep_work:
         shutil.rmtree(work_root, ignore_errors=True)

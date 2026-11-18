@@ -16,20 +16,20 @@ at ``import lucid`` time.
 """
 
 __all__ = [
-    'setup_event_simulator',
-    'DetectorParams',
-    'ParticleParams',
-    'JointParams',
-    'generate_detector',
+    "setup_event_simulator",
+    "DetectorParams",
+    "ParticleParams",
+    "JointParams",
+    "generate_detector",
 ]
 
 # name -> submodule it lives in (resolved lazily on first attribute access)
 _LAZY = {
-    'setup_event_simulator': 'lucid.simulation',
-    'DetectorParams': 'lucid.detector_params',
-    'ParticleParams': 'lucid.detector_params',
-    'JointParams': 'lucid.detector_params',
-    'generate_detector': 'lucid.geometry',
+    "setup_event_simulator": "lucid.simulation",
+    "DetectorParams": "lucid.detector_params",
+    "ParticleParams": "lucid.detector_params",
+    "JointParams": "lucid.detector_params",
+    "generate_detector": "lucid.geometry",
 }
 
 
@@ -38,6 +38,7 @@ def __getattr__(name):
     if module is None:
         raise AttributeError(f"module 'lucid' has no attribute {name!r}")
     import importlib
+
     return getattr(importlib.import_module(module), name)
 
 

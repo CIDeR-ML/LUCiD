@@ -7,46 +7,42 @@
 """
 
 # Import utility functions
-from .utils import (
-    generate_concentric_hexagons,
-    fibonacci_sphere_points_numpy,
-    create_disc_mesh,
-    calculate_surface_normals
-)
-
 # Import detector classes
 from .base import Detector
-from .cylinder import Cylinder
-from .sphere import Sphere
 from .box import Box
+from .cylinder import Cylinder
 
 # Import detector functions
 from .detector import (
-    load_detector_config,
     generate_detector,
+    load_detector_config,
 )
 
 # Registry
 from .registry import get_detector_class, register_detector
+from .sphere import Sphere
+from .utils import (
+    calculate_surface_normals,
+    create_disc_mesh,
+    fibonacci_sphere_points_numpy,
+    generate_concentric_hexagons,
+)
 
 __all__ = [
     # Utility functions
-    'generate_concentric_hexagons',
-    'fibonacci_sphere_points_numpy', 
-    'create_disc_mesh',
-    'calculate_surface_normals',
-    
+    "generate_concentric_hexagons",
+    "fibonacci_sphere_points_numpy",
+    "create_disc_mesh",
+    "calculate_surface_normals",
     # Detector classes
-    'Detector',
-    'Cylinder',
-    'Sphere',
-    'Box',
-
+    "Detector",
+    "Cylinder",
+    "Sphere",
+    "Box",
     # Detector functions
-    'load_detector_config',
-    'generate_detector',
-
+    "load_detector_config",
+    "generate_detector",
     # Registry
-    'get_detector_class',
-    'register_detector',
+    "get_detector_class",
+    "register_detector",
 ]

@@ -1,5 +1,6 @@
 """lucid.fitting.analysis: the track-error definition every recon study reports, on a case worked
 by hand, and the bootstrap against its closed forms."""
+
 import numpy as np
 
 from lucid.fitting import bootstrap, bootstrap_ci, track_errors
@@ -10,13 +11,18 @@ def test_track_errors_on_a_hand_worked_case():
     direction at theta = 30 deg (phi = 90 deg), t0 4.5 ns, with its sin/cos pairs unnormalised as a
     Gauss-Newton iterate leaves them. By hand: vertex sqrt(3^2 + 4^2) = 5 cm, direction 30 deg,
     dE -10 MeV, dt0 -0.5 ns (signed). A trajectory (truth, fit) gives the rows in order."""
-    truth = np.array([1000., 1., 2., 3., 0., 1., 0., 1., 5.])
-    fit = np.array([990., 1.03, 2.04, 3., 2 * 0.5, 2 * np.sqrt(3) / 2, 3., 0., 4.5])
-    true_dir = np.array([0., 0., 2.])                      # any length: the angle normalises
-    np.testing.assert_allclose(track_errors(fit, truth, true_dir), [5., 30., -10., -0.5],
-                               rtol=0, atol=1e-12)
-    np.testing.assert_allclose(track_errors(np.stack([truth, fit]), truth, true_dir),
-                               [[0., 0., 0., 0.], [5., 30., -10., -0.5]], rtol=0, atol=1e-12)
+    truth = np.array([1000.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0, 1.0, 5.0])
+    fit = np.array([990.0, 1.03, 2.04, 3.0, 2 * 0.5, 2 * np.sqrt(3) / 2, 3.0, 0.0, 4.5])
+    true_dir = np.array([0.0, 0.0, 2.0])  # any length: the angle normalises
+    np.testing.assert_allclose(
+        track_errors(fit, truth, true_dir), [5.0, 30.0, -10.0, -0.5], rtol=0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        track_errors(np.stack([truth, fit]), truth, true_dir),
+        [[0.0, 0.0, 0.0, 0.0], [5.0, 30.0, -10.0, -0.5]],
+        rtol=0,
+        atol=1e-12,
+    )
 
 
 def test_bootstrap_resamples_with_replacement_uniformly():
@@ -39,8 +45,11 @@ def test_bootstrap_errors_match_the_closed_forms():
     se = bootstrap(x, np.mean, n_boot=4000, seed=0).std()
     np.testing.assert_allclose(se, x.std() / np.sqrt(len(x)), rtol=0.05)
     lo, hi = bootstrap_ci(x, np.mean, ci=68.27, n_boot=4000, seed=0)
-    np.testing.assert_allclose([lo, hi], x.mean() + np.array([-1, 1]) * x.std() / np.sqrt(len(x)),
-                               atol=0.1 * x.std() / np.sqrt(len(x)))
+    np.testing.assert_allclose(
+        [lo, hi],
+        x.mean() + np.array([-1, 1]) * x.std() / np.sqrt(len(x)),
+        atol=0.1 * x.std() / np.sqrt(len(x)),
+    )
     y = rng.normal(size=2000)
     lo, hi = bootstrap_ci(y, np.median, ci=68.27, n_boot=4000, seed=0)
     np.testing.assert_allclose((hi - lo) / 2, np.sqrt(np.pi / 2 / len(y)), rtol=0.15)

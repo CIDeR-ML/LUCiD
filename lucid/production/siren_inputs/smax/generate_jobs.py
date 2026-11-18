@@ -41,21 +41,36 @@ if str(LUCID_ROOT) not in sys.path:
     sys.path.insert(0, str(LUCID_ROOT))
 
 from lucid.production.platform.adapters import get_adapter  # noqa: E402
-from lucid.production.siren_inputs.smax_planning import (  # noqa: E402
-    events_for, parse_schedule, split_plan, write_per_cell_config,
-)
 from lucid.production.platform.user_paths import load_user_paths, missing_settings  # noqa: E402
-
+from lucid.production.siren_inputs.smax_planning import (  # noqa: E402
+    events_for,
+    parse_schedule,
+    split_plan,
+    write_per_cell_config,
+)
 
 USER_PATHS_DEFAULT = SCRIPT_DIR.parent.parent / "platform" / "user_paths.sh"
 
 
-def write_submit(*, adapter, cell_dir: Path, cell_cfg: Path, energy_mev: int,
-                 job_name: str, job_id: int, sb_basename: str,
-                 partition: str, use_gpu: bool) -> Path:
+def write_submit(
+    *,
+    adapter,
+    cell_dir: Path,
+    cell_cfg: Path,
+    energy_mev: int,
+    job_name: str,
+    job_id: int,
+    sb_basename: str,
+    partition: str,
+    use_gpu: bool,
+) -> Path:
     body = adapter.render_smax_cell(
-        cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
-        job_name=job_name, job_id=job_id, partition=partition,
+        cell_dir=cell_dir,
+        cell_cfg=cell_cfg,
+        energy_mev=energy_mev,
+        job_name=job_name,
+        job_id=job_id,
+        partition=partition,
         use_gpu=use_gpu,
     )
     out = cell_dir / f"{sb_basename}.{adapter.submit_extension}"
@@ -65,26 +80,58 @@ def write_submit(*, adapter, cell_dir: Path, cell_cfg: Path, energy_mev: int,
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("-c", "--config", type=Path, required=True,
-                   help="s_max-scan JSON config (see configs/water_mu.json).")
-    p.add_argument("-s", "--submit", action="store_true",
-                   help="Submit jobs to SLURM (default: prepare sbatch only).")
-    p.add_argument("-t", "--test", action="store_true",
-                   help="Test mode: only the first (particle, energy) cell.")
-    p.add_argument("-o", "--output-base", type=Path, default=None,
-                   help="Output root override. Default: "
-                        "<SIREN_OUTPUT_BASE_PATH>/smax_parametrization if set, "
-                        "else OUTPUT_BASE_PATH.")
-    p.add_argument("-P", "--partition", type=str, default=None,
-                   help="Override SLURM_PARTITION from user_paths.sh.")
-    p.add_argument("-g", "--gpu", action="store_true",
-                   help="Request 1 GPU per job (default: DEFAULT_GPUS).")
-    p.add_argument("--user-paths", type=Path, default=USER_PATHS_DEFAULT,
-                   help="Path to user_paths.sh (default: %(default)s).")
-    p.add_argument("--no-skip-existing", action="store_true",
-                   help="Re-run cells that already have photonsim.root.")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        required=True,
+        help="s_max-scan JSON config (see configs/water_mu.json).",
+    )
+    p.add_argument(
+        "-s",
+        "--submit",
+        action="store_true",
+        help="Submit jobs to SLURM (default: prepare sbatch only).",
+    )
+    p.add_argument(
+        "-t",
+        "--test",
+        action="store_true",
+        help="Test mode: only the first (particle, energy) cell.",
+    )
+    p.add_argument(
+        "-o",
+        "--output-base",
+        type=Path,
+        default=None,
+        help="Output root override. Default: "
+        "<SIREN_OUTPUT_BASE_PATH>/smax_parametrization if set, "
+        "else OUTPUT_BASE_PATH.",
+    )
+    p.add_argument(
+        "-P",
+        "--partition",
+        type=str,
+        default=None,
+        help="Override SLURM_PARTITION from user_paths.sh.",
+    )
+    p.add_argument(
+        "-g", "--gpu", action="store_true", help="Request 1 GPU per job (default: DEFAULT_GPUS)."
+    )
+    p.add_argument(
+        "--user-paths",
+        type=Path,
+        default=USER_PATHS_DEFAULT,
+        help="Path to user_paths.sh (default: %(default)s).",
+    )
+    p.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Re-run cells that already have photonsim.root.",
+    )
     return p.parse_args(argv)
 
 
@@ -105,8 +152,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     env = load_user_paths(args.user_paths)
     adapter = get_adapter(env)
     missing = missing_settings(env, "LUCID_IMAGE_PATH")
-    if not args.output_base and not (env.get("SIREN_OUTPUT_BASE_PATH")
-                                     or env.get("OUTPUT_BASE_PATH")):
+    if not args.output_base and not (
+        env.get("SIREN_OUTPUT_BASE_PATH") or env.get("OUTPUT_BASE_PATH")
+    ):
         missing.append("SIREN_OUTPUT_BASE_PATH (or OUTPUT_BASE_PATH, or -o)")
     if missing:
         print(f"error: not set in {args.user_paths}: {', '.join(missing)}", file=sys.stderr)
@@ -120,14 +168,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     elif env.get("SIREN_OUTPUT_BASE_PATH"):
         # Stage-specific subdir under the SIREN root keeps smax outputs
         # disjoint from siren_inputs outputs (both layer <material>/...).
-        output_base = (Path(env["SIREN_OUTPUT_BASE_PATH"])
-                       / "smax_parametrization").resolve()
+        output_base = (Path(env["SIREN_OUTPUT_BASE_PATH"]) / "smax_parametrization").resolve()
     else:
         output_base = Path(env["OUTPUT_BASE_PATH"]).resolve()
     partition = args.partition or env.get("SLURM_PARTITION") or env.get("CONDOR_JOB_FLAVOUR", "")
     if not partition:
-        print("error: queue partition/flavour not set "
-              "(SLURM_PARTITION or CONDOR_JOB_FLAVOUR).", file=sys.stderr)
+        print(
+            "error: queue partition/flavour not set (SLURM_PARTITION or CONDOR_JOB_FLAVOUR).",
+            file=sys.stderr,
+        )
         return 2
 
     print(f"=== s_max scan fan-out: {name} ===")
@@ -148,8 +197,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         for energy in energies:
             n_events = events_for(energy, base, anchor, floor)
             n_jobs, evt_per_job = split_plan(
-                n_events=n_events, energy_mev=energy,
-                split_above_mev=split_above, target_per_job=target_per_job,
+                n_events=n_events,
+                energy_mev=energy,
+                split_above_mev=split_above,
+                target_per_job=target_per_job,
             )
             cells.append((particle, energy, n_events, n_jobs, evt_per_job))
 
@@ -176,8 +227,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         cell_name = f"smax_{material}_{particle}_{energy}MeV"
         cell_cfg = write_per_cell_config(
-            cell_dir=cell_dir, material=material, particle=particle,
-            energy_mev=energy, events_per_job=evt_per_job, n_jobs=n_jobs,
+            cell_dir=cell_dir,
+            material=material,
+            particle=particle,
+            energy_mev=energy,
+            events_per_job=evt_per_job,
+            n_jobs=n_jobs,
             name=cell_name,
         )
 
@@ -196,20 +251,27 @@ def main(argv: Optional[List[str]] = None) -> int:
                 continue
 
             sb = write_submit(
-                adapter=adapter, cell_dir=cell_dir, cell_cfg=cell_cfg,
-                energy_mev=energy, job_name=job_label, job_id=job_id,
-                sb_basename=sb_basename, partition=partition, use_gpu=args.gpu,
+                adapter=adapter,
+                cell_dir=cell_dir,
+                cell_cfg=cell_cfg,
+                energy_mev=energy,
+                job_name=job_label,
+                job_id=job_id,
+                sb_basename=sb_basename,
+                partition=partition,
+                use_gpu=args.gpu,
             )
             # Stable marker for the bash shim's host-side submission pass.
             print(f"[PREPARED] {sb}")
             prepared += 1
 
             if args.submit:
-                r = subprocess.run([adapter.submit_cmd, str(sb)],
-                                   capture_output=True, text=True)
+                r = subprocess.run([adapter.submit_cmd, str(sb)], capture_output=True, text=True)
                 if r.returncode != 0:
-                    print(f"  FAILED {adapter.submit_cmd} for {job_label}: "
-                          f"{r.stderr.strip()}", file=sys.stderr)
+                    print(
+                        f"  FAILED {adapter.submit_cmd} for {job_label}: {r.stderr.strip()}",
+                        file=sys.stderr,
+                    )
                     continue
                 submitted += 1
                 print(f"  submitted {job_label} ({evt_per_job} evts)  -> {r.stdout.strip()}")

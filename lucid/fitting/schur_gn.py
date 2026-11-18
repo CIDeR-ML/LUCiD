@@ -13,9 +13,9 @@ one convention for everything that has been consolidated, and differs from it in
 (an eigen-floor here, provably inert whenever the Levenberg term is positive).
 """
 
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from lucid.fitting.fisher import make_constrained_schur
 
@@ -37,8 +37,10 @@ def ridge_inverse(H, ridge=0.02, mu=0.3):
 
 
 def _keys(b0):
-    return (jax.random.fold_in(jax.random.PRNGKey(b0), 1),
-            jax.random.fold_in(jax.random.PRNGKey(b0 + 1), 1))
+    return (
+        jax.random.fold_in(jax.random.PRNGKey(b0), 1),
+        jax.random.fold_in(jax.random.PRNGKey(b0 + 1), 1),
+    )
 
 
 class ChargeTimeModel:
@@ -58,6 +60,7 @@ class ChargeTimeModel:
         def _ct(theta, lk, ek, pk):
             c, t = forward(theta, ek, pk)
             return jnp.sqrt(jnp.exp(lk) * c + eps), t
+
         self._ct = jax.jit(_ct)
 
     def ct(self, theta, lk, ek, pk):
@@ -76,10 +79,30 @@ class ChargeTimeModel:
         return np.stack(Jc, axis=1), np.stack(Jt, axis=1)
 
 
-def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
-                    wc=None, wt=None, lk0=None, t00=None, steps=300, refresh=15,
-                    ridge=0.02, mu=0.3, eps=1e-8, step_max=0.08, kstep_max=0.3,
-                    t0step_max=2.0, w_time=1.0, fix=(), seed=0, nb_h=4):
+def fit_charge_time(
+    sources,
+    truth_charge,
+    truth_time,
+    theta0,
+    n_sensors,
+    *,
+    wc=None,
+    wt=None,
+    lk0=None,
+    t00=None,
+    steps=300,
+    refresh=15,
+    ridge=0.02,
+    mu=0.3,
+    eps=1e-8,
+    step_max=0.08,
+    kstep_max=0.3,
+    t0step_max=2.0,
+    w_time=1.0,
+    fix=(),
+    seed=0,
+    nb_h=4,
+):
     """Joint charge + first-arrival-time Gauss-Newton — the same recipe with a TIME residual.
 
     Adds the timing observable to the charge fit: the per-PMT QE factor ``k`` (multiplicative
@@ -95,8 +118,9 @@ def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
     S = len(sources)
     n_params = int(np.asarray(theta0).shape[0])
     Wc = np.ones(n_sensors) if wc is None else np.asarray(wc, float)
-    Wt = [np.asarray(truth_time[i]) > 0 if wt is None else np.asarray(wt[i], float)
-          for i in range(S)]
+    Wt = [
+        np.asarray(truth_time[i]) > 0 if wt is None else np.asarray(wt[i], float) for i in range(S)
+    ]
     Wt = [w.astype(float) for w in Wt]
     tc_sqrt = [jnp.sqrt(jnp.asarray(truth_charge[i]) + eps) for i in range(S)]
     tt = [jnp.asarray(truth_time[i]) for i in range(S)]
@@ -115,41 +139,55 @@ def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
             mc, T = sources[i].ct(lp, lkv, *_keys(kb + 7000 * i))
             rcA.append(np.array(sg(mc - tc_sqrt[i])))
             mcA.append(np.array(sg(mc)))
-            rtA.append(np.array(sg((T + t0v) - tt[i])))           # raw time residual (weight Wt)
+            rtA.append(np.array(sg((T + t0v) - tt[i])))  # raw time residual (weight Wt)
 
         if s % refresh == 0:
             Jc_c, Jt_c = [], []
             for i in range(S):
-                Jc_i = np.zeros((n_sensors, n_params)); Jt_i = np.zeros((n_sensors, n_params))
+                Jc_i = np.zeros((n_sensors, n_params))
+                Jt_i = np.zeros((n_sensors, n_params))
                 for h in range(nb_h):
                     ek, pk = _keys(9_000_000 + 7 * s + 1000 * i + h)
                     jc, jt = sources[i].fd(lp, lkv, ek, pk)
-                    Jc_i += jc; Jt_i += jt
-                Jc_c.append(Jc_i / nb_h); Jt_c.append(Jt_i / nb_h)
+                    Jc_i += jc
+                    Jt_i += jt
+                Jc_c.append(Jc_i / nb_h)
+                Jt_c.append(Jt_i / nb_h)
 
             Htt = np.zeros((n_params, n_params))
-            Htk = np.zeros((n_params, n_sensors)); Htu = np.zeros((n_params, n_sensors))
-            Hkk = np.zeros(n_sensors) + 1e-12; Huu = np.zeros(n_sensors) + 1e-12
+            Htk = np.zeros((n_params, n_sensors))
+            Htu = np.zeros((n_params, n_sensors))
+            Hkk = np.zeros(n_sensors) + 1e-12
+            Huu = np.zeros(n_sensors) + 1e-12
             for i in range(S):
-                Jk = 0.5 * mcA[i]                                  # ∂√(k·c)/∂log k
+                Jk = 0.5 * mcA[i]  # ∂√(k·c)/∂log k
                 Htt += (Jc_c[i] * Wc[:, None]).T @ Jc_c[i]
                 Htt += w_time * (Jt_c[i] * Wt[i][:, None]).T @ Jt_c[i]
                 Htk += (Jc_c[i] * Wc[:, None]).T * Jk[None, :]
-                Htu += w_time * (Jt_c[i] * Wt[i][:, None]).T       # ∂rt/∂t0 = 1
+                Htu += w_time * (Jt_c[i] * Wt[i][:, None]).T  # ∂rt/∂t0 = 1
                 Hkk += Wc * (Jk * Jk)
-                Huu += w_time * Wt[i]                              # diagonal time block
-            Htt /= S; Htk /= S; Htu /= S; Hkk /= S; Huu /= S
+                Huu += w_time * Wt[i]  # diagonal time block
+            Htt /= S
+            Htk /= S
+            Htu /= S
+            Hkk /= S
+            Huu /= S
             Minv_k = make_constrained_schur(Hkk)
             Minv_u = make_constrained_schur(Huu)
-            Pinv = ridge_inverse(Htt - Htk @ Minv_k(Htk.T) - Htu @ Minv_u(Htu.T),
-                                 ridge=ridge, mu=mu)
+            Pinv = ridge_inverse(
+                Htt - Htk @ Minv_k(Htk.T) - Htu @ Minv_u(Htu.T), ridge=ridge, mu=mu
+            )
 
-        gt = np.zeros(n_params); gk = np.zeros(n_sensors); gu = np.zeros(n_sensors)
+        gt = np.zeros(n_params)
+        gk = np.zeros(n_sensors)
+        gu = np.zeros(n_sensors)
         for i in range(S):
             gt += Jc_c[i].T @ (Wc * rcA[i]) + w_time * Jt_c[i].T @ (Wt[i] * rtA[i])
             gk += Wc * (0.5 * mcA[i]) * rcA[i]
             gu += w_time * Wt[i] * rtA[i]
-        gt /= S; gk /= S; gu /= S
+        gt /= S
+        gk /= S
+        gu /= S
         geff = gt - Htk @ Minv_k(gk) - Htu @ Minv_u(gu)
         for i in fix:
             geff[i] = 0.0
@@ -159,10 +197,16 @@ def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
         dlk = -Minv_k(gk + Htk.T @ dth)
         dt0 = -Minv_u(gu + Htu.T @ dth)
         lp = lp + jnp.asarray(np.clip(dth, -step_max, step_max))
-        lkv = lkv + jnp.asarray(np.clip(dlk, -kstep_max, kstep_max)); lkv = lkv - jnp.mean(lkv)
-        t0v = t0v + jnp.asarray(np.clip(dt0, -t0step_max, t0step_max)); t0v = t0v - jnp.mean(t0v)
+        lkv = lkv + jnp.asarray(np.clip(dlk, -kstep_max, kstep_max))
+        lkv = lkv - jnp.mean(lkv)
+        t0v = t0v + jnp.asarray(np.clip(dt0, -t0step_max, t0step_max))
+        t0v = t0v - jnp.mean(t0v)
         history[s] = np.array(jnp.exp(lp))
 
-    return dict(theta=np.array(jnp.exp(lp)), log_theta=np.array(lp),
-                k=np.clip(np.array(jnp.exp(lkv)), 1e-6, None),
-                t0=np.array(t0v), history=history)
+    return dict(
+        theta=np.array(jnp.exp(lp)),
+        log_theta=np.array(lp),
+        k=np.clip(np.array(jnp.exp(lkv)), 1e-6, None),
+        t0=np.array(t0v),
+        history=history,
+    )

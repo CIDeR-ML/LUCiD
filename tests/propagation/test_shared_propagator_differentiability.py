@@ -20,6 +20,7 @@
 3. **Charge vs QE.** Charge is linear in qe, so d(sum q)/d qe = sum(q) / qe exactly; and the
    scatter-length derivative through the whole chain equals its central difference.
 """
+
 import os
 
 import jax
@@ -30,11 +31,11 @@ import pytest
 from scipy.spatial import cKDTree
 from scipy.stats import ncx2
 
-from lucid.propagation.shared import create_propagator
 from lucid.geometry import generate_detector
+from lucid.propagation.shared import create_propagator
+from lucid.simulation.hits import first_arrival_expected
 from lucid.simulation.photon_step import make_photon_iteration_update_factors_safe
 from lucid.simulation.reflection import ScalarReflection
-from lucid.simulation.hits import first_arrival_expected
 from tests.helpers.params import on_deposits
 from tests.helpers.paths import REPO
 
@@ -47,9 +48,13 @@ _CACHE = {}
 
 def _built(name):
     if name not in _CACHE:
-        det = generate_detector(os.path.join(REPO, 'config', f'{name}_geom_config.json'))
-        prop, grid = create_propagator(det, jnp.asarray(det.all_points, jnp.float32),
-                                       float(det.S_radius), temperature=TEMPERATURE)
+        det = generate_detector(os.path.join(REPO, "config", f"{name}_geom_config.json"))
+        prop, grid = create_propagator(
+            det,
+            jnp.asarray(det.all_points, jnp.float32),
+            float(det.S_radius),
+            temperature=TEMPERATURE,
+        )
         _CACHE[name] = (det, prop, grid)
     return _CACHE[name]
 
@@ -60,7 +65,7 @@ def _unit(v):
 
 def _overlap_slope(rho, r_s, sigma):
     x, lam = (r_s / sigma) ** 2, (rho / sigma) ** 2
-    return -(rho / sigma ** 2) * (ncx2.cdf(x, 2, lam) - ncx2.cdf(x, 4, lam))
+    return -(rho / sigma**2) * (ncx2.cdf(x, 2, lam) - ncx2.cdf(x, 4, lam))
 
 
 def _aim_isolated(det, prop, grid, rho_frac=0.95, n_try=200):
@@ -94,18 +99,23 @@ def _aim_isolated(det, prop, grid, rho_frac=0.95, n_try=200):
         if best[0] <= reach:
             continue
         d = best[1]
-        t_geo = float(np.asarray(det.intersect_ray(jnp.asarray(o[None], jnp.float32),
-                                                   jnp.asarray(d[None], jnp.float32), grid)[1]).reshape(-1)[0])
+        t_geo = float(
+            np.asarray(
+                det.intersect_ray(
+                    jnp.asarray(o[None], jnp.float32), jnp.asarray(d[None], jnp.float32), grid
+                )[1]
+            ).reshape(-1)[0]
+        )
         if (c - o) @ d >= t_geo:
             continue
         out = prop(jnp.asarray(o[None], jnp.float32), jnp.asarray(d[None], jnp.float32))
-        hit = np.asarray(out['sensor_indices'])[:, 0] == k
+        hit = np.asarray(out["sensor_indices"])[:, 0] == k
         if hit.any():
             return k, o, d, int(np.argmax(hit))
     pytest.fail(f"no isolated, listed target found in {n_try} tries")
 
 
-@pytest.mark.parametrize("name", ['WCTE_like', 'JUNO', 'nuSCOPE'])
+@pytest.mark.parametrize("name", ["WCTE_like", "JUNO", "nuSCOPE"])
 def test_weight_gradient_matches_the_closed_form(name):
     """d w / d origin and d w / d direction for an edge ray (rho = 0.95 r_s, where the slope
     is steepest), against f'(rho) times the geometric derivatives of rho.
@@ -123,7 +133,7 @@ def test_weight_gradient_matches_the_closed_form(name):
 
     def w(o_, d_):
         out = prop(o_[None], d_[None])
-        return out['sensor_weights'][slot, 0]
+        return out["sensor_weights"][slot, 0]
 
     o32, d32 = jnp.asarray(o, jnp.float32), jnp.asarray(d, jnp.float32)
     g_o, g_d = jax.grad(w, argnums=(0, 1))(o32, d32)
@@ -132,8 +142,9 @@ def test_weight_gradient_matches_the_closed_form(name):
     p = v - (v @ d) * d
     rho = np.linalg.norm(p)
     fp = _overlap_slope(rho, r_s, sigma)
-    npt.assert_allclose(float(w(o32, d32)), ncx2.cdf((r_s / sigma) ** 2, 2, (rho / sigma) ** 2),
-                        atol=5e-4)
+    npt.assert_allclose(
+        float(w(o32, d32)), ncx2.cdf((r_s / sigma) ** 2, 2, (rho / sigma) ** 2), atol=5e-4
+    )
     want_o = fp * (-p / rho)
     want_d = fp * (-(v @ d) * p / rho)
     assert np.linalg.norm(np.asarray(g_o) - want_o) < 2e-2 * np.linalg.norm(want_o), (g_o, want_o)
@@ -153,18 +164,18 @@ def _clear_wall_point(det, min_sep):
 
 
 def test_wall_hit_position_and_normal_jacobian():
-    det, prop, _ = _built('WCTE_like')
+    det, prop, _ = _built("WCTE_like")
     r_s = float(det.S_radius)
-    phi, z = _clear_wall_point(det, 1.5 * r_s)       # the radial ray enters no sensor
+    phi, z = _clear_wall_point(det, 1.5 * r_s)  # the radial ray enters no sensor
     u = np.array([np.cos(phi), np.sin(phi), 0.0])
     o0 = jnp.asarray([0.0, 0.0, z], jnp.float32)
     d0 = jnp.asarray(u, jnp.float32)
 
     def pos(o):
-        return prop(o[None], d0[None])['positions'][0]
+        return prop(o[None], d0[None])["positions"][0]
 
     def nrm(o):
-        return prop(o[None], d0[None])['normals'][0]
+        return prop(o[None], d0[None])["normals"][0]
 
     npt.assert_allclose(np.asarray(pos(o0)), [det.r * u[0], det.r * u[1], z], atol=1e-5)
     npt.assert_allclose(np.asarray(nrm(o0)), u, atol=1e-6)
@@ -179,7 +190,7 @@ def test_wall_hit_position_and_normal_jacobian():
 
 
 def test_cap_hit_position_jacobian():
-    det, prop, _ = _built('WCTE_like')
+    det, prop, _ = _built("WCTE_like")
     S = np.asarray(det.all_points, np.float64)
     tree = cKDTree(S)
     for x0 in np.linspace(-0.5, 0.5, 21):
@@ -192,7 +203,7 @@ def test_cap_hit_position_jacobian():
     d0 = jnp.asarray([0.0, 0.0, 1.0], jnp.float32)
 
     def pos(o):
-        return prop(o[None], d0[None])['positions'][0]
+        return prop(o[None], d0[None])["positions"][0]
 
     npt.assert_allclose(np.asarray(pos(o0)), P, atol=1e-5)
     npt.assert_allclose(np.asarray(jax.jacfwd(pos)(o0)), np.diag([1.0, 1.0, 0.0]), atol=1e-5)
@@ -209,27 +220,47 @@ def _charge(det, prop, scatter_length, qe, key=jax.random.PRNGKey(42), n=64):
     dirs = jax.random.normal(k2, (n, 3))
     dirs = dirs / jnp.linalg.norm(dirs, axis=-1, keepdims=True)
     result = prop(origins, dirs)
-    normals = result['normals']
-    surface_distances = jnp.linalg.norm(result['positions'] - origins, axis=1) - 1e-6
-    hit_sensor = jnp.max(result['inside_sensor'], axis=0)
+    normals = result["normals"]
+    surface_distances = jnp.linalg.norm(result["positions"] - origins, axis=1) - 1e-6
+    hit_sensor = jnp.max(result["inside_sensor"], axis=0)
     keys = jax.random.split(key, n)
     refl = ScalarReflection(wall_rate=jnp.asarray(0.5), sensor_rate=jnp.asarray(0.3))
     _, _, _, detect, atten, _, _, _ = jax.vmap(
         make_photon_iteration_update_factors_safe(),
-        in_axes=(0, 0, 0, 0, 0, None, None, None, None, None, 0, None, 0, None)
-    )(origins, dirs, jnp.zeros(n), surface_distances, normals,
-      scatter_length, 1.0e9, 0.0, refl, 100.0, hit_sensor, jnp.asarray(0.0), keys, 0.2253)
-    w = (result['sensor_weights'] * detect[None, :] * atten[None, :]).reshape(-1)
-    q, _ = on_deposits(first_arrival_expected, w, result['sensor_indices'].reshape(-1),
-                       (result['times'] / 0.2253).reshape(-1), len(det.all_points),
-                       qe=qe, qe_corrections=jnp.ones(len(det.all_points)))
+        in_axes=(0, 0, 0, 0, 0, None, None, None, None, None, 0, None, 0, None),
+    )(
+        origins,
+        dirs,
+        jnp.zeros(n),
+        surface_distances,
+        normals,
+        scatter_length,
+        1.0e9,
+        0.0,
+        refl,
+        100.0,
+        hit_sensor,
+        jnp.asarray(0.0),
+        keys,
+        0.2253,
+    )
+    w = (result["sensor_weights"] * detect[None, :] * atten[None, :]).reshape(-1)
+    q, _ = on_deposits(
+        first_arrival_expected,
+        w,
+        result["sensor_indices"].reshape(-1),
+        (result["times"] / 0.2253).reshape(-1),
+        len(det.all_points),
+        qe=qe,
+        qe_corrections=jnp.ones(len(det.all_points)),
+    )
     return jnp.sum(q)
 
 
 def test_grad_charge_wrt_qe_is_charge_over_qe():
-    det, prop, _ = _built('WCTE_like')
+    det, prop, _ = _built("WCTE_like")
     q = float(_charge(det, prop, 50.0, 0.2))
-    assert q > 0.5                                  # several rays deposit
+    assert q > 0.5  # several rays deposit
     g = float(jax.grad(lambda qe: _charge(det, prop, 50.0, qe))(0.2))
     npt.assert_allclose(g, q / 0.2, rtol=1e-6)
 
@@ -238,9 +269,9 @@ def test_grad_charge_wrt_scatter_length_matches_central_difference():
     """Charge is smooth in L (each deposit carries exp(-Dd/L)). Central difference with
     h = 1 m at L = 50 m: truncation ~(h/L)^2 ~ 4e-4, float32 roundoff ~1e-4 of the difference;
     rtol 3e-3."""
-    det, prop, _ = _built('WCTE_like')
+    det, prop, _ = _built("WCTE_like")
     f = lambda L: _charge(det, prop, L, 0.2)
     g = float(jax.grad(f)(50.0))
     fd = (float(f(51.0)) - float(f(49.0))) / 2.0
-    assert g > 0                                    # longer L, more charge
+    assert g > 0  # longer L, more charge
     npt.assert_allclose(g, fd, rtol=3e-3)

@@ -10,16 +10,17 @@
 Whether a float32 solve is accurate enough at the published conditioning is tested separately in
 `tests/fitting/test_float32_is_adequate.py`.
 """
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
 
 from lucid.fitting.transforms import (
+    damped_gauss_newton,
     damped_matrix,
     scale_by_damped_gauss_newton,
-    damped_gauss_newton,
 )
 
 LAM, MU = 0.01, 0.1
@@ -40,9 +41,10 @@ def test_the_marquardt_diagonal_is_clipped():
     """
     H = np.diag(np.array([-1.0, 2.0, 4.0], dtype=np.float32))
     A = np.asarray(damped_matrix(jnp.asarray(H), lam=LAM, mu=MU))
-    base = 3.0                                   # median of the two entries carrying curvature
-    assert A[0, 0] == pytest.approx(-1.0 + MU * base, rel=1e-5), \
-        'the negative entry received Marquardt damping instead of being clipped out of it'
+    base = 3.0  # median of the two entries carrying curvature
+    assert A[0, 0] == pytest.approx(-1.0 + MU * base, rel=1e-5), (
+        "the negative entry received Marquardt damping instead of being clipped out of it"
+    )
     assert A[1, 1] == pytest.approx(2.0 + LAM * 2.0 + MU * base, rel=1e-5)
 
 
@@ -55,7 +57,7 @@ def test_the_levenberg_median_is_filtered_not_floored():
     """
     flat = np.diag(np.array([0.0, 2.0, 4.0], dtype=np.float32))
     A = np.asarray(damped_matrix(jnp.asarray(flat), lam=LAM, mu=MU))
-    assert A[0, 0] == pytest.approx(MU * 3.0, rel=1e-5), 'base must be the median of 2 and 4'
+    assert A[0, 0] == pytest.approx(MU * 3.0, rel=1e-5), "base must be the median of 2 and 4"
 
 
 def test_nothing_carrying_curvature_yields_NaN_rather_than_a_fabricated_base():
@@ -66,10 +68,10 @@ def test_nothing_carrying_curvature_yields_NaN_rather_than_a_fabricated_base():
     """
     Z = np.zeros((3, 3), dtype=np.float32)
     A = np.asarray(damped_matrix(jnp.asarray(Z), lam=LAM, mu=MU))
-    assert np.isnan(A).all(), 'an all-flat diagonal must not produce a usable-looking matrix'
+    assert np.isnan(A).all(), "an all-flat diagonal must not produce a usable-looking matrix"
 
 
-@pytest.mark.parametrize('cond', [1e2, 1e3, 6.8e3, 1e5])
+@pytest.mark.parametrize("cond", [1e2, 1e3, 6.8e3, 1e5])
 def test_the_damped_matrix_is_nonsingular_by_construction(cond):
     """The property the Levenberg term exists for, asserted rather than argued.
 
@@ -80,15 +82,16 @@ def test_the_damped_matrix_is_nonsingular_by_construction(cond):
     A = np.asarray(damped_matrix(jnp.asarray(H), lam=LAM, mu=MU))
     dg = np.clip(np.diag(H), 0, None)
     base = float(np.median(dg[dg > 1e-12 * dg.max()]))
-    assert np.linalg.eigvalsh(A).min() >= MU * base * 0.99, \
-        'the isotropic shift did not lower-bound the spectrum'
+    assert np.linalg.eigvalsh(A).min() >= MU * base * 0.99, (
+        "the isotropic shift did not lower-bound the spectrum"
+    )
 
 
 def test_the_metric_is_required_and_says_so():
     """A silent identity metric would turn Gauss-Newton into scaled gradient descent."""
     tx = scale_by_damped_gauss_newton(LAM, MU)
     g = jnp.ones(4)
-    with pytest.raises(ValueError, match='needs the metric'):
+    with pytest.raises(ValueError, match="needs the metric"):
         tx.update(g, tx.init(g), None)
 
 
@@ -104,30 +107,32 @@ def test_it_is_stateless():
 
 # --------------------------------------------------------------- composition
 
+
 def test_it_chains_with_other_transformations():
     """extra_args must survive optax.chain, or the metric cannot reach a composed optimiser."""
     H = spd(9, 1e3, seed=3)
     g = np.random.default_rng(4).standard_normal(9).astype(np.float32)
     plain = damped_gauss_newton(LAM, MU)
-    clipped = optax.chain(optax.clip(0.01), scale_by_damped_gauss_newton(LAM, MU),
-                          optax.scale_by_learning_rate(1.0))
+    clipped = optax.chain(
+        optax.clip(0.01), scale_by_damped_gauss_newton(LAM, MU), optax.scale_by_learning_rate(1.0)
+    )
     a, _ = plain.update(jnp.asarray(g), plain.init(jnp.asarray(g)), None, metric=jnp.asarray(H))
-    b, _ = clipped.update(jnp.asarray(g), clipped.init(jnp.asarray(g)), None,
-                          metric=jnp.asarray(H))
-    assert not np.allclose(np.asarray(a), np.asarray(b)), 'the clip did nothing — chain is inert'
+    b, _ = clipped.update(jnp.asarray(g), clipped.init(jnp.asarray(g)), None, metric=jnp.asarray(H))
+    assert not np.allclose(np.asarray(a), np.asarray(b)), "the clip did nothing — chain is inert"
 
 
 def test_the_damping_itself_can_be_scheduled():
     """`lam` can be driven by an optax schedule; annealing it toward 0 must grow the step."""
     H, g = spd(6, 1e3, seed=5), jnp.ones(6)
     tx = optax.inject_hyperparams(damped_gauss_newton)(
-        lam=optax.linear_schedule(1.0, 0.0, 4), mu=MU)
+        lam=optax.linear_schedule(1.0, 0.0, 4), mu=MU
+    )
     st = tx.init(g)
     norms = []
     for _ in range(4):
         d, st = tx.update(g, st, None, metric=jnp.asarray(H))
         norms.append(float(jnp.linalg.norm(d)))
-    assert norms[-1] > norms[0], f'annealing lam 1.0 -> 0 must grow the step; got {norms}'
+    assert norms[-1] > norms[0], f"annealing lam 1.0 -> 0 must grow the step; got {norms}"
 
 
 def test_gradient_accumulation_works_and_numpy_could_not_do_it():
@@ -144,8 +149,8 @@ def test_gradient_accumulation_works_and_numpy_could_not_do_it():
     for _ in range(every):
         d, st = ms.update(g, st, None, metric=jnp.asarray(H))
         seen.append(float(jnp.linalg.norm(d)))
-    assert seen[-1] > 0.0, 'the accumulated step never fired'
-    assert all(s == 0.0 for s in seen[:-1]), f'MultiSteps should hold until step k; got {seen}'
+    assert seen[-1] > 0.0, "the accumulated step never fired"
+    assert all(s == 0.0 for s in seen[:-1]), f"MultiSteps should hold until step k; got {seen}"
 
 
 def test_it_jits():

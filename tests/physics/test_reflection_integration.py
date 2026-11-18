@@ -4,37 +4,53 @@ Confirms reflection_model='angular' (Schlick blacksheet wall + multilayer-Fresne
 cathode sensor) runs a full calibration forward and is differentiable wrt the
 angular reflection DetectorParams leaves.
 """
+
 import os
 
 import jax
 import jax.numpy as jnp
 import pytest
+
 from tests.helpers.paths import REPO
 
 pytestmark = pytest.mark.slow
 
-GEOM = os.path.join(REPO, 'config', 'SK_like_geom_config.json')
+GEOM = os.path.join(REPO, "config", "SK_like_geom_config.json")
 GRID_KW = dict(n_cap=150, n_angular=250, n_height=150)
 
 
 @pytest.fixture(scope="module")
 def angular_setup():
+    from lucid.detector_params import DetectorParams
     from lucid.geometry import generate_detector
     from lucid.simulation import setup_event_simulator
-    from lucid.detector_params import DetectorParams
+
     det = generate_detector(GEOM)
     n = len(det.all_points)
     dp = DetectorParams.from_flat(
-        scatter_length=50.0, wall_reflection_rate=0.2, sensor_reflection_rate=0.2,
-        absorption_length=50.0, qe=0.065, qe_corrections=jnp.ones(n))
+        scatter_length=50.0,
+        wall_reflection_rate=0.2,
+        sensor_reflection_rate=0.2,
+        absorption_length=50.0,
+        qe=0.065,
+        qe_corrections=jnp.ones(n),
+    )
     sim = setup_event_simulator(
-        GEOM, 50_000, source='light_source', temperature=None, K=6,
-        reflection_model='angular', reflection_wavelength=405.0, **GRID_KW)
+        GEOM,
+        50_000,
+        source="light_source",
+        temperature=None,
+        K=6,
+        reflection_model="angular",
+        reflection_wavelength=405.0,
+        **GRID_KW,
+    )
     return det, dp, sim
 
 
 def test_angular_forward_nonzero_finite(angular_setup):
     from lucid.sources import isotropic_source
+
     det, dp, sim = angular_setup
     source = isotropic_source(position=[0.0, 0.0, 0.0], intensity=50_000_000)
     charges, _ = sim(source, dp, jax.random.PRNGKey(1))
@@ -44,8 +60,9 @@ def test_angular_forward_nonzero_finite(angular_setup):
 
 
 def test_angular_gradient_wrt_reflection_params(angular_setup):
-    from lucid.sources import isotropic_source
     from lucid.losses import WC_smooth_loss
+    from lucid.sources import isotropic_source
+
     det, dp, sim = angular_setup
     source = isotropic_source(position=[0.0, 0.0, 0.0], intensity=50_000_000)
     sp = jnp.array(det.all_points)

@@ -7,6 +7,7 @@ sits displaced from truth by the residual Monte-Carlo noise. The surface stage
 (``compute_2d_neyman.py``) and the trajectory stage (``traj_2d_neyman.py``) both build from here,
 so every iterate lies on the plotted surface.
 """
+
 import jax
 import jax.numpy as jnp
 
@@ -31,22 +32,29 @@ class Surface:
 
     def __init__(self, recipe):
         truth = C.effective_truth(C.REP_WL)
-        sim = C._cal_sim(recipe['n_ph'], recipe['k'], recipe['grid'])
-        src = C._laser_sources(recipe['intensity'])[0]
-        self.tx, self.ty = float(truth['scatter_length']), float(truth['absorption_length'])
+        sim = C._cal_sim(recipe["n_ph"], recipe["k"], recipe["grid"])
+        src = C._laser_sources(recipe["intensity"])[0]
+        self.tx, self.ty = float(truth["scatter_length"]), float(truth["absorption_length"])
 
         def build_dp(v):
             return DetectorParams.from_flat(
-                scatter_length=v[0], mie_scatter_length=1e6, g=0.9,
-                wall_reflection_rate=C.WALL_R_MIX, sensor_reflection_rate=C.SENSOR_R_MIX,
-                wall_fspec=C.WALL_FSPEC, sensor_fspec=C.SENSOR_FSPEC,
-                absorption_length=v[1], qe=truth['qe'], qe_corrections=jnp.ones(C.NS))
+                scatter_length=v[0],
+                mie_scatter_length=1e6,
+                g=0.9,
+                wall_reflection_rate=C.WALL_R_MIX,
+                sensor_reflection_rate=C.SENSOR_R_MIX,
+                wall_fspec=C.WALL_FSPEC,
+                sensor_fspec=C.SENSOR_FSPEC,
+                absorption_length=v[1],
+                qe=truth["qe"],
+                qe_corrections=jnp.ones(C.NS),
+            )
 
-        tkeys = jax.random.split(jax.random.PRNGKey(3), recipe['nk_truth'])
-        skeys = jax.random.split(jax.random.PRNGKey(101), recipe['nk_sim'])
+        tkeys = jax.random.split(jax.random.PRNGKey(3), recipe["nk_truth"])
+        skeys = jax.random.split(jax.random.PRNGKey(101), recipe["nk_sim"])
 
         @jax.jit
-        def mean_over(v, keys):        # accumulate, do not stack: peak memory does not scale with NK
+        def mean_over(v, keys):  # accumulate, do not stack: peak memory does not scale with NK
             acc = sim(src, build_dp(v), keys[0])[0]
             for k in keys[1:]:
                 acc = acc + sim(src, build_dp(v), k)[0]
@@ -57,7 +65,7 @@ class Surface:
             return mean_over(v, skeys)
 
         Q = jax.lax.stop_gradient(mean_over(jnp.array([self.tx, self.ty]), tkeys))
-        Winv = 1.0 / jnp.maximum(Q, 1e-9)                            # Neyman weight 1/Q
+        Winv = 1.0 / jnp.maximum(Q, 1e-9)  # Neyman weight 1/Q
 
         @jax.jit
         def L(v):
@@ -66,4 +74,4 @@ class Surface:
         jac = jax.jacfwd(M)
         self.loss_and_grad = jax.jit(jax.value_and_grad(L))
         # The Gauss-Newton / Fisher matrix at v.
-        self.fisher = jax.jit(lambda v: 2.0 * jnp.einsum('np,nq,n->pq', jac(v), jac(v), Winv))
+        self.fisher = jax.jit(lambda v: 2.0 * jnp.einsum("np,nq,n->pq", jac(v), jac(v), Winv))

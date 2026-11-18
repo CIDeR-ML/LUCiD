@@ -29,7 +29,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional
 
-
 # --- Apptainer bind defaults --------------------------------------------------
 
 # Sites that aren't auto-bound by apptainer's container build. We list them so
@@ -55,12 +54,13 @@ def _dev_binds(env: Dict[str, str]) -> str:
 
 # --- Base adapter ------------------------------------------------------------
 
+
 class ClusterAdapter(ABC):
     """One per cluster. Implements `render_*` for each job kind."""
 
     name: str
-    submit_extension: str       # e.g. "sbatch", "sub"
-    submit_cmd: str             # e.g. "sbatch", "condor_submit"
+    submit_extension: str  # e.g. "sbatch", "sub"
+    submit_cmd: str  # e.g. "sbatch", "condor_submit"
 
     def __init__(self, env: Dict[str, str]) -> None:
         self.env = env
@@ -73,30 +73,65 @@ class ClusterAdapter(ABC):
     # --- per-kind render methods ---
 
     @abstractmethod
-    def render_siren_cell(self, *, cell_dir: Path, cell_cfg: Path,
-                          energy_mev: int, job_name: str, job_id: int,
-                          partition: str, use_gpu: bool,
-                          array_spec: Optional[str] = None) -> str: ...
+    def render_siren_cell(
+        self,
+        *,
+        cell_dir: Path,
+        cell_cfg: Path,
+        energy_mev: int,
+        job_name: str,
+        job_id: int,
+        partition: str,
+        use_gpu: bool,
+        array_spec: Optional[str] = None,
+    ) -> str: ...
 
     @abstractmethod
-    def render_smax_cell(self, *, cell_dir: Path, cell_cfg: Path,
-                         energy_mev: int, job_name: str, job_id: int,
-                         partition: str, use_gpu: bool) -> str: ...
+    def render_smax_cell(
+        self,
+        *,
+        cell_dir: Path,
+        cell_cfg: Path,
+        energy_mev: int,
+        job_name: str,
+        job_id: int,
+        partition: str,
+        use_gpu: bool,
+    ) -> str: ...
 
     @abstractmethod
-    def render_dataprod_job(self, *, cell_dir: Path, config_path: Path,
-                            detector: str, job_id: str, job_name: str,
-                            partition: str, use_gpu: bool, test: bool,
-                            skip_lucid: bool, n_events: Optional[int],
-                            override_energy_mev: Optional[float],
-                            sn_model: Optional[str] = None,
-                            sn_ordering: Optional[str] = None) -> str: ...
+    def render_dataprod_job(
+        self,
+        *,
+        cell_dir: Path,
+        config_path: Path,
+        detector: str,
+        job_id: str,
+        job_name: str,
+        partition: str,
+        use_gpu: bool,
+        test: bool,
+        skip_lucid: bool,
+        n_events: Optional[int],
+        override_energy_mev: Optional[float],
+        sn_model: Optional[str] = None,
+        sn_ordering: Optional[str] = None,
+    ) -> str: ...
 
     @abstractmethod
-    def render_command_job(self, *, command: str, cell_dir: Path, job_name: str,
-                           log_stem: str, partition: str, use_gpu: bool = False,
-                           request_disk_mb: int = 4096,
-                           request_memory_mb: int = 0, gpus: str | None = None) -> str:
+    def render_command_job(
+        self,
+        *,
+        command: str,
+        cell_dir: Path,
+        job_name: str,
+        log_stem: str,
+        partition: str,
+        use_gpu: bool = False,
+        request_disk_mb: int = 4096,
+        request_memory_mb: int = 0,
+        gpus: str | None = None,
+    ) -> str:
         """Submit description for an arbitrary command run inside the container.
 
         The stage-specific renderers above each bake in one entry point. Some
@@ -112,8 +147,9 @@ class ClusterAdapter(ABC):
         """
         raise NotImplementedError
 
-    def render_train_run(self, *, run_dir: Path, run_name: str,
-                         cli_args: str, resources: Dict[str, str]) -> str:
+    def render_train_run(
+        self, *, run_dir: Path, run_name: str, cli_args: str, resources: Dict[str, str]
+    ) -> str:
         """Submit description for one ``lucid-train-siren`` run (a GPU job).
 
         ``resources`` is the train_siren generator's: ``partition`` and ``account`` (Slurm, from
@@ -125,6 +161,7 @@ class ClusterAdapter(ABC):
 
 
 # --- SLURM -------------------------------------------------------------------
+
 
 class SlurmAdapter(ClusterAdapter):
     name = "slurm"
@@ -148,10 +185,19 @@ class SlurmAdapter(ClusterAdapter):
         dev_part = f" {dev}" if dev else ""
         return f"apptainer exec --nv -B {binds}{dev_part}"
 
-    def _common_header(self, *, partition: str, job_name: str,
-                       cell_dir: Path, log_stem: str,
-                       cpus: str, gpus: str, memory: str, time: str,
-                       array_spec: Optional[str] = None) -> str:
+    def _common_header(
+        self,
+        *,
+        partition: str,
+        job_name: str,
+        cell_dir: Path,
+        log_stem: str,
+        cpus: str,
+        gpus: str,
+        memory: str,
+        time: str,
+        array_spec: Optional[str] = None,
+    ) -> str:
         # `log_stem` is the prefix passed to `#SBATCH --output=...-%j.out`.
         # siren / smax use `job-NNN`; dataprod uses `job_NNNNNN` (verify_jobs.py
         # SBATCH_RE depends on this distinction). When `array_spec` is set the
@@ -179,14 +225,23 @@ class SlurmAdapter(ClusterAdapter):
             f"#SBATCH --time={time}\n"
             f"\n"
             f"set -eu -o pipefail\n"
-            f"echo \"SLURM Job ID: ${{SLURM_JOB_ID}}\"\n"
-            f"echo \"Job started:  $(date)\"\n"
-            f"echo \"Node:         $(hostname)\"\n"
+            f'echo "SLURM Job ID: ${{SLURM_JOB_ID}}"\n'
+            f'echo "Job started:  $(date)"\n'
+            f'echo "Node:         $(hostname)"\n'
         )
 
-    def _siren_or_smax(self, *, cell_dir: Path, cell_cfg: Path, energy_mev: int,
-                       job_name: str, job_id: int, partition: str,
-                       use_gpu: bool, array_spec: Optional[str] = None) -> str:
+    def _siren_or_smax(
+        self,
+        *,
+        cell_dir: Path,
+        cell_cfg: Path,
+        energy_mev: int,
+        job_name: str,
+        job_id: int,
+        partition: str,
+        use_gpu: bool,
+        array_spec: Optional[str] = None,
+    ) -> str:
         # Uses 3-digit `job-{job_id:03d}` log naming, matching the cell-based
         # workflows (siren_inputs and smax). In array mode one submission covers
         # the whole cell: the per-task `--job-id` comes from SLURM_ARRAY_TASK_ID
@@ -197,9 +252,14 @@ class SlurmAdapter(ClusterAdapter):
         gpus = "1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")
         log_stem = "job" if array_spec else f"job-{job_id:03d}"
         header = self._common_header(
-            partition=partition, job_name=job_name, cell_dir=cell_dir,
+            partition=partition,
+            job_name=job_name,
+            cell_dir=cell_dir,
             log_stem=log_stem,
-            cpus=cpus, gpus=gpus, memory=memory, time=time,
+            cpus=cpus,
+            gpus=gpus,
+            memory=memory,
+            time=time,
             array_spec=array_spec,
         )
         job_id_expr = "${SLURM_ARRAY_TASK_ID}" if array_spec else str(job_id)
@@ -208,36 +268,70 @@ class SlurmAdapter(ClusterAdapter):
             f"{self._container_exec(use_gpu=use_gpu)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    lucid-run-job \\\n"
-            f"        --config \"{cell_cfg}\" \\\n"
-            f"        --output-dir \"{cell_dir}\" \\\n"
+            f'        --config "{cell_cfg}" \\\n'
+            f'        --output-dir "{cell_dir}" \\\n'
             f"        --job-id {job_id_expr} \\\n"
             f"        --skip-lucid \\\n"
             f"        --override-energy-MeV {energy_mev}\n"
-            f"\necho \"Job ended: $(date)\"\n"
+            f'\necho "Job ended: $(date)"\n'
         )
         return header + body
 
-    def render_siren_cell(self, *, cell_dir, cell_cfg, energy_mev, job_name,
-                          job_id, partition, use_gpu, array_spec=None):
+    def render_siren_cell(
+        self,
+        *,
+        cell_dir,
+        cell_cfg,
+        energy_mev,
+        job_name,
+        job_id,
+        partition,
+        use_gpu,
+        array_spec=None,
+    ):
         return self._siren_or_smax(
-            cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
-            job_name=job_name, job_id=job_id, partition=partition,
-            use_gpu=use_gpu, array_spec=array_spec,
+            cell_dir=cell_dir,
+            cell_cfg=cell_cfg,
+            energy_mev=energy_mev,
+            job_name=job_name,
+            job_id=job_id,
+            partition=partition,
+            use_gpu=use_gpu,
+            array_spec=array_spec,
         )
 
-    def render_smax_cell(self, *, cell_dir, cell_cfg, energy_mev, job_name,
-                         job_id, partition, use_gpu):
+    def render_smax_cell(
+        self, *, cell_dir, cell_cfg, energy_mev, job_name, job_id, partition, use_gpu
+    ):
         return self._siren_or_smax(
-            cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
-            job_name=job_name, job_id=job_id, partition=partition,
+            cell_dir=cell_dir,
+            cell_cfg=cell_cfg,
+            energy_mev=energy_mev,
+            job_name=job_name,
+            job_id=job_id,
+            partition=partition,
             use_gpu=use_gpu,
         )
 
-    def render_dataprod_job(self, *, cell_dir, config_path, detector, job_id,
-                            job_name, partition, use_gpu, test, skip_lucid,
-                            n_events, override_energy_mev,
-                            sn_model=None, sn_ordering=None, master_seed=None,
-                            lucid_seed=None):
+    def render_dataprod_job(
+        self,
+        *,
+        cell_dir,
+        config_path,
+        detector,
+        job_id,
+        job_name,
+        partition,
+        use_gpu,
+        test,
+        skip_lucid,
+        n_events,
+        override_energy_mev,
+        sn_model=None,
+        sn_ordering=None,
+        master_seed=None,
+        lucid_seed=None,
+    ):
         # Uses 6-digit `job_{job_id}` log naming, matching the dataprod
         # convention (verify_jobs.py SBATCH_RE matches this).
         cpus = self.env.get("DEFAULT_CPUS", "1")
@@ -245,9 +339,14 @@ class SlurmAdapter(ClusterAdapter):
         time = self.env.get("DEFAULT_TIME", "08:00:00")
         gpus = "1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")
         header = self._common_header(
-            partition=partition, job_name=job_name, cell_dir=cell_dir,
-            log_stem=f"job_{job_id}",   # job_id is a zero-padded string for dataprod
-            cpus=cpus, gpus=gpus, memory=memory, time=time,
+            partition=partition,
+            job_name=job_name,
+            cell_dir=cell_dir,
+            log_stem=f"job_{job_id}",  # job_id is a zero-padded string for dataprod
+            cpus=cpus,
+            gpus=gpus,
+            memory=memory,
+            time=time,
         )
         flags = []
         if test:
@@ -271,8 +370,7 @@ class SlurmAdapter(ClusterAdapter):
         # bound into the container Python — mirrors LUCID_ENV_BASE for training.
         sn_env_line = ""
         if sn_model is not None and self.env.get("SN_ENV_BASE"):
-            sn_env_line = (
-                f"export APPTAINERENV_PYTHONUSERBASE=\"{self.env['SN_ENV_BASE']}\"\n")
+            sn_env_line = f'export APPTAINERENV_PYTHONUSERBASE="{self.env["SN_ENV_BASE"]}"\n'
         body = (
             f"\n# Unified container: GEANT4 + ROOT + GENIE + PhotonSim + LUCiD.\n"
             f"export APPTAINERENV_GENIE_XSEC_FILE={self.env.get('GENIE_XSEC_FILE', '')}\n"
@@ -280,31 +378,46 @@ class SlurmAdapter(ClusterAdapter):
             f"{self._container_exec(use_gpu=use_gpu)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    lucid-run-job \\\n"
-            f"        --config \"{config_path}\" \\\n"
-            f"        --output-dir \"{cell_dir}\" \\\n"
+            f'        --config "{config_path}" \\\n'
+            f'        --output-dir "{cell_dir}" \\\n'
             f"        --detector {detector} \\\n"
             f"        --job-id {job_id} {flag_str}\n"
-            f"\necho \"Job ended: $(date)\"\n"
+            f'\necho "Job ended: $(date)"\n'
         )
         return header + body
 
-    def render_command_job(self, *, command, cell_dir, job_name, log_stem,
-                           partition, use_gpu=False, request_disk_mb=4096,
-                           request_memory_mb=0, gpus=None):
+    def render_command_job(
+        self,
+        *,
+        command,
+        cell_dir,
+        job_name,
+        log_stem,
+        partition,
+        use_gpu=False,
+        request_disk_mb=4096,
+        request_memory_mb=0,
+        gpus=None,
+    ):
         header = self._common_header(
-            partition=partition, job_name=job_name, cell_dir=cell_dir,
+            partition=partition,
+            job_name=job_name,
+            cell_dir=cell_dir,
             log_stem=log_stem,
             cpus=self.env.get("DEFAULT_CPUS", "1"),
             gpus=gpus or ("1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")),
-            memory=(str(request_memory_mb) if request_memory_mb
-                    else self.env.get("DEFAULT_MEMORY", "16000")),
+            memory=(
+                str(request_memory_mb)
+                if request_memory_mb
+                else self.env.get("DEFAULT_MEMORY", "16000")
+            ),
             time=self.env.get("DEFAULT_TIME", "08:00:00"),
         )
         return header + (
             f"\n{self._container_exec(use_gpu=use_gpu)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    bash -c '{command}'\n"
-            f"\necho \"Job ended: $(date)\"\n"
+            f'\necho "Job ended: $(date)"\n'
         )
 
     def render_train_run(self, *, run_dir, run_name, cli_args, resources):
@@ -328,22 +441,22 @@ class SlurmAdapter(ClusterAdapter):
             f"#SBATCH --time={time}\n"
             f"\n"
             f"set -eu -o pipefail\n"
-            f"echo \"SLURM Job ID: ${{SLURM_JOB_ID}}\"\n"
-            f"echo \"Job started:  $(date)\"\n"
-            f"echo \"Node:         $(hostname)\"\n"
+            f'echo "SLURM Job ID: ${{SLURM_JOB_ID}}"\n'
+            f'echo "Job started:  $(date)"\n'
+            f'echo "Node:         $(hostname)"\n'
             f"\n"
             f"# The user site holds the CUDA jax plugin (the image's jaxlib is CPU-only).\n"
             f"# PYTHONPATH puts /opt/LUCiD (the image's LUCiD, or LUCID_DEV_PATH bound\n"
             f"# there) ahead of it, so a LUCiD installed in that user site is never the\n"
             f"# one that runs.\n"
-            f"export APPTAINERENV_PYTHONUSERBASE=\"{self.env['LUCID_ENV_BASE']}\"\n"
-            f"export APPTAINERENV_PYTHONPATH=\"/opt/LUCiD\"\n"
+            f'export APPTAINERENV_PYTHONUSERBASE="{self.env["LUCID_ENV_BASE"]}"\n'
+            f'export APPTAINERENV_PYTHONPATH="/opt/LUCiD"\n'
             f"\n"
             f"{self._container_exec(use_gpu=True)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    python3 -m lucid.siren.training.train {cli_args}\n"
             f"\n"
-            f"echo \"Job ended: $(date)\"\n"
+            f'echo "Job ended: $(date)"\n'
         )
         return out
 
@@ -368,9 +481,7 @@ class SlurmAdapter(ClusterAdapter):
 # cvmfs OSG apptainer — the only container runtime that runs the .sif on
 # Perlmutter (no system apptainer/singularity; shifter/podman-hpc use a
 # different exec surface). Overridable via APPTAINER_BIN in user_paths.sh.
-DEFAULT_APPTAINER_BIN = (
-    "/cvmfs/oasis.opensciencegrid.org/mis/apptainer/current/bin/apptainer"
-)
+DEFAULT_APPTAINER_BIN = "/cvmfs/oasis.opensciencegrid.org/mis/apptainer/current/bin/apptainer"
 
 # Global filesystems a Perlmutter batch node needs visible inside the
 # container: CFS (image + outputs), home (configs / dev checkouts), scratch,
@@ -392,10 +503,19 @@ class NerscAdapter(SlurmAdapter):
         nv = " --nv" if use_gpu else ""
         return f"{apptainer} exec{nv} -B {self.apptainer_binds}{dev_part}"
 
-    def _common_header(self, *, partition: str, job_name: str,
-                       cell_dir: Path, log_stem: str,
-                       cpus: str, gpus: str, memory: str, time: str,
-                       array_spec: str | None = None) -> str:
+    def _common_header(
+        self,
+        *,
+        partition: str,
+        job_name: str,
+        cell_dir: Path,
+        log_stem: str,
+        cpus: str,
+        gpus: str,
+        memory: str,
+        time: str,
+        array_spec: str | None = None,
+    ) -> str:
         # `partition` is ignored on Perlmutter (no --partition); cpu/gpu is
         # selected by --constraint, and the SlurmAdapter render methods encode
         # GPU-ness in `gpus` ("0" => CPU job). `array_spec`, when set, makes this
@@ -404,8 +524,7 @@ class NerscAdapter(SlurmAdapter):
         constraint = "gpu" if is_gpu else "cpu"
         qos = self.env.get("SLURM_QOS", "shared")
         if is_gpu:
-            account = (self.env.get("SLURM_ACCOUNT_GPU")
-                       or f"{self.env.get('SLURM_ACCOUNT', '')}_g")
+            account = self.env.get("SLURM_ACCOUNT_GPU") or f"{self.env.get('SLURM_ACCOUNT', '')}_g"
         else:
             account = self.env.get("SLURM_ACCOUNT", "")
         gpu_line = f"#SBATCH --gpus={gpus}\n" if is_gpu else ""
@@ -428,13 +547,21 @@ class NerscAdapter(SlurmAdapter):
             f"#SBATCH --time={time}\n"
             f"\n"
             f"set -eu -o pipefail\n"
-            f"echo \"SLURM Job ID: ${{SLURM_JOB_ID}}\"\n"
-            f"echo \"Job started:  $(date)\"\n"
-            f"echo \"Node:         $(hostname)\"\n"
+            f'echo "SLURM Job ID: ${{SLURM_JOB_ID}}"\n'
+            f'echo "Job started:  $(date)"\n'
+            f'echo "Node:         $(hostname)"\n'
         )
 
-    def render_siren_pack(self, *, job_name: str, log_dir: Path, manifest: Path,
-                          run_script: Path, n_workers: int, wall: str) -> str:
+    def render_siren_pack(
+        self,
+        *,
+        job_name: str,
+        log_dir: Path,
+        manifest: Path,
+        run_script: Path,
+        n_workers: int,
+        wall: str,
+    ) -> str:
         """Whole-node packed SIREN job: one `regular` node runs many work units
         in parallel via the container's xargs worker pool (see run_script).
 
@@ -458,16 +585,16 @@ class NerscAdapter(SlurmAdapter):
             f"#SBATCH --time={wall}\n"
             f"\n"
             f"set -eu -o pipefail\n"
-            f"echo \"SLURM Job ID: ${{SLURM_JOB_ID}}\"\n"
-            f"echo \"Job started:  $(date)\"\n"
-            f"echo \"Node:         $(hostname)\"\n"
-            f"echo \"Workers:      {n_workers}\"\n"
+            f'echo "SLURM Job ID: ${{SLURM_JOB_ID}}"\n'
+            f'echo "Job started:  $(date)"\n'
+            f'echo "Node:         $(hostname)"\n'
+            f'echo "Workers:      {n_workers}"\n'
             f"\n"
             f"export APPTAINERENV_GENIE_XSEC_FILE={genie}\n"
             f"{self._container_exec(use_gpu=False)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    bash {run_script} {manifest} {n_workers}\n"
-            f"\necho \"Job ended: $(date)\"\n"
+            f'\necho "Job ended: $(date)"\n'
         )
 
     def render_train_run(self, *, run_dir, run_name, cli_args, resources):
@@ -476,7 +603,8 @@ class NerscAdapter(SlurmAdapter):
         raise NotImplementedError(
             "train_siren is not yet wired for NERSC/Perlmutter: its GPU job needs "
             "--constraint=gpu and the SLURM_ACCOUNT_GPU account "
-            "(docs/guides/production/clusters.md, NERSC).")
+            "(docs/guides/production/clusters.md, NERSC)."
+        )
 
 
 # --- HTCondor (LXPLUS) --------------------------------------------------------
@@ -515,6 +643,7 @@ class NerscAdapter(SlurmAdapter):
 #
 # Each sub-job is its own `.sub`, mirroring the SLURM one-file-per-sub-job
 # model so `resubmit_failed` logic transposes 1:1.
+
 
 class HTCondorAdapter(ClusterAdapter):
     name = "htcondor"
@@ -580,14 +709,9 @@ class HTCondorAdapter(ClusterAdapter):
         """
         parts: List[str] = []
         if self.env.get("LUCID_DEV_PATH"):
-            parts.append(
-                f"PYTHONPATH={self.env['LUCID_DEV_PATH']}"
-                "${PYTHONPATH:+:$PYTHONPATH}"
-            )
+            parts.append(f"PYTHONPATH={self.env['LUCID_DEV_PATH']}${{PYTHONPATH:+:$PYTHONPATH}}")
         if self.env.get("PHOTONSIM_DEV_PATH"):
-            parts.append(
-                f"PHOTONSIM_BIN={self.env['PHOTONSIM_DEV_PATH']}/build/PhotonSim"
-            )
+            parts.append(f"PHOTONSIM_BIN={self.env['PHOTONSIM_DEV_PATH']}/build/PhotonSim")
         return (" ".join(parts) + " ") if parts else ""
 
     def _log_dir(self, cell_dir: Path) -> Path:
@@ -610,10 +734,19 @@ class HTCondorAdapter(ClusterAdapter):
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
 
-    def _cell_submit(self, *, cell_dir: Path, cell_cfg: Path, energy_mev: int,
-                      job_name: str, job_id: int, partition: str,
-                      use_gpu: bool, extra_run_flags: List[str],
-                      log_stem: str) -> str:
+    def _cell_submit(
+        self,
+        *,
+        cell_dir: Path,
+        cell_cfg: Path,
+        energy_mev: int,
+        job_name: str,
+        job_id: int,
+        partition: str,
+        use_gpu: bool,
+        extra_run_flags: List[str],
+        log_stem: str,
+    ) -> str:
         """Shared body for siren/smax cell sub-jobs."""
         cpus = self.env.get("DEFAULT_CPUS", "1")
         memory_mb = self.env.get("DEFAULT_MEMORY", "4000")
@@ -636,32 +769,46 @@ class HTCondorAdapter(ClusterAdapter):
             f"universe                = vanilla\n"
             f"executable              = /bin/bash\n"
             f"arguments               = \"-c '{bash_cmd}'\"\n"
-            f"environment             = \"{self._env_block()}\"\n"
+            f'environment             = "{self._env_block()}"\n'
             f"output                  = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).out\n"
             f"error                   = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).err\n"
             f"log                     = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).log\n"
-            f"MY.SingularityImage     = \"{self.env['LUCID_IMAGE_PATH']}\"\n"
-            f"MY.SingularityBind      = \"{self._binds_for_classad()}\"\n"
-            f"+JobBatchName           = \"{job_name}\"\n"
+            f'MY.SingularityImage     = "{self.env["LUCID_IMAGE_PATH"]}"\n'
+            f'MY.SingularityBind      = "{self._binds_for_classad()}"\n'
+            f'+JobBatchName           = "{job_name}"\n'
             f"request_cpus            = {cpus}\n"
             f"request_memory          = {memory_mb}\n"
             f"request_disk            = 4096\n"
             f"{self._gpu_lines(gpus)}"
-            f"+JobFlavour             = \"{flavour}\"\n"
+            f'+JobFlavour             = "{flavour}"\n'
             f"should_transfer_files   = NO\n"
             f"queue\n"
         )
 
-    def render_siren_cell(self, *, cell_dir, cell_cfg, energy_mev, job_name,
-                          job_id, partition, use_gpu, array_spec=None):
+    def render_siren_cell(
+        self,
+        *,
+        cell_dir,
+        cell_cfg,
+        energy_mev,
+        job_name,
+        job_id,
+        partition,
+        use_gpu,
+        array_spec=None,
+    ):
         if array_spec is not None:
             raise NotImplementedError(
                 "SLURM job-array mode (--array) has no HTCondor equivalent here; "
                 "submit per-job on HTCondor (omit --array)."
             )
         return self._cell_submit(
-            cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
-            job_name=job_name, job_id=job_id, partition=partition,
+            cell_dir=cell_dir,
+            cell_cfg=cell_cfg,
+            energy_mev=energy_mev,
+            job_name=job_name,
+            job_id=job_id,
+            partition=partition,
             use_gpu=use_gpu,
             extra_run_flags=[
                 f"--job-id {job_id}",
@@ -671,11 +818,16 @@ class HTCondorAdapter(ClusterAdapter):
             log_stem=f"job-{job_id:03d}",
         )
 
-    def render_smax_cell(self, *, cell_dir, cell_cfg, energy_mev, job_name,
-                         job_id, partition, use_gpu):
+    def render_smax_cell(
+        self, *, cell_dir, cell_cfg, energy_mev, job_name, job_id, partition, use_gpu
+    ):
         return self._cell_submit(
-            cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
-            job_name=job_name, job_id=job_id, partition=partition,
+            cell_dir=cell_dir,
+            cell_cfg=cell_cfg,
+            energy_mev=energy_mev,
+            job_name=job_name,
+            job_id=job_id,
+            partition=partition,
             use_gpu=use_gpu,
             extra_run_flags=[
                 f"--job-id {job_id}",
@@ -685,11 +837,25 @@ class HTCondorAdapter(ClusterAdapter):
             log_stem=f"job-{job_id:03d}",
         )
 
-    def render_dataprod_job(self, *, cell_dir, config_path, detector, job_id,
-                            job_name, partition, use_gpu, test, skip_lucid,
-                            n_events, override_energy_mev,
-                            sn_model=None, sn_ordering=None, master_seed=None,
-                            lucid_seed=None):
+    def render_dataprod_job(
+        self,
+        *,
+        cell_dir,
+        config_path,
+        detector,
+        job_id,
+        job_name,
+        partition,
+        use_gpu,
+        test,
+        skip_lucid,
+        n_events,
+        override_energy_mev,
+        sn_model=None,
+        sn_ordering=None,
+        master_seed=None,
+        lucid_seed=None,
+    ):
         cpus = self.env.get("DEFAULT_CPUS", "1")
         memory_mb = self.env.get("DEFAULT_MEMORY", "4000")
         gpus = "1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")
@@ -723,25 +889,35 @@ class HTCondorAdapter(ClusterAdapter):
             f"universe                = vanilla\n"
             f"executable              = /bin/bash\n"
             f"arguments               = \"-c '{bash_cmd}'\"\n"
-            f"environment             = \"{self._env_block()}\"\n"
+            f'environment             = "{self._env_block()}"\n'
             f"output                  = {log_dir}/job_{job_id}-$(ClusterId).$(ProcId).out\n"
             f"error                   = {log_dir}/job_{job_id}-$(ClusterId).$(ProcId).err\n"
             f"log                     = {log_dir}/job_{job_id}-$(ClusterId).$(ProcId).log\n"
-            f"MY.SingularityImage     = \"{self.env['LUCID_IMAGE_PATH']}\"\n"
-            f"MY.SingularityBind      = \"{self._binds_for_classad()}\"\n"
-            f"+JobBatchName           = \"{job_name}\"\n"
+            f'MY.SingularityImage     = "{self.env["LUCID_IMAGE_PATH"]}"\n'
+            f'MY.SingularityBind      = "{self._binds_for_classad()}"\n'
+            f'+JobBatchName           = "{job_name}"\n'
             f"request_cpus            = {cpus}\n"
             f"request_memory          = {memory_mb}\n"
             f"request_disk            = 4096\n"
             f"{self._gpu_lines(gpus)}"
-            f"+JobFlavour             = \"{flavour}\"\n"
+            f'+JobFlavour             = "{flavour}"\n'
             f"should_transfer_files   = NO\n"
             f"queue\n"
         )
 
-    def render_command_job(self, *, command, cell_dir, job_name, log_stem,
-                           partition, use_gpu=False, request_disk_mb=4096,
-                           request_memory_mb=0, gpus=None):
+    def render_command_job(
+        self,
+        *,
+        command,
+        cell_dir,
+        job_name,
+        log_stem,
+        partition,
+        use_gpu=False,
+        request_disk_mb=4096,
+        request_memory_mb=0,
+        gpus=None,
+    ):
         gpus = gpus or ("1" if use_gpu else self.env.get("DEFAULT_GPUS", "0"))
         log_dir = self._log_dir(cell_dir)
         # The env prefix carries the dev-checkout overrides HTCondor's
@@ -756,19 +932,19 @@ class HTCondorAdapter(ClusterAdapter):
             f"universe                = vanilla\n"
             f"executable              = /bin/bash\n"
             f"arguments               = \"-c '{bash_cmd}'\"\n"
-            f"environment             = \"{self._env_block()}\"\n"
+            f'environment             = "{self._env_block()}"\n'
             f"output                  = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).out\n"
             f"error                   = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).err\n"
             f"log                     = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).log\n"
-            f"MY.SingularityImage     = \"{self.env['LUCID_IMAGE_PATH']}\"\n"
-            f"MY.SingularityBind      = \"{self._binds_for_classad()}\"\n"
-            f"+JobBatchName           = \"{job_name}\"\n"
+            f'MY.SingularityImage     = "{self.env["LUCID_IMAGE_PATH"]}"\n'
+            f'MY.SingularityBind      = "{self._binds_for_classad()}"\n'
+            f'+JobBatchName           = "{job_name}"\n'
             f"request_cpus            = {self.env.get('DEFAULT_CPUS', '1')}\n"
             f"request_memory          = "
             f"{request_memory_mb or self.env.get('DEFAULT_MEMORY', '4000')}\n"
             f"request_disk            = {request_disk_mb}\n"
             f"{self._gpu_lines(gpus)}"
-            f"+JobFlavour             = \"{partition if partition else self._flavour()}\"\n"
+            f'+JobFlavour             = "{partition if partition else self._flavour()}"\n'
             f"should_transfer_files   = NO\n"
             f"queue\n"
         )
@@ -789,18 +965,18 @@ class HTCondorAdapter(ClusterAdapter):
             f"{'' if self.env.get('LUCID_DEV_PATH') else 'PYTHONPATH=/opt/LUCiD '}"
             f"python3 -m lucid.siren.training.train {cli_args}'\"\n"
             f"environment             = "
-            f"\"PYTHONUSERBASE={self.env['LUCID_ENV_BASE']}\"\n"
+            f'"PYTHONUSERBASE={self.env["LUCID_ENV_BASE"]}"\n'
             f"output                  = {log_dir}/job-$(ClusterId).$(ProcId).out\n"
             f"error                   = {log_dir}/job-$(ClusterId).$(ProcId).err\n"
             f"log                     = {log_dir}/job-$(ClusterId).$(ProcId).log\n"
-            f"MY.SingularityImage     = \"{self.env['LUCID_IMAGE_PATH']}\"\n"
-            f"MY.SingularityBind      = \"{self._binds_for_classad()}\"\n"
-            f"+JobBatchName           = \"train_{run_name}\"\n"
+            f'MY.SingularityImage     = "{self.env["LUCID_IMAGE_PATH"]}"\n'
+            f'MY.SingularityBind      = "{self._binds_for_classad()}"\n'
+            f'+JobBatchName           = "train_{run_name}"\n'
             f"request_cpus            = {cpus}\n"
             f"request_memory          = {memory_mb}\n"
             f"request_disk            = 16384\n"
             f"request_gpus            = {gpus}\n"
-            f"+JobFlavour             = \"{flavour}\"\n"
+            f'+JobFlavour             = "{flavour}"\n'
             f"should_transfer_files   = NO\n"
             f"queue\n"
         )
@@ -820,6 +996,5 @@ def get_adapter(env: Dict[str, str]) -> ClusterAdapter:
     name = (env.get("CLUSTER") or "slurm").lower()
     cls = ADAPTERS.get(name)
     if cls is None:
-        raise ValueError(
-            f"Unknown CLUSTER={name!r}. Known adapters: {sorted(ADAPTERS)}.")
+        raise ValueError(f"Unknown CLUSTER={name!r}. Known adapters: {sorted(ADAPTERS)}.")
     return cls(env)

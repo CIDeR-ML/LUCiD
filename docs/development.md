@@ -39,7 +39,10 @@ on purpose says what moved, and by how much, in its own commit.
 `pre-commit run --all-files` runs ruff (configured in `pyproject.toml`), `nbstripout`,
 `shellcheck --severity=warning` and a shell-header check: every shell script sets
 `set -euo pipefail` in its first 30 lines and contains no personal or site-specific absolute
-paths (those come from `user_paths.sh`). The CI lint job is advisory for now.
+paths (those come from `user_paths.sh`). CI's lint job runs the same hooks on every file and
+fails the build when one fails. The one-time reformat that brought the tree to this standard is
+listed in `.git-blame-ignore-revs`; `git config blame.ignoreRevsFile .git-blame-ignore-revs`
+makes `git blame` look past it (GitHub's blame view already does).
 
 ## Docs
 

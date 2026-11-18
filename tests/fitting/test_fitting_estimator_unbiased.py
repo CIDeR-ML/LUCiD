@@ -19,9 +19,10 @@ Slow: 4 arms x 800 draws take ~32 s on CPU. Measured z (worst parameter): Neyman
 The sqrt-residual arms were dropped: their displacement (z 1.9 vs 1.1) is too weak in this toy to
 assert anything but an ordering, and they cost a third of the time.
 """
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from lucid.fitting import FieldParams, profile_gains
@@ -33,7 +34,7 @@ pytestmark = pytest.mark.slow
 
 NS = 40
 NOISE_HI, NOISE_LO = 0.25, 0.05
-N_DRAWS = 800                       # z scales as sqrt(N); 800 keeps the contrast decisive
+N_DRAWS = 800  # z scales as sqrt(N); 800 keeps the contrast decisive
 
 
 def _dp_true():
@@ -50,9 +51,11 @@ def _make_noisy(noise):
     multipliers a negative charge is expected and makes `sqrt(k*M)` NaN. `exp(sigma*z - sigma^2/2)`
     is positive and has mean exactly 1, so any bias measured is the estimator's and not the toy's.
     """
+
     def sim(source, dp, key):
         z = jax.random.normal(key, (NS,))
-        return _base(source, dp) * jnp.exp(noise * z - 0.5 * noise ** 2), jnp.zeros(NS)
+        return _base(source, dp) * jnp.exp(noise * z - 0.5 * noise**2), jnp.zeros(NS)
+
     return sim
 
 
@@ -64,7 +67,7 @@ def _sources():
     return toy.sources(NS, seed=17, b_spread=0.5, b_scale=2.3)
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def z_scores():
     """Worst-parameter |mean g| / s.e.m. at truth, for each (noise, residual, gain) arm."""
     params = FieldParams(_dp_true(), FIELDS, n_sensors=NS)
@@ -75,8 +78,9 @@ def z_scores():
     ones = jnp.ones(NS)
     # The DATA is one fixed clean dataset; what is redrawn each step is the MODEL. That is the
     # situation the estimator choice is about.
-    data = CalibrationForward(_clean, _sources(), params, NS)(th, jax.random.PRNGKey(0),
-                                                             jnp.asarray(gains))
+    data = CalibrationForward(_clean, _sources(), params, NS)(
+        th, jax.random.PRNGKey(0), jnp.asarray(gains)
+    )
 
     def arm(noise, gain_mode):
         sim = _make_noisy(noise)
@@ -85,17 +89,22 @@ def z_scores():
         g = []
         for step in range(N_DRAWS):
             mu = fwd.average(th, prob.forward_key(step), ones, 1)
-            k = (profile_gains(mu.sum(0) + 1e-12, prob.data_sum) if gain_mode == 'profiled'
-                 else jnp.asarray(gains))
+            k = (
+                profile_gains(mu.sum(0) + 1e-12, prob.data_sum)
+                if gain_mode == "profiled"
+                else jnp.asarray(gains)
+            )
             r = (k[None, :] * mu - data) / jnp.sqrt(jnp.clip(data, 1e-6, None))
             j = fwd.jacobian(th, jnp.log(k), prob.jacobian_key(step), data, 1e-6, draws=(0,))
-            g.append(np.asarray(jnp.einsum('gnp,gn->p', j, r) / prob.n_configs))
+            g.append(np.asarray(jnp.einsum("gnp,gn->p", j, r) / prob.n_configs))
         g = np.stack(g)
         return float(np.max(np.abs(g.mean(0)) / (g.std(0, ddof=1) / np.sqrt(len(g)))))
 
-    return {(nz, res, gm): arm(nz, gm)
-            for nz in (NOISE_HI, NOISE_LO)
-            for res, gm in (('neyman', 'fixed'), ('neyman', 'profiled'))}
+    return {
+        (nz, res, gm): arm(nz, gm)
+        for nz in (NOISE_HI, NOISE_LO)
+        for res, gm in (("neyman", "fixed"), ("neyman", "profiled"))
+    }
 
 
 def test_the_neyman_residual_is_unbiased_at_truth(z_scores):
@@ -105,9 +114,11 @@ def test_the_neyman_residual_is_unbiased_at_truth(z_scores):
     forward variance would not be linear in the model.
     """
     for nz in (NOISE_HI, NOISE_LO):
-        z = z_scores[(nz, 'neyman', 'fixed')]
-        assert z < 4.0, (f'at forward noise {nz}, the Neyman gradient at truth is {z:.1f} sigma '
-                         f'from zero — its fixed point is displaced')
+        z = z_scores[(nz, "neyman", "fixed")]
+        assert z < 4.0, (
+            f"at forward noise {nz}, the Neyman gradient at truth is {z:.1f} sigma "
+            f"from zero — its fixed point is displaced"
+        )
 
 
 def test_the_instrument_can_detect_a_displaced_fixed_point(z_scores):
@@ -116,9 +127,11 @@ def test_the_instrument_can_detect_a_displaced_fixed_point(z_scores):
     Uses the PROFILED-gain arm rather than the sqrt residual because it is decisive at this
     ensemble size, while the sqrt arm's displacement is real but weak.
     """
-    z = z_scores[(NOISE_HI, 'neyman', 'profiled')]
-    assert z > 8.0, (f'no arm of this test shows bias ({z:.1f} sigma), so the null result above '
-                     f'says nothing — the ensemble is too small or the forward noise too weak')
+    z = z_scores[(NOISE_HI, "neyman", "profiled")]
+    assert z > 8.0, (
+        f"no arm of this test shows bias ({z:.1f} sigma), so the null result above "
+        f"says nothing — the ensemble is too small or the forward noise too weak"
+    )
 
 
 def test_the_profiling_bias_scales_with_forward_noise(z_scores):
@@ -128,8 +141,10 @@ def test_the_profiling_bias_scales_with_forward_noise(z_scores):
     variance. If the bias were instead something fixed — a wrong key, a transposed Jacobian — it
     would not track the noise.
     """
-    hi = z_scores[(NOISE_HI, 'neyman', 'profiled')]
-    lo = z_scores[(NOISE_LO, 'neyman', 'profiled')]
-    assert hi > 2.0 * lo, (f'profiling bias does not scale with forward noise '
-                           f'(z {lo:.1f} at {NOISE_LO} vs {hi:.1f} at {NOISE_HI}) — the mechanism '
-                           f'is not the Jensen term through 1/sum(M)')
+    hi = z_scores[(NOISE_HI, "neyman", "profiled")]
+    lo = z_scores[(NOISE_LO, "neyman", "profiled")]
+    assert hi > 2.0 * lo, (
+        f"profiling bias does not scale with forward noise "
+        f"(z {lo:.1f} at {NOISE_LO} vs {hi:.1f} at {NOISE_HI}) — the mechanism "
+        f"is not the Jensen term through 1/sum(M)"
+    )

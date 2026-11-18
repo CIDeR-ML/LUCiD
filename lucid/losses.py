@@ -1,21 +1,21 @@
+import jax
 import jax.numpy as jnp
 from jax import jit
-import jax
-from jax.scipy.special import gammaln, erf
+from jax.scipy.special import erf, gammaln
 
 
 @jit
 def WC_smooth_loss(
-        sensor_points: jnp.ndarray,
-        true_charge: jnp.ndarray,
-        true_time: jnp.ndarray,
-        simulated_charge: jnp.ndarray,
-        simulated_time: jnp.ndarray,
-        tau: float = 0.05,
-        eps: float = 1e-8,
-        threshold: float = 1e-8,
-        lambda_poisson: float = 1.0,
-        lambda_time: float = 1.0,
+    sensor_points: jnp.ndarray,
+    true_charge: jnp.ndarray,
+    true_time: jnp.ndarray,
+    simulated_charge: jnp.ndarray,
+    simulated_time: jnp.ndarray,
+    tau: float = 0.05,
+    eps: float = 1e-8,
+    threshold: float = 1e-8,
+    lambda_poisson: float = 1.0,
+    lambda_time: float = 1.0,
 ) -> float:
     """
     Charge and time loss with Gaussian distance weights.
@@ -52,11 +52,8 @@ def WC_smooth_loss(
         Total loss.
     """
     # ============= Compute Distance-based Gaussian Weights =============
-    dist = jnp.linalg.norm(
-        sensor_points[:, None, :] - sensor_points[None, :, :],
-        axis=-1
-    )
-    dist_weights = jnp.exp(-dist**2 / (2 * tau**2))
+    dist = jnp.linalg.norm(sensor_points[:, None, :] - sensor_points[None, :, :], axis=-1)
+    dist_weights = jnp.exp(-(dist**2) / (2 * tau**2))
     col_sums = jnp.sum(dist_weights, axis=0, keepdims=True)
     dist_weights = dist_weights / (col_sums + eps)
 
@@ -74,13 +71,13 @@ def WC_smooth_loss(
     true_weights = jnp.where(true_active, true_charge, 0.0)
     sim_weights = jnp.where(sim_active, simulated_charge, 0.0)
 
-    true_t0 = jax.lax.stop_gradient(jnp.sum(true_time * true_weights) / (jnp.sum(true_weights) + eps))
+    true_t0 = jax.lax.stop_gradient(
+        jnp.sum(true_time * true_weights) / (jnp.sum(true_weights) + eps)
+    )
     sim_t0 = jnp.sum(simulated_time * sim_weights) / (jnp.sum(sim_weights) + eps)
 
     both_active = jax.lax.stop_gradient(true_active & sim_active)
-    diff = jnp.where(both_active,
-                     jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)),
-                     0.0)
+    diff = jnp.where(both_active, jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)), 0.0)
 
     time_norm = jnp.where(both_active, jnp.abs(true_time - true_t0), 0.0)
 
@@ -96,6 +93,7 @@ def WC_smooth_loss(
 # ===================================================================
 # Optimization loss functions
 # ===================================================================
+
 
 @jit
 def energy_loss(simulated_counts, true_counts):
@@ -120,9 +118,11 @@ def energy_loss(simulated_counts, true_counts):
 
     return jnp.abs(jnp.log(total_sim_counts / (total_true_counts + eps)))
 
+
 @jit
-def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8,
-                normalize: bool = True) -> jnp.ndarray:
+def counts_loss(
+    true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8, normalize: bool = True
+) -> jnp.ndarray:
     """Compute the Poisson negative log-likelihood loss.
 
     Parameters
@@ -148,9 +148,11 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8,
     # jnp.where (not a Python ``if``) so ``normalize`` stays jit-traceable as a flag.
     return jnp.where(normalize, total / (jnp.sum(true) + eps), total)
 
+
 @jit
-def grid_origin_time_loss(origin, detector_positions, true_times, true_q, t0, *,
-                          sensor_radius, light_speed, early_penalty):
+def grid_origin_time_loss(
+    origin, detector_positions, true_times, true_q, t0, *, sensor_radius, light_speed, early_penalty
+):
     """First-arrival residual loss of a vertex hypothesis, for the first-light seed grid.
 
     The expected arrival at each hit sensor is the straight-line flight from ``origin`` to the
@@ -166,7 +168,7 @@ def grid_origin_time_loss(origin, detector_positions, true_times, true_q, t0, *,
     r = true_times - expected_times - t0
 
     # --- Active sensors
-    mask = (true_q > 0.).astype(jnp.float32)
+    mask = (true_q > 0.0).astype(jnp.float32)
     n = jnp.sum(mask) + eps
 
     # --- Split residuals
@@ -199,21 +201,18 @@ def grid_origin_time_loss(origin, detector_positions, true_times, true_q, t0, *,
 # Likelihood-based loss functions
 # ===================================================================
 
+
 def segment_logsumexp(data, indices, num_segments):
     """Numerically stable log-sum-exp aggregated per segment."""
     max_vals = jax.ops.segment_max(
-        data, indices, num_segments=num_segments,
-        indices_are_sorted=False
+        data, indices, num_segments=num_segments, indices_are_sorted=False
     )
     shifted = data - max_vals[indices]
-    exp_summed = jax.ops.segment_sum(
-        jnp.exp(shifted), indices, num_segments=num_segments
-    )
+    exp_summed = jax.ops.segment_sum(jnp.exp(shifted), indices, num_segments=num_segments)
     return max_vals + jnp.log(exp_summed)
 
 
-def first_arrival_nll(log_w, flat_times, flat_indices,
-                      t_obs_per_sensor, tau, num_detectors):
+def first_arrival_nll(log_w, flat_times, flat_indices, t_obs_per_sensor, tau, num_detectors):
     """Per-sensor first-arrival NLL of a logistic-smeared photon mixture.
 
     Each predicted photon arrives at ``flat_times`` smeared by a logistic kernel of scale ``tau``;
@@ -234,12 +233,8 @@ def first_arrival_nll(log_w, flat_times, flat_indices,
     log_w_norm = safe_log_w - log_w_total[flat_indices]
 
     # log f(t_obs) — mixture density
-    log_kernel = (jax.nn.log_sigmoid(x)
-                  + jax.nn.log_sigmoid(-x)
-                  - jnp.log(tau))
-    log_f = segment_logsumexp(
-        log_w_norm + log_kernel, flat_indices, num_detectors
-    )
+    log_kernel = jax.nn.log_sigmoid(x) + jax.nn.log_sigmoid(-x) - jnp.log(tau)
+    log_f = segment_logsumexp(log_w_norm + log_kernel, flat_indices, num_detectors)
 
     # log(1 - F) via the identity: 1-F = Σ p_i σ(-x_i)
     log_one_minus_F = segment_logsumexp(
@@ -279,8 +274,18 @@ def _log1mexp(a):
     return jnp.where(a > -0.6931, jnp.log(-jnp.expm1(a)), jnp.log1p(-jnp.exp(a)))
 
 
-def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
-                             mu_total, obs_counts, num_detectors, *, sigma, delta):
+def first_arrival_window_nll(
+    log_w,
+    flat_times,
+    flat_indices,
+    t_obs_per_sensor,
+    mu_total,
+    obs_counts,
+    num_detectors,
+    *,
+    sigma,
+    delta,
+):
     """Windowed first-arrival ORDER-STATISTIC time NLL — the reconstruction time term.
 
     Mean-field-correct first arrival (the recon recipe). The
@@ -317,21 +322,27 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     (num_detectors,) per-PMT time NLL (sum it for the scalar term).
     """
     sq = jnp.sqrt(2.0)
-    ww = jax.lax.stop_gradient(jnp.exp(jnp.clip(log_w, -60, 20)))      # AMP_DETACH (weights)
-    muS = jax.lax.stop_gradient(jnp.maximum(mu_total, 1e-8))           # AMP_DETACH (total)
+    ww = jax.lax.stop_gradient(jnp.exp(jnp.clip(log_w, -60, 20)))  # AMP_DETACH (weights)
+    muS = jax.lax.stop_gradient(jnp.maximum(mu_total, 1e-8))  # AMP_DETACH (total)
     tobs = t_obs_per_sensor[flat_indices]
-    Rlo = jax.ops.segment_sum(ww * 0.5 * (1 + erf((tobs - delta / 2 - flat_times) / (sigma * sq))),
-                              flat_indices, num_segments=num_detectors)
-    Rhi = jax.ops.segment_sum(ww * 0.5 * (1 + erf((tobs + delta / 2 - flat_times) / (sigma * sq))),
-                              flat_indices, num_segments=num_detectors)
-    Slo = jnp.clip((muS - Rlo) / muS, 1e-12, 1.)
-    Shi = jnp.clip((muS - Rhi) / muS, 1e-12, 1.)
-    n = jnp.maximum(obs_counts, 0.)
+    Rlo = jax.ops.segment_sum(
+        ww * 0.5 * (1 + erf((tobs - delta / 2 - flat_times) / (sigma * sq))),
+        flat_indices,
+        num_segments=num_detectors,
+    )
+    Rhi = jax.ops.segment_sum(
+        ww * 0.5 * (1 + erf((tobs + delta / 2 - flat_times) / (sigma * sq))),
+        flat_indices,
+        num_segments=num_detectors,
+    )
+    Slo = jnp.clip((muS - Rlo) / muS, 1e-12, 1.0)
+    Shi = jnp.clip((muS - Rhi) / muS, 1e-12, 1.0)
+    n = jnp.maximum(obs_counts, 0.0)
     # No clamp here: the only saturation cap on `a` is the -1e-7 inside `_log1mexp`. That cap is
     # active on many PMTs, so a reimplementation must use -1e-7 (a -1e-9 cap differs by 4.6 nats
     # per saturated PMT). `tests/fitting/test_first_arrival_a_cap.py` pins where the cap lives.
     a = n * (jnp.log(Shi) - jnp.log(Slo))
-    return jnp.where(obs_counts > 0, -n * jnp.log(Slo) - _log1mexp(a), 0.)
+    return jnp.where(obs_counts > 0, -n * jnp.log(Slo) - _log1mexp(a), 0.0)
 
 
 # =============================================================================

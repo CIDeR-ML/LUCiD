@@ -1,11 +1,13 @@
-import jax.numpy as jnp
-import jax
-from typing import Callable, Tuple, Optional
-from jax import vmap
-import os
 import json
+import os
 import tempfile
+from typing import Callable, Optional, Tuple
+
+import jax
+import jax.numpy as jnp
 import numpy as np
+from jax import vmap
+
 from lucid.utils import base_dir_path
 
 # TABLE GEOMETRY CONSTANTS.
@@ -28,7 +30,7 @@ _NUM_DENSE = 400
 
 # create_overlap_prob's remaining layout defaults, named once so the signature and the
 # default-layout cache check below cannot drift apart.
-_N_QUAD = 2000            # n_theta and n_rho
+_N_QUAD = 2000  # n_theta and n_rho
 _NUM_SPARSE = 50
 _D_MAX_FACTOR = 10.0
 
@@ -46,7 +48,7 @@ _ST_MIN_SIGMA = 0.02
 # allows numpy>=1.24 and the container installs numpy unpinned beside jax=0.4, and the image warms
 # this cache at BUILD time -- so on a 1.x resolve an unguarded call would fail `docker build`, and
 # every CI job that needs the image with it.
-_trapezoid = getattr(np, 'trapezoid', None) or np.trapz
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
 
 
 def get_cache_filename(r: float, sigma: float) -> str:
@@ -68,11 +70,10 @@ def get_cache_filename(r: float, sigma: float) -> str:
     # the key: _KSIG and _NUM_DENSE set the d_values, and float64 sets their accuracy. Keyed on
     # (r, sigma) alone, a run would silently load a table built with a different layout -- including
     # from the shared warm cache production points at -- and report it as the current result.
-    return (f"gaussian_overlap_r{r:.6f}_sigma{sigma:.6f}"
-            f"_ksig{_KSIG:g}_nd{_NUM_DENSE}_f64.json")
+    return f"gaussian_overlap_r{r:.6f}_sigma{sigma:.6f}_ksig{_KSIG:g}_nd{_NUM_DENSE}_f64.json"
 
 
-_CACHE_SUBDIR = 'spatial_overlap_integrals'
+_CACHE_SUBDIR = "spatial_overlap_integrals"
 
 
 _CACHE_DIR_OVERRIDE = None
@@ -110,9 +111,11 @@ def _cache_dirs() -> list:
     """
     if _CACHE_DIR_OVERRIDE:
         return [os.path.join(_CACHE_DIR_OVERRIDE, _CACHE_SUBDIR)]
-    root = _USER_CACHE_ROOT or os.path.join(os.path.expanduser('~'), '.cache')
-    return [os.path.join(base_dir_path(), _CACHE_SUBDIR),
-            os.path.join(root, 'lucid', _CACHE_SUBDIR)]
+    root = _USER_CACHE_ROOT or os.path.join(os.path.expanduser("~"), ".cache")
+    return [
+        os.path.join(base_dir_path(), _CACHE_SUBDIR),
+        os.path.join(root, "lucid", _CACHE_SUBDIR),
+    ]
 
 
 def _writable_cache_dir() -> Optional[str]:
@@ -127,7 +130,9 @@ def _writable_cache_dir() -> Optional[str]:
     return None
 
 
-def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values: jnp.ndarray) -> None:
+def save_overlap_values(
+    r: float, sigma: float, d_values: jnp.ndarray, f_values: jnp.ndarray
+) -> None:
     """Save overlap values to a cache file.
 
     Parameters
@@ -148,10 +153,10 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
         return
 
     cache_data = {
-        'r': float(r),
-        'sigma': float(sigma),
-        'd_values': d_values.tolist(),
-        'f_values': f_values.tolist()
+        "r": float(r),
+        "sigma": float(sigma),
+        "d_values": d_values.tolist(),
+        "f_values": f_values.tolist(),
     }
 
     # Written to a temporary file and moved into place, so a reader never sees a half-written table:
@@ -159,7 +164,7 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
     filename = os.path.join(cache_dir, get_cache_filename(r, sigma))
     tmp = None
     try:
-        with tempfile.NamedTemporaryFile('w', dir=cache_dir, suffix='.tmp', delete=False) as f:
+        with tempfile.NamedTemporaryFile("w", dir=cache_dir, suffix=".tmp", delete=False) as f:
             tmp = f.name
             json.dump(cache_data, f)
         os.replace(tmp, filename)
@@ -184,26 +189,29 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
         Cached values if they exist, None otherwise
     """
     name = get_cache_filename(r, sigma)
-    filename = next((c for c in (os.path.join(d, name) for d in _cache_dirs())
-                     if os.path.exists(c)), None)
+    filename = next(
+        (c for c in (os.path.join(d, name) for d in _cache_dirs()) if os.path.exists(c)), None
+    )
 
     if filename is None:
         return None
     try:
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             cache_data = json.load(f)
-        return jnp.array(cache_data['d_values']), jnp.array(cache_data['f_values'])
+        return jnp.array(cache_data["d_values"]), jnp.array(cache_data["f_values"])
     except (OSError, ValueError, KeyError):
-        return None        # unreadable or partial: rebuild it, as if it were not cached
+        return None  # unreadable or partial: rebuild it, as if it were not cached
 
 
-def precompute_lookup(r: float,
-                      sigma: float,
-                      n_theta: int = 1000,
-                      n_rho: int = 1000,
-                      num_dense: int = _NUM_DENSE,
-                      num_sparse: int = 50,
-                      d_max_factor: float = 10.0) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def precompute_lookup(
+    r: float,
+    sigma: float,
+    n_theta: int = 1000,
+    n_rho: int = 1000,
+    num_dense: int = _NUM_DENSE,
+    num_sparse: int = 50,
+    d_max_factor: float = 10.0,
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Precomputes lookup tables for overlap probability calculation.
 
     Parameters
@@ -292,7 +300,7 @@ def precompute_lookup(r: float,
     th = np.linspace(0.0, 2.0 * np.pi, n_theta, dtype=np.float64)
     rh = np.linspace(0.0, float(r), n_rho, dtype=np.float64)
     dv = np.asarray(d_values, dtype=np.float64)
-    rr, tt = np.meshgrid(rh, th, indexing='ij')          # (n_rho, n_theta)
+    rr, tt = np.meshgrid(rh, th, indexing="ij")  # (n_rho, n_theta)
     cos_t = np.cos(tt)
     out = np.empty(dv.shape[0], dtype=np.float64)
     # CHUNKED over d: unchunked, the (n_d, n_rho, n_theta) array at the defaults is 448 x 2000 x 2000
@@ -300,24 +308,26 @@ def precompute_lookup(r: float,
     # independent per d, so chunking changes nothing numerically.
     step = max(1, int(4e7 // max(1, rr.size)))
     for i0 in range(0, dv.shape[0], step):
-        dd = dv[i0:i0 + step][:, None, None]
+        dd = dv[i0 : i0 + step][:, None, None]
         # The Gaussian kernel: squared distance from the disk point (rho, theta) to a
         # source offset by d along theta = 0, times the polar area element rho.
-        dist2 = rr ** 2 + dd ** 2 - 2.0 * rr * dd * cos_t
-        integ = (rr / (2.0 * np.pi * sigma ** 2)) * np.exp(-dist2 / (2.0 * sigma ** 2))
-        out[i0:i0 + step] = _trapezoid(_trapezoid(integ, th, axis=2), rh, axis=1)
+        dist2 = rr**2 + dd**2 - 2.0 * rr * dd * cos_t
+        integ = (rr / (2.0 * np.pi * sigma**2)) * np.exp(-dist2 / (2.0 * sigma**2))
+        out[i0 : i0 + step] = _trapezoid(_trapezoid(integ, th, axis=2), rh, axis=1)
     return d_values, jnp.asarray(out)
 
 
-def create_overlap_prob(sigma: Optional[float],
-                        r: float,
-                        n_theta: int = _N_QUAD,
-                        n_rho: int = _N_QUAD,
-                        num_dense: int = _NUM_DENSE,
-                        num_sparse: int = _NUM_SPARSE,
-                        d_max_factor: float = _D_MAX_FACTOR,
-                        use_cache: bool = True,
-                        st_width_frac: float = 0.35) -> Callable[[float], float]:
+def create_overlap_prob(
+    sigma: Optional[float],
+    r: float,
+    n_theta: int = _N_QUAD,
+    n_rho: int = _N_QUAD,
+    num_dense: int = _NUM_DENSE,
+    num_sparse: int = _NUM_SPARSE,
+    d_max_factor: float = _D_MAX_FACTOR,
+    use_cache: bool = True,
+    st_width_frac: float = 0.35,
+) -> Callable[[float], float]:
     """Creates a function that calculates overlap probability between sensor and photon.
 
     Parameters
@@ -370,8 +380,10 @@ def create_overlap_prob(sigma: Optional[float],
         st_frac = st_width_frac
 
         if st_frac <= 0.0:
+
             def overlap_prob(d: float) -> float:
-                return jnp.where(d < r, 1.0, 0.0)            # hard, grad 0 a.e. (no surrogate)
+                return jnp.where(d < r, 1.0, 0.0)  # hard, grad 0 a.e. (no surrogate)
+
             return overlap_prob
 
         st_width = st_frac * r
@@ -379,7 +391,7 @@ def create_overlap_prob(sigma: Optional[float],
         def overlap_prob(d: float) -> float:
             hard = jnp.where(d < r, 1.0, 0.0)
             soft = jax.nn.sigmoid((r - d) / st_width)
-            return jax.lax.stop_gradient(hard - soft) + soft   # fwd = hard; grad = d(soft)/dd
+            return jax.lax.stop_gradient(hard - soft) + soft  # fwd = hard; grad = d(soft)/dd
 
         return overlap_prob
 
@@ -387,8 +399,13 @@ def create_overlap_prob(sigma: Optional[float],
     # The cache key names only (r, sigma) and the default layout (_KSIG, _NUM_DENSE, float64), so a
     # table built with any other layout would be served to every default caller. Non-default layouts
     # are therefore built fresh and never cached.
-    _default_layout = (n_theta == _N_QUAD and n_rho == _N_QUAD and num_dense == _NUM_DENSE
-                       and num_sparse == _NUM_SPARSE and d_max_factor == _D_MAX_FACTOR)
+    _default_layout = (
+        n_theta == _N_QUAD
+        and n_rho == _N_QUAD
+        and num_dense == _NUM_DENSE
+        and num_sparse == _NUM_SPARSE
+        and d_max_factor == _D_MAX_FACTOR
+    )
     if use_cache and _default_layout:
         cached_values = load_overlap_values(r, sigma)
         if cached_values is not None:
@@ -415,8 +432,18 @@ if __name__ == "__main__":
 
     # Set up parameters
     r = 0.04  # radius
-    gamma_values = [0.01 * r, 0.02 * r, 0.05 * r, 0.1 * r, 0.2 * r, 0.4 * r, 0.5 * r, 0.8 * r, 1.0 * r]
-    gamma_labels = [f'{g / r:.2f}r' for g in gamma_values]
+    gamma_values = [
+        0.01 * r,
+        0.02 * r,
+        0.05 * r,
+        0.1 * r,
+        0.2 * r,
+        0.4 * r,
+        0.5 * r,
+        0.8 * r,
+        1.0 * r,
+    ]
+    gamma_labels = [f"{g / r:.2f}r" for g in gamma_values]
 
     # Create figure with professional styling
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -438,22 +465,24 @@ if __name__ == "__main__":
         overlaps = overlap_vmap(d_values)
 
         # Plot with custom styling
-        ax.plot(d_values / r, overlaps, '-', linewidth=2, label=f'σ = {label}', color=color)
+        ax.plot(d_values / r, overlaps, "-", linewidth=2, label=f"σ = {label}", color=color)
 
         # Collect values for table
         table_values = [overlap_func(d) for d in table_d_values]
-        table_data.append([label] + [f'{v:.2e}' for v in table_values])
+        table_data.append([label] + [f"{v:.2e}" for v in table_values])
 
     # Customize plot
     ax.grid(True, alpha=0.3)
-    ax.set_xlabel('Distance (d/r)', fontsize=12)
-    ax.set_ylabel('Overlap Probability', fontsize=12)
-    ax.set_title('Overlap Probability vs Distance for Different σ Values (r = 0.04)', fontsize=14, pad=20)
-    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
+    ax.set_xlabel("Distance (d/r)", fontsize=12)
+    ax.set_ylabel("Overlap Probability", fontsize=12)
+    ax.set_title(
+        "Overlap Probability vs Distance for Different σ Values (r = 0.04)", fontsize=14, pad=20
+    )
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
 
     # Add reference lines
-    ax.axvline(x=1, color='gray', linestyle='--', alpha=0.3)
-    ax.axvline(x=2, color='gray', linestyle='--', alpha=0.3)
+    ax.axvline(x=1, color="gray", linestyle="--", alpha=0.3)
+    ax.axvline(x=2, color="gray", linestyle="--", alpha=0.3)
 
     # Set reasonable axis limits
     ax.set_xlim(0, 3)
@@ -463,7 +492,7 @@ if __name__ == "__main__":
     plt.tight_layout()
 
     # Save the figure
-    plt.savefig('output/overlap_probability.png', dpi=300, bbox_inches='tight')
+    plt.savefig("output/overlap_probability.png", dpi=300, bbox_inches="tight")
 
     # Show plot
     plt.show()

@@ -1,6 +1,8 @@
 """Pure optics functions: reflection, scattering."""
+
 import jax
 import jax.numpy as jnp
+
 from lucid.utils import create_local_frame, normalize
 
 
@@ -21,11 +23,13 @@ def sample_cosine_hemisphere(normal, rng_key):
     sin_theta = jnp.sqrt(u1)
     phi = 2 * jnp.pi * u2
 
-    local_dir = jnp.array([
-        sin_theta * jnp.cos(phi),
-        sin_theta * jnp.sin(phi),
-        cos_theta,
-    ])
+    local_dir = jnp.array(
+        [
+            sin_theta * jnp.cos(phi),
+            sin_theta * jnp.sin(phi),
+            cos_theta,
+        ]
+    )
 
     frame = create_local_frame(normal)
     return normalize(frame.T @ local_dir)
@@ -59,10 +63,10 @@ def solve_rayleigh_inverse_cdf(u):
     q = -(8.0 * u - 4.0)
 
     # Cardano's formula
-    discriminant = -(4 * p ** 3 + 27 * q ** 2)
+    discriminant = -(4 * p**3 + 27 * q**2)
 
     # Three real roots case
-    rho = jnp.sqrt(-p ** 3 / 27)
+    rho = jnp.sqrt(-(p**3) / 27)
     theta = jnp.arccos(jnp.clip(-q / (2 * rho), -1, 1))
     mu_three_roots = 2 * jnp.cbrt(rho) * jnp.cos(theta / 3)
 
@@ -84,17 +88,16 @@ def compute_scatter_direction(incident_dir, rng_key):
     u2 = jax.random.uniform(k2)
 
     cos_theta = solve_rayleigh_inverse_cdf(u1)
-    sin_theta = jnp.sqrt(1 - cos_theta ** 2)
+    sin_theta = jnp.sqrt(1 - cos_theta**2)
     phi = 2 * jnp.pi * u2
-    local_dir = normalize(jnp.array([
-        sin_theta * jnp.cos(phi),
-        sin_theta * jnp.sin(phi),
-        cos_theta,
-    ]))
+    local_dir = normalize(
+        jnp.array(
+            [
+                sin_theta * jnp.cos(phi),
+                sin_theta * jnp.sin(phi),
+                cos_theta,
+            ]
+        )
+    )
     frame = create_local_frame(incident_dir)
     return normalize(frame.T @ local_dir)
-
-
-
-
-

@@ -13,17 +13,13 @@ import pytest
 from lucid.geometry import Cylinder, generate_detector
 from tests.helpers.paths import REPO
 
-
-
-REPO_CONFIG = os.path.abspath(
-    os.path.join(REPO, 'config')
-)
+REPO_CONFIG = os.path.abspath(os.path.join(REPO, "config"))
 
 REAL_DETECTORS = [
     # (label,             npz file,                       n_active, has_inactive)
-    ('SK',                'sk_geometry.npz',              11096,    False),
-    ('HK',                'hk_geometry.npz',              19746,    True),
-    ('WCTE',              'wcte_geometry.npz',            1995,     False),
+    ("SK", "sk_geometry.npz", 11096, False),
+    ("HK", "hk_geometry.npz", 19746, True),
+    ("WCTE", "wcte_geometry.npz", 1995, False),
 ]
 
 
@@ -31,7 +27,7 @@ REAL_DETECTORS = [
 
 
 def _write_npz(tmp_path, **arrays):
-    p = os.path.join(tmp_path, 'tmp.npz')
+    p = os.path.join(tmp_path, "tmp.npz")
     np.savez_compressed(p, **arrays)
     return p
 
@@ -39,19 +35,23 @@ def _write_npz(tmp_path, **arrays):
 def _minimal_valid_arrays(n=4):
     """A tiny but schema-valid PMT array: 2 barrel + 1 top + 1 bottom."""
     return dict(
-        positions_mm=np.array([
-            [1000.0,    0.0,    0.0],   # barrel
-            [   0.0, 1000.0,    0.0],   # barrel
-            [   0.0,    0.0, 1000.0],   # top
-            [   0.0,    0.0,-1000.0],   # bottom
-        ]),
-        directions=np.array([
-            [-1.0, 0.0,  0.0],
-            [ 0.0,-1.0,  0.0],
-            [ 0.0, 0.0, -1.0],
-            [ 0.0, 0.0,  1.0],
-        ]),
-        surfaces=np.array(['barrel', 'barrel', 'top', 'bottom'], dtype='<U6'),
+        positions_mm=np.array(
+            [
+                [1000.0, 0.0, 0.0],  # barrel
+                [0.0, 1000.0, 0.0],  # barrel
+                [0.0, 0.0, 1000.0],  # top
+                [0.0, 0.0, -1000.0],  # bottom
+            ]
+        ),
+        directions=np.array(
+            [
+                [-1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, -1.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ),
+        surfaces=np.array(["barrel", "barrel", "top", "bottom"], dtype="<U6"),
         pmt_id=np.array([10, 20, 30, 40], dtype=np.int32),
         radius=np.float64(1.0),
         height=np.float64(2.0),
@@ -59,10 +59,18 @@ def _minimal_valid_arrays(n=4):
     )
 
 
-@pytest.mark.parametrize("missing_key", [
-    'positions_mm', 'directions', 'surfaces', 'pmt_id',
-    'radius', 'height', 'sensor_radius',
-])
+@pytest.mark.parametrize(
+    "missing_key",
+    [
+        "positions_mm",
+        "directions",
+        "surfaces",
+        "pmt_id",
+        "radius",
+        "height",
+        "sensor_radius",
+    ],
+)
 def test_missing_required_key_raises(tmp_path, missing_key):
     arrs = _minimal_valid_arrays()
     arrs.pop(missing_key)
@@ -83,7 +91,7 @@ def test_minimal_valid_npz_loads(tmp_path):
 
 def test_directions_shape_mismatch_raises(tmp_path):
     arrs = _minimal_valid_arrays()
-    arrs['directions'] = np.zeros((3, 3))  # wrong N
+    arrs["directions"] = np.zeros((3, 3))  # wrong N
     p = _write_npz(str(tmp_path), **arrs)
     with pytest.raises(ValueError, match="directions shape"):
         Cylinder.from_pmt_file(p)
@@ -91,7 +99,7 @@ def test_directions_shape_mismatch_raises(tmp_path):
 
 def test_surfaces_shape_mismatch_raises(tmp_path):
     arrs = _minimal_valid_arrays()
-    arrs['surfaces'] = np.array(['barrel', 'top'], dtype='<U6')  # wrong N
+    arrs["surfaces"] = np.array(["barrel", "top"], dtype="<U6")  # wrong N
     p = _write_npz(str(tmp_path), **arrs)
     with pytest.raises(ValueError, match="surfaces shape"):
         Cylinder.from_pmt_file(p)
@@ -99,7 +107,7 @@ def test_surfaces_shape_mismatch_raises(tmp_path):
 
 def test_unknown_surface_label_raises(tmp_path):
     arrs = _minimal_valid_arrays()
-    arrs['surfaces'] = np.array(['barrel', 'side', 'top', 'bottom'], dtype='<U6')
+    arrs["surfaces"] = np.array(["barrel", "side", "top", "bottom"], dtype="<U6")
     p = _write_npz(str(tmp_path), **arrs)
     with pytest.raises(ValueError, match="unknown surface labels"):
         Cylinder.from_pmt_file(p)
@@ -114,7 +122,7 @@ _SHUFFLE = [2, 0, 3, 1]
 
 def _shuffled_arrays():
     arrs = _minimal_valid_arrays()
-    for k in ('positions_mm', 'directions', 'surfaces', 'pmt_id'):
+    for k in ("positions_mm", "directions", "surfaces", "pmt_id"):
         arrs[k] = arrs[k][_SHUFFLE]
     return arrs
 
@@ -130,12 +138,13 @@ def test_active_block_reordered_to_barrel_top_bottom(tmp_path):
     npt.assert_array_equal([det.ID_to_case[i] for i in range(4)], [0, 0, 1, 2])
     npt.assert_array_equal(det.pmt_id, [10, 20, 30, 40])
     # Positions, in metres, travel with their pmt_id (rows of _minimal_valid_arrays).
-    npt.assert_allclose(det.raw_positions,
-                        [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0], [0, 0, -1.0]], atol=1e-12)
-    npt.assert_allclose(det.pmt_directions,
-                        [[-1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0], [0, 0, 1.0]], atol=0)
-    assert {pid: det.pmt_id_to_idx[pid] for pid in (10, 20, 30, 40)} == \
-        {10: 0, 20: 1, 30: 2, 40: 3}
+    npt.assert_allclose(
+        det.raw_positions, [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0], [0, 0, -1.0]], atol=1e-12
+    )
+    npt.assert_allclose(
+        det.pmt_directions, [[-1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0], [0, 0, 1.0]], atol=0
+    )
+    assert {pid: det.pmt_id_to_idx[pid] for pid in (10, 20, 30, 40)} == {10: 0, 20: 1, 30: 2, 40: 3}
 
 
 def test_per_pmt_metadata_reordered(tmp_path):
@@ -147,7 +156,7 @@ def test_per_pmt_metadata_reordered(tmp_path):
     """
     arrs = _shuffled_arrays()
     # metadata keyed to each row's pmt_id, so it can be traced through the reorder
-    arrs['custom_meta'] = 10 * arrs['pmt_id']
+    arrs["custom_meta"] = 10 * arrs["pmt_id"]
     p = _write_npz(str(tmp_path), **arrs)
     det = Cylinder.from_pmt_file(p)
     npt.assert_array_equal(det.custom_meta, 10 * det.pmt_id)
@@ -157,19 +166,18 @@ def test_per_pmt_metadata_reordered(tmp_path):
 def test_snap_moves_cap_pmts_to_the_cap_planes(tmp_path):
     """Cap PMTs snap axially onto z = +-H/2 (H = 2 m here), and keep their x, y."""
     arrs = _minimal_valid_arrays()
-    arrs['positions_mm'][2] = [100.0, -50.0, 900.0]     # top, 100 mm below the cap
-    arrs['positions_mm'][3] = [0.0, 30.0, -1040.0]      # bottom, 40 mm beyond it
+    arrs["positions_mm"][2] = [100.0, -50.0, 900.0]  # top, 100 mm below the cap
+    arrs["positions_mm"][3] = [0.0, 30.0, -1040.0]  # bottom, 40 mm beyond it
     det = Cylinder.from_pmt_file(_write_npz(str(tmp_path), **arrs))
     npt.assert_allclose(det.tcap_points, [[0.1, -0.05, 1.0]], atol=1e-12)
     npt.assert_allclose(det.bcap_points, [[0.0, 0.03, -1.0]], atol=1e-12)
-    npt.assert_allclose(det.raw_positions[2:], [[0.1, -0.05, 0.9], [0.0, 0.03, -1.04]],
-                        atol=1e-12)
+    npt.assert_allclose(det.raw_positions[2:], [[0.1, -0.05, 0.9], [0.0, 0.03, -1.04]], atol=1e-12)
 
 
 def test_snap_to_wall_default_on(tmp_path):
     """A PMT pushed inward should be snapped to r_xy=R by default."""
     arrs = _minimal_valid_arrays()
-    arrs['positions_mm'][0] = [800.0, 0.0, 0.0]  # 200 mm inside wall
+    arrs["positions_mm"][0] = [800.0, 0.0, 0.0]  # 200 mm inside wall
     p = _write_npz(str(tmp_path), **arrs)
     det = Cylinder.from_pmt_file(p)
     # PMT 0 is barrel → r_xy must equal R after snap
@@ -181,7 +189,7 @@ def test_snap_to_wall_default_on(tmp_path):
 
 def test_snap_to_wall_off_keeps_raw_positions(tmp_path):
     arrs = _minimal_valid_arrays()
-    arrs['positions_mm'][0] = [800.0, 0.0, 0.0]
+    arrs["positions_mm"][0] = [800.0, 0.0, 0.0]
     p = _write_npz(str(tmp_path), **arrs)
     det = Cylinder.from_pmt_file(p, snap_to_wall=False)
     r_xy = float(np.linalg.norm(det.barr_points[0, :2]))
@@ -193,11 +201,11 @@ def test_snap_to_wall_off_keeps_raw_positions(tmp_path):
 
 def test_inactive_block_attached_unmodified(tmp_path):
     arrs = _minimal_valid_arrays()
-    arrs['inactive_positions_mm'] = np.array([[1500.0, 0.0, 0.0]])
-    arrs['inactive_directions']   = np.array([[-1.0, 0.0, 0.0]])
-    arrs['inactive_surfaces']     = np.array(['barrel'], dtype='<U6')
-    arrs['inactive_pmt_id']       = np.array([999], dtype=np.int32)
-    arrs['inactive_categories']   = np.array(['od'], dtype='<U8')
+    arrs["inactive_positions_mm"] = np.array([[1500.0, 0.0, 0.0]])
+    arrs["inactive_directions"] = np.array([[-1.0, 0.0, 0.0]])
+    arrs["inactive_surfaces"] = np.array(["barrel"], dtype="<U6")
+    arrs["inactive_pmt_id"] = np.array([999], dtype=np.int32)
+    arrs["inactive_categories"] = np.array(["od"], dtype="<U8")
     p = _write_npz(str(tmp_path), **arrs)
     det = Cylinder.from_pmt_file(p)
     # Active count unaffected by inactive entries
@@ -210,7 +218,7 @@ def test_inactive_block_attached_unmodified(tmp_path):
 # ── Real detector files ───────────────────────────────────────────────
 
 
-@pytest.mark.slow                 # builds SK / HK / WCTE detectors
+@pytest.mark.slow  # builds SK / HK / WCTE detectors
 @pytest.mark.parametrize("label,npz_name,n_active,has_inactive", REAL_DETECTORS)
 def test_real_detector_loads(label, npz_name, n_active, has_inactive):
     det = Cylinder.from_pmt_file(os.path.join(REPO_CONFIG, npz_name))
@@ -219,17 +227,17 @@ def test_real_detector_loads(label, npz_name, n_active, has_inactive):
     assert det.r > 0 and det.H > 0 and det.S_radius > 0
 
 
-@pytest.mark.slow                 # builds SK / HK / WCTE detectors
+@pytest.mark.slow  # builds SK / HK / WCTE detectors
 @pytest.mark.parametrize("label,npz_name,n_active,has_inactive", REAL_DETECTORS)
 def test_real_detector_snap_lands_on_geometry(label, npz_name, n_active, has_inactive):
     det = Cylinder.from_pmt_file(os.path.join(REPO_CONFIG, npz_name))
     barrel_rxy = np.linalg.norm(det.barr_points[:, :2], axis=1)
     npt.assert_allclose(barrel_rxy, det.r, atol=1e-9)
-    npt.assert_allclose(det.tcap_points[:, 2],  det.H / 2,  atol=1e-9)
+    npt.assert_allclose(det.tcap_points[:, 2], det.H / 2, atol=1e-9)
     npt.assert_allclose(det.bcap_points[:, 2], -det.H / 2, atol=1e-9)
 
 
-@pytest.mark.slow                 # builds SK / HK / WCTE detectors
+@pytest.mark.slow  # builds SK / HK / WCTE detectors
 @pytest.mark.parametrize("label,npz_name,n_active,has_inactive", REAL_DETECTORS)
 def test_real_detector_pmt_directions_shape(label, npz_name, n_active, has_inactive):
     det = Cylinder.from_pmt_file(os.path.join(REPO_CONFIG, npz_name))
@@ -238,7 +246,7 @@ def test_real_detector_pmt_directions_shape(label, npz_name, n_active, has_inact
     npt.assert_allclose(norms, 1.0, atol=1e-6)
 
 
-@pytest.mark.slow                 # builds SK / HK / WCTE detectors
+@pytest.mark.slow  # builds SK / HK / WCTE detectors
 @pytest.mark.parametrize("label,npz_name,n_active,has_inactive", REAL_DETECTORS)
 def test_real_detector_pmt_id_lookup_roundtrips(label, npz_name, n_active, has_inactive):
     """pmt_id -> index lands on that PMT's own row of the file.
@@ -250,31 +258,33 @@ def test_real_detector_pmt_id_lookup_roundtrips(label, npz_name, n_active, has_i
     path = os.path.join(REPO_CONFIG, npz_name)
     raw = np.load(path, allow_pickle=True)
     det = Cylinder.from_pmt_file(path)
-    raw_ids = np.asarray(raw['pmt_id'])
+    raw_ids = np.asarray(raw["pmt_id"])
     assert len(np.unique(raw_ids)) == len(raw_ids) == n_active
     rows = np.random.default_rng(0).choice(n_active, size=min(200, n_active), replace=False)
     for row in rows:
         idx = det.pmt_id_to_idx[int(raw_ids[row])]
-        npt.assert_allclose(det.raw_positions[idx], raw['positions_mm'][row] * 1e-3, atol=1e-9)
-        assert det.ID_to_case[idx] == {'barrel': 0, 'top': 1, 'bottom': 2}[str(raw['surfaces'][row])]
+        npt.assert_allclose(det.raw_positions[idx], raw["positions_mm"][row] * 1e-3, atol=1e-9)
+        assert (
+            det.ID_to_case[idx] == {"barrel": 0, "top": 1, "bottom": 2}[str(raw["surfaces"][row])]
+        )
 
 
-@pytest.mark.slow                 # builds SK / HK / WCTE detectors
+@pytest.mark.slow  # builds SK / HK / WCTE detectors
 def test_hk_inactive_block_present():
-    det = Cylinder.from_pmt_file(os.path.join(REPO_CONFIG, 'hk_geometry.npz'))
-    assert hasattr(det, 'inactive_positions_mm')
-    assert hasattr(det, 'inactive_categories')
+    det = Cylinder.from_pmt_file(os.path.join(REPO_CONFIG, "hk_geometry.npz"))
+    assert hasattr(det, "inactive_positions_mm")
+    assert hasattr(det, "inactive_categories")
     # 19036 inactive (15504 mPMT + 3532 OD)
     assert len(det.inactive_positions_mm) == 19036
     cats = sorted(set(det.inactive_categories.tolist()))
-    assert cats == ['id_type2', 'od']
+    assert cats == ["id_type2", "od"]
 
 
-@pytest.mark.slow                 # builds SK / HK / WCTE detectors
+@pytest.mark.slow  # builds SK / HK / WCTE detectors
 def test_wcte_metadata_present():
-    det = Cylinder.from_pmt_file(os.path.join(REPO_CONFIG, 'wcte_geometry.npz'))
-    assert hasattr(det, 'mpmt_id')
-    assert hasattr(det, 'pmt_id_in_mpmt')
+    det = Cylinder.from_pmt_file(os.path.join(REPO_CONFIG, "wcte_geometry.npz"))
+    assert hasattr(det, "mpmt_id")
+    assert hasattr(det, "pmt_id_in_mpmt")
     assert det.mpmt_id.shape == (1995,)
     # NuPRISM-derived WCTE has 105 mPMTs (one id in 0..105 is skipped)
     # and 19 PMT slots numbered 1..19 within each mPMT.
@@ -291,12 +301,15 @@ def test_wcte_metadata_present():
 # ── generate_detector dispatch ────────────────────────────────────────
 
 
-@pytest.mark.parametrize("config_name,n_active", [
-    ('SK_geom_config.json',            11096),
-    ('HK_geom_config.json',            19746),
-    ('WCTE_geom_config.json',           1995),
-])
-@pytest.mark.slow                 # builds SK / HK / WCTE detectors
+@pytest.mark.parametrize(
+    "config_name,n_active",
+    [
+        ("SK_geom_config.json", 11096),
+        ("HK_geom_config.json", 19746),
+        ("WCTE_geom_config.json", 1995),
+    ],
+)
+@pytest.mark.slow  # builds SK / HK / WCTE detectors
 def test_generate_detector_loads_via_npz_path(config_name, n_active):
     det = generate_detector(os.path.join(REPO_CONFIG, config_name))
     assert isinstance(det, Cylinder)

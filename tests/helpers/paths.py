@@ -3,17 +3,18 @@
 ``REPO`` is the checkout (``tests/__init__.py`` makes pytest import its ``lucid/``); ``CONFIG``
 and ``DATA`` are its ``config/`` and gitignored ``data/``.
 """
+
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-CONFIG = REPO / 'config'
-DATA = REPO / 'data'
+CONFIG = REPO / "config"
+DATA = REPO / "data"
 
 # The 1 GeV muon PhotonSim events, under data/. The lucid-data release asset
 # (scripts/download_data.py) ships events 0-4 of the 100-event file, cut with TTree::CopyTree and
 # every branch copied verbatim, so those five are the same in both. A test that reads only them
 # takes whichever is present.
-MUON_1GEV_EVENTS = ('water/muon/1000MeV_5events.root', 'water/muon/1000MeV_100events.root')
+MUON_1GEV_EVENTS = ("water/muon/1000MeV_5events.root", "water/muon/1000MeV_100events.root")
 
 
 def data_file(options):

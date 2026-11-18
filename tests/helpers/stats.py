@@ -1,4 +1,5 @@
 """Distribution checks shared by the sampler tests."""
+
 import numpy as np
 
 

@@ -10,20 +10,21 @@ The physics config is independent of PMT count, so every generated geometry reus
 
     python analysis/paper/utils/make_geometries.py
 """
+
 import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-BASE_GEOM = REPO_ROOT / 'config' / 'SK_like_geom_config.json'
+BASE_GEOM = REPO_ROOT / "config" / "SK_like_geom_config.json"
 # analysis/paper/geometries/ — the path studies.geom_configs() writes into its configs.
-OUT_DIR = Path(__file__).resolve().parents[1] / 'geometries'
+OUT_DIR = Path(__file__).resolve().parents[1] / "geometries"
 
-SENSOR_COUNTS = list(range(2000, 20001, 1000))     # 2k..20k step 1k (19 geometries)
+SENSOR_COUNTS = list(range(2000, 20001, 1000))  # 2k..20k step 1k (19 geometries)
 
 
 def geom_path(n):
     """Path to the SK_like geometry config at ``n`` sensors (may not exist yet)."""
-    return OUT_DIR / f'SK_like_{n}_geom_config.json'
+    return OUT_DIR / f"SK_like_{n}_geom_config.json"
 
 
 def ensure(sensors=None, verbose=True):
@@ -40,25 +41,27 @@ def ensure(sensors=None, verbose=True):
     for n in sensors:
         out = geom_path(n)
         paths.append(out)
-        cfg = json.loads(json.dumps(base))          # deep copy
-        cfg['geometry_definitions']['n_sensors'] = n
+        cfg = json.loads(json.dumps(base))  # deep copy
+        cfg["geometry_definitions"]["n_sensors"] = n
         text = json.dumps(cfg, indent=2)
         if out.exists() and out.read_text() == text:
             continue
         out.write_text(text)
         made.append(n)
     if verbose and made:
-        print(f"[geometries] wrote {len(made)} new or stale geometry config(s) "
-              f"({', '.join(str(n) for n in made)}) in {OUT_DIR.relative_to(REPO_ROOT)}")
+        print(
+            f"[geometries] wrote {len(made)} new or stale geometry config(s) "
+            f"({', '.join(str(n) for n in made)}) in {OUT_DIR.relative_to(REPO_ROOT)}"
+        )
     return paths
 
 
 def main():
-    for n in SENSOR_COUNTS:                          # force a full regeneration
+    for n in SENSOR_COUNTS:  # force a full regeneration
         geom_path(n).unlink(missing_ok=True)
     ensure(SENSOR_COUNTS, verbose=False)
     print(f"{len(SENSOR_COUNTS)} geometry configs in {OUT_DIR.relative_to(REPO_ROOT)}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

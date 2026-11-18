@@ -20,6 +20,7 @@ which is why Gauss-Newton is the default.
 Run:  python examples/hello_calibrate_own_optimiser.py [--n-photons N] [--steps N]   (one GPU;
       slower on CPU)
 """
+
 import argparse
 
 import jax.numpy as jnp
@@ -28,32 +29,45 @@ import optax
 from scipy.optimize import least_squares
 
 from lucid.detector_params import DetectorParams
-from lucid.fitting import (FieldParams, CalibrationForward, CalibrationProblem, calibrate,
-                           closure_data, crb)
+from lucid.fitting import (
+    CalibrationForward,
+    CalibrationProblem,
+    FieldParams,
+    calibrate,
+    closure_data,
+    crb,
+)
 from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 from lucid.sources import isotropic_source
 
-GEOM = 'config/SK_like_geom_config.json'
-FIELDS = ['absorption_length', 'qe']
+GEOM = "config/SK_like_geom_config.json"
+FIELDS = ["absorption_length", "qe"]
 
 
 def main(n_photons=1_000_000, steps=60):
-    det = generate_detector(GEOM); NS = len(det.all_points); R = det.r
-    dp = DetectorParams.from_flat(scatter_length=70., absorption_length=60., qe=0.07,
-                                  qe_corrections=jnp.ones(NS))
+    det = generate_detector(GEOM)
+    NS = len(det.all_points)
+    R = det.r
+    dp = DetectorParams.from_flat(
+        scatter_length=70.0, absorption_length=60.0, qe=0.07, qe_corrections=jnp.ones(NS)
+    )
     # Two flasher positions with very different path lengths to the wall: absorption depends on the
     # path, qe is a pure scale, so the pair separates them. One flasher alone could not.
-    sources = [isotropic_source(position=[0, 0, 0], intensity=1e6),
-               isotropic_source(position=[0.85 * R, 0, 0], intensity=1e6)]
-    sim = setup_event_simulator(GEOM, n_photons, source='light_source', temperature=None, K=8,
-                                wavelength_mode=False)
+    sources = [
+        isotropic_source(position=[0, 0, 0], intensity=1e6),
+        isotropic_source(position=[0.85 * R, 0, 0], intensity=1e6),
+    ]
+    sim = setup_event_simulator(
+        GEOM, n_photons, source="light_source", temperature=None, K=8, wavelength_mode=False
+    )
 
     params = FieldParams(dp, FIELDS)
     model = CalibrationForward(sim, sources, params)
     theta_true = params.theta_from_physical()
     rng = np.random.default_rng(0)
-    k_true = np.exp(rng.normal(0.0, 0.05, NS)); k_true /= np.exp(np.mean(np.log(k_true)))
+    k_true = np.exp(rng.normal(0.0, 0.05, NS))
+    k_true /= np.exp(np.mean(np.log(k_true)))
     problem = CalibrationProblem(model, closure_data(model, theta_true, k_true), jacobian_draws=2)
     start = theta_true + np.log([0.8, 1.2])
 
@@ -69,7 +83,8 @@ def main(n_photons=1_000_000, steps=60):
     #    above reuses it for `refresh` steps.
     # --8<-- [start:own]
     opt = optax.adam(2e-2)
-    theta = jnp.asarray(start, jnp.float32); state = opt.init(theta)
+    theta = jnp.asarray(start, jnp.float32)
+    state = opt.init(theta)
     for step in range(steps):
         g, _, loss = problem.grad_metric_loss(theta, step)
         updates, state = opt.update(g, state)
@@ -77,26 +92,33 @@ def main(n_photons=1_000_000, steps=60):
     # --8<-- [end:own]
     # 4. scipy, on one fixed draw (common random numbers, so the objective is deterministic).
     # --8<-- [start:scipy]
-    sol = least_squares(lambda t: np.ravel(problem.residuals(t, step=0)), start,
-                        jac=lambda t: np.reshape(problem.jacobian(t, step=0), (-1, params.P)),
-                        max_nfev=steps)
+    sol = least_squares(
+        lambda t: np.ravel(problem.residuals(t, step=0)),
+        start,
+        jac=lambda t: np.reshape(problem.jacobian(t, step=0), (-1, params.P)),
+        max_nfev=steps,
+    )
     # --8<-- [end:scipy]
 
-    sigma = crb(model, theta_true)['sigma']
+    sigma = crb(model, theta_true)["sigma"]
     truth = params.to_real(theta_true)
-    fits = (gn['real'], adam['real'], params.to_real(theta), params.to_real(sol.x))
-    print(f'{"param":20s}{"truth":>8s}{"GN":>8s}{"Adam":>8s}{"own":>8s}{"scipy":>8s}{"±CRB":>8s}')
+    fits = (gn["real"], adam["real"], params.to_real(theta), params.to_real(sol.x))
+    print(f"{'param':20s}{'truth':>8s}{'GN':>8s}{'Adam':>8s}{'own':>8s}{'scipy':>8s}{'±CRB':>8s}")
     for i, f in enumerate(FIELDS):
         errs = [r[i] / truth[i] - 1 for r in fits]
-        print(f'{f:20s}{truth[i]:8.3f}' + ''.join(f'{e:+8.1%}' for e in errs) + f'{sigma[i]:8.1%}')
-    print(f'final loss: GN {gn["loss"][-1]:.1f}  Adam {adam["loss"][-1]:.1f}  own {loss:.1f}  '
-          f'(at truth {problem.loss(theta_true, steps):.1f})')
+        print(f"{f:20s}{truth[i]:8.3f}" + "".join(f"{e:+8.1%}" for e in errs) + f"{sigma[i]:8.1%}")
+    print(
+        f"final loss: GN {gn['loss'][-1]:.1f}  Adam {adam['loss'][-1]:.1f}  own {loss:.1f}  "
+        f"(at truth {problem.loss(theta_true, steps):.1f})"
+    )
 
 
-if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--n-photons', type=int, default=1_000_000, help='photons per source [1000000]')
-    ap.add_argument('--steps', type=int, default=60,
-                    help='steps of each solver (scipy: evaluations) [60]')
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--n-photons", type=int, default=1_000_000, help="photons per source [1000000]")
+    ap.add_argument(
+        "--steps", type=int, default=60, help="steps of each solver (scipy: evaluations) [60]"
+    )
     main(**vars(ap.parse_args()))

@@ -5,6 +5,7 @@ ROOT files. The full wrapper ``read_particle_data_from_photonsim``
 calls into ``interaction._derive_views_from_segments`` for
 categorization.
 """
+
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -20,9 +21,9 @@ __all__ = [
 ]
 
 
-def read_event_data_from_photonsim(root_file_path, entry_index,
-                                   emission_processes=("cherenkov",),
-                                   medium_params=None, rng=None):
+def read_event_data_from_photonsim(
+    root_file_path, entry_index, emission_processes=("cherenkov",), medium_params=None, rng=None
+):
     """Read injectable per-photon arrays for one event, for the requested
     emission processes, ready to feed the ``source='photons'`` simulator.
 
@@ -64,15 +65,14 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
         - ``N``                        : int, total photon count
         - ``energy``                   : float, primary energy (MeV)
     """
-    from lucid.sources.scintillation_photons import expand_segments_to_photons
     from lucid.dataset.schema import EMISSION_PROCESS_CHERENKOV
+    from lucid.sources.scintillation_photons import expand_segments_to_photons
 
     procs = tuple(emission_processes)
     valid = {"cherenkov", "scintillation"}
     bad = set(procs) - valid
     if bad:
-        raise ValueError(f"unknown emission_processes {sorted(bad)}; "
-                         f"valid: {sorted(valid)}")
+        raise ValueError(f"unknown emission_processes {sorted(bad)}; valid: {sorted(valid)}")
     if not procs:
         raise ValueError("emission_processes must be non-empty")
 
@@ -88,8 +88,10 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
         P.append(np.full(nc, EMISSION_PROCESS_CHERENKOV, dtype=np.int8))
     if "scintillation" in procs:
         if medium_params is None or rng is None:
-            raise ValueError("emission_processes includes 'scintillation' but "
-                             "medium_params and/or rng were not provided")
+            raise ValueError(
+                "emission_processes includes 'scintillation' but "
+                "medium_params and/or rng were not provided"
+            )
         sc = expand_segments_to_photons(raw["segments_raw"], medium_params, rng)
         O.append(np.asarray(sc["photon_origins"], dtype=np.float32))
         D.append(np.asarray(sc["photon_directions"], dtype=np.float32))
@@ -97,10 +99,8 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
         W.append(np.asarray(sc["photon_wavelengths"], dtype=np.float32))
         P.append(np.asarray(sc["photon_emission_process"], dtype=np.int8))
 
-    origins = (np.concatenate(O, axis=0) if O
-               else np.zeros((0, 3), dtype=np.float32))
-    directions = (np.concatenate(D, axis=0) if D
-                  else np.zeros((0, 3), dtype=np.float32))
+    origins = np.concatenate(O, axis=0) if O else np.zeros((0, 3), dtype=np.float32)
+    directions = np.concatenate(D, axis=0) if D else np.zeros((0, 3), dtype=np.float32)
     times = np.concatenate(T) if T else np.zeros(0, dtype=np.float32)
     wls = np.concatenate(W) if W else np.zeros(0, dtype=np.float32)
     procarr = np.concatenate(P) if P else np.zeros(0, dtype=np.int8)
@@ -133,9 +133,9 @@ def _read_photons_for_event(raw_tree, event_idx):
     """
     import numpy as np
 
-    eids = raw_tree['EventID'].array(library='np')
-    chunk_start_ids = raw_tree['ChunkStartID'].array(library='np')
-    mask = (eids == event_idx)
+    eids = raw_tree["EventID"].array(library="np")
+    chunk_start_ids = raw_tree["ChunkStartID"].array(library="np")
+    mask = eids == event_idx
     matching = np.flatnonzero(mask)
     if matching.size == 0:
         # Empty event (no photons emitted). Return zero-length arrays.
@@ -150,22 +150,44 @@ def _read_photons_for_event(raw_tree, event_idx):
     # practice — chunks for one event are written together — but the
     # sort+range approach is robust to ordering).
     chunk_data = raw_tree.arrays(
-        ['PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
-         'PhotonDirX', 'PhotonDirY', 'PhotonDirZ',
-         'PhotonTime', 'PhotonWavelength'],
-        entry_start=entry_lo, entry_stop=entry_hi + 1, library='np',
+        [
+            "PhotonPosX",
+            "PhotonPosY",
+            "PhotonPosZ",
+            "PhotonDirX",
+            "PhotonDirY",
+            "PhotonDirZ",
+            "PhotonTime",
+            "PhotonWavelength",
+        ],
+        entry_start=entry_lo,
+        entry_stop=entry_hi + 1,
+        library="np",
     )
     # Re-index by `matching - entry_lo` to honor the sorted order.
     rel = matching - entry_lo
 
-    posx = np.concatenate([chunk_data['PhotonPosX'][i] for i in rel]).astype(np.float32, copy=False) / 1000.0
-    posy = np.concatenate([chunk_data['PhotonPosY'][i] for i in rel]).astype(np.float32, copy=False) / 1000.0
-    posz = np.concatenate([chunk_data['PhotonPosZ'][i] for i in rel]).astype(np.float32, copy=False) / 1000.0
-    dirx = np.concatenate([chunk_data['PhotonDirX'][i] for i in rel]).astype(np.float32, copy=False)
-    diry = np.concatenate([chunk_data['PhotonDirY'][i] for i in rel]).astype(np.float32, copy=False)
-    dirz = np.concatenate([chunk_data['PhotonDirZ'][i] for i in rel]).astype(np.float32, copy=False)
-    times = np.concatenate([chunk_data['PhotonTime'][i] for i in rel]).astype(np.float32, copy=False)
-    wls = np.concatenate([chunk_data['PhotonWavelength'][i] for i in rel]).astype(np.float32, copy=False)
+    posx = (
+        np.concatenate([chunk_data["PhotonPosX"][i] for i in rel]).astype(np.float32, copy=False)
+        / 1000.0
+    )
+    posy = (
+        np.concatenate([chunk_data["PhotonPosY"][i] for i in rel]).astype(np.float32, copy=False)
+        / 1000.0
+    )
+    posz = (
+        np.concatenate([chunk_data["PhotonPosZ"][i] for i in rel]).astype(np.float32, copy=False)
+        / 1000.0
+    )
+    dirx = np.concatenate([chunk_data["PhotonDirX"][i] for i in rel]).astype(np.float32, copy=False)
+    diry = np.concatenate([chunk_data["PhotonDirY"][i] for i in rel]).astype(np.float32, copy=False)
+    dirz = np.concatenate([chunk_data["PhotonDirZ"][i] for i in rel]).astype(np.float32, copy=False)
+    times = np.concatenate([chunk_data["PhotonTime"][i] for i in rel]).astype(
+        np.float32, copy=False
+    )
+    wls = np.concatenate([chunk_data["PhotonWavelength"][i] for i in rel]).astype(
+        np.float32, copy=False
+    )
 
     photon_positions = np.column_stack((posx, posy, posz))
     photon_directions = np.column_stack((dirx, diry, dirz))
@@ -198,12 +220,13 @@ def get_max_photons_per_particle(root_file_path, n_events=None):
     import uproot
 
     root_file = uproot.open(root_file_path)
-    tree = root_file['OpticalPhotons']
+    tree = root_file["OpticalPhotons"]
     num_entries = tree.num_entries
     entry_stop = min(n_events, num_entries) if n_events is not None else num_entries
 
-    n_photons_per_event = tree['NOpticalPhotons'].array(
-        entry_start=0, entry_stop=entry_stop, library='np')
+    n_photons_per_event = tree["NOpticalPhotons"].array(
+        entry_start=0, entry_stop=entry_stop, library="np"
+    )
     max_photons = int(n_photons_per_event.max()) if n_photons_per_event.size > 0 else 0
 
     root_file.close()
@@ -226,43 +249,46 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     dict
         Dictionary containing photon_origins, photon_directions, and energy
     """
-    import uproot
     import jax.numpy as jnp
+    import uproot
 
     # Open the ROOT file
     root_file = uproot.open(root_file_path)
 
     # Per-photon scalars are in OpticalPhotonsRaw (chunked); only
     # event-level metadata stays on OpticalPhotons.
-    if 'OpticalPhotonsRaw' not in root_file:
+    if "OpticalPhotonsRaw" not in root_file:
         raise ValueError(
             f"PhotonSim ROOT file {root_file_path} is missing OpticalPhotonsRaw. "
             f"Re-simulate with the current PhotonSim build."
         )
-    tree = root_file['OpticalPhotons']
-    raw_tree = root_file['OpticalPhotonsRaw']
+    tree = root_file["OpticalPhotons"]
+    raw_tree = root_file["OpticalPhotonsRaw"]
 
-    tree_data = tree.arrays(['PrimaryEnergy'],
-                            entry_start=entry_index, entry_stop=entry_index+1, library='np')
+    tree_data = tree.arrays(
+        ["PrimaryEnergy"], entry_start=entry_index, entry_stop=entry_index + 1, library="np"
+    )
 
     # Extract primary energy (already in MeV)
-    energy = float(tree_data['PrimaryEnergy'][0])
+    energy = float(tree_data["PrimaryEnergy"][0])
 
     # Stitch chunks for this event into flat per-photon arrays
-    photon_positions, photon_directions, photon_times, photon_wavelengths = \
-        _read_photons_for_event(raw_tree, entry_index)
+    photon_positions, photon_directions, photon_times, photon_wavelengths = _read_photons_for_event(
+        raw_tree, entry_index
+    )
 
     result = {
-        'photon_origins': jnp.array(photon_positions),     # Combined position vectors in m
-        'photon_directions': jnp.array(photon_directions), # Combined direction vectors
-        'photon_times': jnp.array(photon_times),
-        'energy': energy  # Energy in MeV
+        "photon_origins": jnp.array(photon_positions),  # Combined position vectors in m
+        "photon_directions": jnp.array(photon_directions),  # Combined direction vectors
+        "photon_times": jnp.array(photon_times),
+        "energy": energy,  # Energy in MeV
     }
 
     # Per-photon wavelengths (nm) — always present in OpticalPhotonsRaw.
-    result['wavelengths'] = jnp.array(photon_wavelengths)
+    result["wavelengths"] = jnp.array(photon_wavelengths)
 
     return result
+
 
 def read_primary(root_file_path, entry_index):
     """The primary track of a single-primary event, as Geant4 recorded it.
@@ -272,18 +298,29 @@ def read_primary(root_file_path, entry_index):
     raises -- "the primary" is not defined for it.
     """
     import uproot
-    names = ['TrackInfo_ParentTrackID', 'TrackInfo_PosX', 'TrackInfo_PosY', 'TrackInfo_PosZ',
-             'TrackInfo_DirX', 'TrackInfo_DirY', 'TrackInfo_DirZ']
+
+    names = [
+        "TrackInfo_ParentTrackID",
+        "TrackInfo_PosX",
+        "TrackInfo_PosY",
+        "TrackInfo_PosZ",
+        "TrackInfo_DirX",
+        "TrackInfo_DirY",
+        "TrackInfo_DirZ",
+    ]
     with uproot.open(root_file_path) as f:
-        t = f['OpticalPhotons'].arrays(names, entry_start=entry_index,
-                                       entry_stop=entry_index + 1, library='np')
-    primaries = np.flatnonzero(np.asarray(t['TrackInfo_ParentTrackID'][0]) == 0)
+        t = f["OpticalPhotons"].arrays(
+            names, entry_start=entry_index, entry_stop=entry_index + 1, library="np"
+        )
+    primaries = np.flatnonzero(np.asarray(t["TrackInfo_ParentTrackID"][0]) == 0)
     if primaries.size != 1:
-        raise ValueError(f'{root_file_path} entry {entry_index} has {primaries.size} primary '
-                         f'tracks (ParentTrackID == 0); read_primary needs exactly one')
+        raise ValueError(
+            f"{root_file_path} entry {entry_index} has {primaries.size} primary "
+            f"tracks (ParentTrackID == 0); read_primary needs exactly one"
+        )
     i = primaries[0]
-    pos = np.array([t[f'TrackInfo_Pos{a}'][0][i] for a in 'XYZ'], dtype=np.float64) / 1000.0
-    d = np.array([t[f'TrackInfo_Dir{a}'][0][i] for a in 'XYZ'], dtype=np.float64)
+    pos = np.array([t[f"TrackInfo_Pos{a}"][0][i] for a in "XYZ"], dtype=np.float64) / 1000.0
+    d = np.array([t[f"TrackInfo_Dir{a}"][0][i] for a in "XYZ"], dtype=np.float64)
     return pos, d / np.linalg.norm(d)
 
 
@@ -316,27 +353,27 @@ def read_event_raw(root_file_path, entry_index, opened_file=None):
         - 'primary_energy', 'rootracker_entry_id', 'neutrino_pdg',
           'neutrino_energy_MeV'
     """
-    import uproot
     import numpy as np
+    import uproot
 
     # Reuse a caller-provided open handle when given (avoids re-opening +
     # re-parsing the tree/branch metadata on every entry — a ~10x read cost
     # when a driver reads many entries from one file, e.g. a supernova burst).
     root_file = opened_file if opened_file is not None else uproot.open(root_file_path)
-    tree = root_file['OpticalPhotons']
+    tree = root_file["OpticalPhotons"]
 
     # Per-photon scalar measurements live on a sister tree
     # (OpticalPhotonsRaw) as fixed-K chunks so PhotonSim's peak RAM is
     # bounded at any energy. We assemble per-event flat arrays here from
     # the chunks belonging to entry_index. Old ROOT files without
     # OpticalPhotonsRaw are not supported (re-simulate to migrate).
-    if 'OpticalPhotonsRaw' not in root_file:
+    if "OpticalPhotonsRaw" not in root_file:
         raise ValueError(
             f"PhotonSim ROOT file {root_file_path} is missing OpticalPhotonsRaw. "
             f"This LUCiD release expects the chunked photon layout. "
             f"Re-simulate with the current PhotonSim build."
         )
-    raw_tree = root_file['OpticalPhotonsRaw']
+    raw_tree = root_file["OpticalPhotonsRaw"]
 
     # Verify the post-Stage-5a schema. ``Segment_TrackID`` is the inline
     # track-ownership branch added when the meaningful-tracks filter
@@ -345,8 +382,9 @@ def read_event_raw(root_file_path, entry_index, opened_file=None):
     # the input the Python categorizer needs (Stage 1).
     available = set(tree.keys())
     required = {
-        'Segment_TrackID', 'Photon_SegmentIndex',
-        'TrackInfo_CreatorProcess',
+        "Segment_TrackID",
+        "Photon_SegmentIndex",
+        "TrackInfo_CreatorProcess",
     }
     missing = required - available
     if missing:
@@ -357,104 +395,121 @@ def read_event_raw(root_file_path, entry_index, opened_file=None):
         )
 
     branches_to_read = [
-        'PrimaryEnergy',
-        'TrackInfo_TrackID',
-        'TrackInfo_PosX', 'TrackInfo_PosY', 'TrackInfo_PosZ',
-        'TrackInfo_DirX', 'TrackInfo_DirY', 'TrackInfo_DirZ',
-        'TrackInfo_Energy', 'TrackInfo_Time',
-        'TrackInfo_ParentTrackID', 'TrackInfo_PDG',
-        'TrackInfo_CreatorProcess',
-        'NSegments',
-        'Segment_StartX', 'Segment_StartY', 'Segment_StartZ',
-        'Segment_EndX', 'Segment_EndY', 'Segment_EndZ',
-        'Segment_DirX', 'Segment_DirY', 'Segment_DirZ',
-        'Segment_Edep', 'Segment_Time',
-        'Segment_BetaStart', 'Segment_NCherenkov',
-        'Segment_TrackID',
-        'Photon_SegmentIndex',
-        'RooTrackerEntryID', 'IncomingNuPdg', 'IncomingNuKE',
+        "PrimaryEnergy",
+        "TrackInfo_TrackID",
+        "TrackInfo_PosX",
+        "TrackInfo_PosY",
+        "TrackInfo_PosZ",
+        "TrackInfo_DirX",
+        "TrackInfo_DirY",
+        "TrackInfo_DirZ",
+        "TrackInfo_Energy",
+        "TrackInfo_Time",
+        "TrackInfo_ParentTrackID",
+        "TrackInfo_PDG",
+        "TrackInfo_CreatorProcess",
+        "NSegments",
+        "Segment_StartX",
+        "Segment_StartY",
+        "Segment_StartZ",
+        "Segment_EndX",
+        "Segment_EndY",
+        "Segment_EndZ",
+        "Segment_DirX",
+        "Segment_DirY",
+        "Segment_DirZ",
+        "Segment_Edep",
+        "Segment_Time",
+        "Segment_BetaStart",
+        "Segment_NCherenkov",
+        "Segment_TrackID",
+        "Photon_SegmentIndex",
+        "RooTrackerEntryID",
+        "IncomingNuPdg",
+        "IncomingNuKE",
     ]
     tree_data = tree.arrays(
         branches_to_read,
-        entry_start=entry_index, entry_stop=entry_index + 1,
-        library='np',
+        entry_start=entry_index,
+        entry_stop=entry_index + 1,
+        library="np",
     )
 
-    primary_energy = float(tree_data['PrimaryEnergy'][0])
+    primary_energy = float(tree_data["PrimaryEnergy"][0])
 
     # Pull this event's photon chunks from OpticalPhotonsRaw. Concatenate
     # in ascending ChunkStartID order so the resulting flat arrays line up
     # with global photon IDs.
-    photon_positions, photon_directions, photon_times, photon_wavelengths = \
-        _read_photons_for_event(raw_tree, entry_index)
+    photon_positions, photon_directions, photon_times, photon_wavelengths = _read_photons_for_event(
+        raw_tree, entry_index
+    )
 
     # ---- TrackInfo_* → track_info_dict (raw, pre-categorization) ----
-    track_ids = np.asarray(tree_data['TrackInfo_TrackID'][0], dtype=np.int64)
-    track_posx = np.asarray(tree_data['TrackInfo_PosX'][0], dtype=np.float64) / 1000.0  # mm → m
-    track_posy = np.asarray(tree_data['TrackInfo_PosY'][0], dtype=np.float64) / 1000.0
-    track_posz = np.asarray(tree_data['TrackInfo_PosZ'][0], dtype=np.float64) / 1000.0
-    track_dirx = np.asarray(tree_data['TrackInfo_DirX'][0], dtype=np.float64)
-    track_diry = np.asarray(tree_data['TrackInfo_DirY'][0], dtype=np.float64)
-    track_dirz = np.asarray(tree_data['TrackInfo_DirZ'][0], dtype=np.float64)
-    track_energies = np.asarray(tree_data['TrackInfo_Energy'][0], dtype=np.float64)
-    track_times = np.asarray(tree_data['TrackInfo_Time'][0], dtype=np.float64)
-    track_parent_ids = np.asarray(tree_data['TrackInfo_ParentTrackID'][0], dtype=np.int64)
-    track_pdgs = np.asarray(tree_data['TrackInfo_PDG'][0], dtype=np.int64)
-    track_processes = tree_data['TrackInfo_CreatorProcess'][0]  # vector<string>
+    track_ids = np.asarray(tree_data["TrackInfo_TrackID"][0], dtype=np.int64)
+    track_posx = np.asarray(tree_data["TrackInfo_PosX"][0], dtype=np.float64) / 1000.0  # mm → m
+    track_posy = np.asarray(tree_data["TrackInfo_PosY"][0], dtype=np.float64) / 1000.0
+    track_posz = np.asarray(tree_data["TrackInfo_PosZ"][0], dtype=np.float64) / 1000.0
+    track_dirx = np.asarray(tree_data["TrackInfo_DirX"][0], dtype=np.float64)
+    track_diry = np.asarray(tree_data["TrackInfo_DirY"][0], dtype=np.float64)
+    track_dirz = np.asarray(tree_data["TrackInfo_DirZ"][0], dtype=np.float64)
+    track_energies = np.asarray(tree_data["TrackInfo_Energy"][0], dtype=np.float64)
+    track_times = np.asarray(tree_data["TrackInfo_Time"][0], dtype=np.float64)
+    track_parent_ids = np.asarray(tree_data["TrackInfo_ParentTrackID"][0], dtype=np.int64)
+    track_pdgs = np.asarray(tree_data["TrackInfo_PDG"][0], dtype=np.int64)
+    track_processes = tree_data["TrackInfo_CreatorProcess"][0]  # vector<string>
 
     track_info_dict = {}
     for i in range(len(track_ids)):
         tid = int(track_ids[i])
         track_info_dict[tid] = {
-            'track_id': tid,
+            "track_id": tid,
             # category / sub_id filled in by _derive_views_from_segments.
-            'category': -1,
-            'sub_id': -1,
-            'position': np.array([track_posx[i], track_posy[i], track_posz[i]]),
-            'direction': np.array([track_dirx[i], track_diry[i], track_dirz[i]]),
-            'energy': float(track_energies[i]),
-            'time': float(track_times[i]),
-            'parent_id': int(track_parent_ids[i]),
-            'pdg': int(track_pdgs[i]),
-            'creator_process': str(track_processes[i]),
+            "category": -1,
+            "sub_id": -1,
+            "position": np.array([track_posx[i], track_posy[i], track_posz[i]]),
+            "direction": np.array([track_dirx[i], track_diry[i], track_dirz[i]]),
+            "energy": float(track_energies[i]),
+            "time": float(track_times[i]),
+            "parent_id": int(track_parent_ids[i]),
+            "pdg": int(track_pdgs[i]),
+            "creator_process": str(track_processes[i]),
         }
 
     # ---- Raw segment table (no filtering) ----
     # Endpoints stay in mm here so ``_derive_views_from_segments`` can hand
     # the same arrays into ``assign_group_ids`` without round-trip-converting.
-    n_segments_raw = int(tree_data['NSegments'][0])
+    n_segments_raw = int(tree_data["NSegments"][0])
     segments_raw = {
-        'start_x_mm': np.asarray(tree_data['Segment_StartX'][0], dtype=np.float64),
-        'start_y_mm': np.asarray(tree_data['Segment_StartY'][0], dtype=np.float64),
-        'start_z_mm': np.asarray(tree_data['Segment_StartZ'][0], dtype=np.float64),
-        'end_x_mm':   np.asarray(tree_data['Segment_EndX'][0], dtype=np.float64),
-        'end_y_mm':   np.asarray(tree_data['Segment_EndY'][0], dtype=np.float64),
-        'end_z_mm':   np.asarray(tree_data['Segment_EndZ'][0], dtype=np.float64),
-        'dir_x':      np.asarray(tree_data['Segment_DirX'][0], dtype=np.float64),
-        'dir_y':      np.asarray(tree_data['Segment_DirY'][0], dtype=np.float64),
-        'dir_z':      np.asarray(tree_data['Segment_DirZ'][0], dtype=np.float64),
-        'edep':       np.asarray(tree_data['Segment_Edep'][0], dtype=np.float64),
-        'time':       np.asarray(tree_data['Segment_Time'][0], dtype=np.float64),
-        'beta_start': np.asarray(tree_data['Segment_BetaStart'][0], dtype=np.float64),
-        'n_cherenkov':np.asarray(tree_data['Segment_NCherenkov'][0], dtype=np.int64),
-        'track_id':   np.asarray(tree_data['Segment_TrackID'][0], dtype=np.int64),
-        'n_segments': n_segments_raw,
+        "start_x_mm": np.asarray(tree_data["Segment_StartX"][0], dtype=np.float64),
+        "start_y_mm": np.asarray(tree_data["Segment_StartY"][0], dtype=np.float64),
+        "start_z_mm": np.asarray(tree_data["Segment_StartZ"][0], dtype=np.float64),
+        "end_x_mm": np.asarray(tree_data["Segment_EndX"][0], dtype=np.float64),
+        "end_y_mm": np.asarray(tree_data["Segment_EndY"][0], dtype=np.float64),
+        "end_z_mm": np.asarray(tree_data["Segment_EndZ"][0], dtype=np.float64),
+        "dir_x": np.asarray(tree_data["Segment_DirX"][0], dtype=np.float64),
+        "dir_y": np.asarray(tree_data["Segment_DirY"][0], dtype=np.float64),
+        "dir_z": np.asarray(tree_data["Segment_DirZ"][0], dtype=np.float64),
+        "edep": np.asarray(tree_data["Segment_Edep"][0], dtype=np.float64),
+        "time": np.asarray(tree_data["Segment_Time"][0], dtype=np.float64),
+        "beta_start": np.asarray(tree_data["Segment_BetaStart"][0], dtype=np.float64),
+        "n_cherenkov": np.asarray(tree_data["Segment_NCherenkov"][0], dtype=np.int64),
+        "track_id": np.asarray(tree_data["Segment_TrackID"][0], dtype=np.int64),
+        "n_segments": n_segments_raw,
     }
-    photon_segment_index_raw = np.asarray(
-        tree_data['Photon_SegmentIndex'][0], dtype=np.int64)
+    photon_segment_index_raw = np.asarray(tree_data["Photon_SegmentIndex"][0], dtype=np.int64)
 
     return {
-        'photon_origins':           photon_positions,
-        'photon_directions':        photon_directions,
-        'photon_times':              photon_times,
-        'photon_wavelengths':        photon_wavelengths,
-        'photon_segment_index_raw': photon_segment_index_raw,
-        'segments_raw':              segments_raw,
-        'track_info_dict':           track_info_dict,
-        'primary_energy':            primary_energy,
-        'rootracker_entry_id':       int(tree_data['RooTrackerEntryID'][0]),
-        'neutrino_pdg':              int(tree_data['IncomingNuPdg'][0]),
-        'neutrino_energy_MeV':       float(tree_data['IncomingNuKE'][0]),
+        "photon_origins": photon_positions,
+        "photon_directions": photon_directions,
+        "photon_times": photon_times,
+        "photon_wavelengths": photon_wavelengths,
+        "photon_segment_index_raw": photon_segment_index_raw,
+        "segments_raw": segments_raw,
+        "track_info_dict": track_info_dict,
+        "primary_energy": primary_energy,
+        "rootracker_entry_id": int(tree_data["RooTrackerEntryID"][0]),
+        "neutrino_pdg": int(tree_data["IncomingNuPdg"][0]),
+        "neutrino_energy_MeV": float(tree_data["IncomingNuKE"][0]),
     }
 
 
@@ -467,7 +522,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index):
     from lucid.sources.interaction import _derive_views_from_segments
 
     view = _derive_views_from_segments(read_event_raw(root_file_path, entry_index))
-    owner = np.asarray(view['photon_particle_idx'], dtype=np.int64)
-    for i, particle in enumerate(view['particles']):
-        particle['photon_indices'] = np.flatnonzero(owner == i).tolist()
+    owner = np.asarray(view["photon_particle_idx"], dtype=np.int64)
+    for i, particle in enumerate(view["particles"]):
+        particle["photon_indices"] = np.flatnonzero(owner == i).tolist()
     return view

@@ -6,9 +6,9 @@ multiply by 100 for a kernel that divided by 100; when one side of such a pair
 goes missing every photon starts 100x off and no other test notices, so pin the
 pass-through here.
 """
-import numpy as np
 
 import jax.numpy as jnp
+import numpy as np
 
 from lucid.sources.interaction import _trace_event_bucketed
 
@@ -21,19 +21,25 @@ class _CapturingSimulator:
         self.seen = []
 
     def __call__(self, key, photonsim_data):
-        self.seen.append(np.asarray(photonsim_data['photon_origins']))
+        self.seen.append(np.asarray(photonsim_data["photon_origins"]))
         n = self.n_sensors
         empty_f = jnp.zeros(0, dtype=jnp.float32)
         empty_i = jnp.zeros(0, dtype=jnp.int32)
-        return (jnp.zeros(n, dtype=jnp.float32), jnp.zeros(n, dtype=jnp.float32),
-                jnp.zeros(n, dtype=jnp.float32), empty_f, empty_f, empty_f,
-                empty_i, empty_i)
+        return (
+            jnp.zeros(n, dtype=jnp.float32),
+            jnp.zeros(n, dtype=jnp.float32),
+            jnp.zeros(n, dtype=jnp.float32),
+            empty_f,
+            empty_f,
+            empty_f,
+            empty_i,
+            empty_i,
+        )
 
 
 def test_bucketed_tracer_hands_the_kernel_metres_unchanged():
     n_photons, n_sensors = 5, 3
-    origins_m = np.array([[12.32238, -8.39766, -3.59919]] * n_photons,
-                         dtype=np.float32)
+    origins_m = np.array([[12.32238, -8.39766, -3.59919]] * n_photons, dtype=np.float32)
     sim = _CapturingSimulator(n_sensors)
 
     _trace_event_bucketed(
@@ -43,7 +49,9 @@ def test_bucketed_tracer_hands_the_kernel_metres_unchanged():
         np.zeros(n_photons, dtype=np.float32),
         np.full(n_photons, 400.0, dtype=np.float32),
         np.zeros(n_photons, dtype=np.int32),
-        n_sensors, (8,), __import__("jax").random.PRNGKey(0),
+        n_sensors,
+        (8,),
+        __import__("jax").random.PRNGKey(0),
     )
 
     assert sim.seen, "kernel was never called"

@@ -1,8 +1,9 @@
 #!/bin/bash
 # Script to monitor PhotonSim jobs on a SLURM cluster (S3DF, NERSC/Perlmutter): squeue
 
+set -euo pipefail
+
 # Colors for output
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
@@ -28,11 +29,11 @@ while getopts "awo:h" opt; do
 done
 
 function show_jobs() {
-    clear
+    clear || true  # no terminal (e.g. piped to a file)
     echo -e "${GREEN}=== PhotonSim Job Monitor ===${NC}"
     echo -e "Time: $(date)"
     echo ""
-    
+
     # Show running jobs
     echo -e "${YELLOW}Running Jobs:${NC}"
     if [ "$SHOW_ALL" = true ]; then
@@ -54,29 +55,29 @@ function show_jobs() {
     echo -e "PhotonSim jobs running: ${GREEN}$RUNNING${NC}"
     echo -e "PhotonSim jobs pending: ${YELLOW}$PENDING${NC}"
     echo -e "Total PhotonSim jobs: ${BLUE}$TOTAL${NC}"
-    
+
     # Check output directory if specified
     if [ -n "$OUTPUT_DIR" ] && [ -d "$OUTPUT_DIR" ]; then
         echo ""
         echo -e "${YELLOW}Output Files in $OUTPUT_DIR:${NC}"
-        
+
         # Count ROOT files by energy
         for energy_dir in $(find "$OUTPUT_DIR" -type d -name "*MeV" 2>/dev/null | sort -V); do
             ENERGY=$(basename "$energy_dir")
             ROOT_COUNT=$(find "$energy_dir" -name "*.root" 2>/dev/null | wc -l)
             LOG_COUNT=$(find "$energy_dir" -name "job-*.out" 2>/dev/null | wc -l)
-            
+
             if [ $ROOT_COUNT -gt 0 ] || [ $LOG_COUNT -gt 0 ]; then
                 echo "  $ENERGY: $ROOT_COUNT ROOT files, $LOG_COUNT job logs"
             fi
         done
-        
+
         # Show recent completions
         echo ""
         echo -e "${YELLOW}Recently completed (last 5):${NC}"
         find "$OUTPUT_DIR" -name "job-*.out" -type f -mmin -60 2>/dev/null | \
             xargs -I {} sh -c 'echo -n "  "; basename {} | cut -d. -f1; grep "Job ended at:" {} | tail -1' | \
-            tail -5
+            tail -5 || true
     fi
 }
 

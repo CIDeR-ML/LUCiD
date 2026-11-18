@@ -27,6 +27,7 @@ Scan pairs and half-ranges (centered on truth) as in the notebook:
 The scans and trajectories are cached in ``<data-dir>/loss_landscape_2d_ev<event>.h5``; the
 figure is written to ``<out>/loss_landscape_2d_ev<event>.{png,pdf}``. The published scans took ~11 min on an A100 at 250k rays.
 """
+
 import argparse
 import json
 import sys
@@ -37,19 +38,20 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from analysis.paper.utils.pipeline import TrackingPipeline, load_config  # noqa: E402
 from analysis.paper.utils import paths, provenance, studies  # noqa: E402
+from analysis.paper.utils.pipeline import TrackingPipeline, load_config  # noqa: E402
 
-FIGURE = 'loss_landscape'
+FIGURE = "loss_landscape"
 
 # The figure's physical parameters: the scans and the trajectories are in angle space. The fit's
 # 9-vector is [E, x,y,z, sinθ,cosθ, sinφ,cosφ, t0].
-PHYS_NAMES = ['x', 'y', 'z', 'phi', 'theta', 't0', 'E']
+PHYS_NAMES = ["x", "y", "z", "phi", "theta", "t0", "E"]
 
 
 def vec9_to_phys(v):
     """9-vector ``[E, x,y,z, sinθ,cosθ, sinφ,cosφ, t0]`` -> ``[x, y, z, phi, theta, t0, E]``."""
     from lucid.fitting.recon import vec9_angles
+
     v = np.asarray(v, float)
     theta, phi = vec9_angles(v, np)
     return np.array([v[1], v[2], v[3], phi, theta, v[8], v[0]])
@@ -64,17 +66,27 @@ def phys_to_vec9(p, xp=np):
 
     ``xp`` selects the array module: numpy by default, pass ``jax.numpy`` to stay traceable.
     """
-    return xp.stack([p[6], p[0], p[1], p[2],
-                     xp.sin(p[4]), xp.cos(p[4]),        # theta  <- index 4
-                     xp.sin(p[3]), xp.cos(p[3]),        # phi    <- index 3
-                     p[5]])                             # t0     <- index 5
+    return xp.stack(
+        [
+            p[6],
+            p[0],
+            p[1],
+            p[2],
+            xp.sin(p[4]),
+            xp.cos(p[4]),  # theta  <- index 4
+            xp.sin(p[3]),
+            xp.cos(p[3]),  # phi    <- index 3
+            p[5],
+        ]
+    )  # t0     <- index 5
+
 
 # notebook conventions ---------------------------------------------------------------------
 HALF_RANGE = dict(x=2.0, y=2.0, z=2.0, t0=4.0, theta=0.5, phi=0.5, E=250.0)
-SCAN_PAIRS = [('x', 'z'), ('y', 'phi'), ('phi', 'E'), ('x', 't0'), ('t0', 'phi'), ('t0', 'E')]
+SCAN_PAIRS = [("x", "z"), ("y", "phi"), ("phi", "E"), ("x", "t0"), ("t0", "phi"), ("t0", "E")]
 GUESS_SIGMA = dict(position=1.0, t0=3.0, angle=np.radians(10.0), energy=100.0)
 GUESS_SEED0 = 42
-GUESS_CLIP = 0.95          # guesses are clipped to the bounding box of this scaled detector volume
+GUESS_CLIP = 0.95  # guesses are clipped to the bounding box of this scaled detector volume
 
 # Rendering style: dLoss below VMIN shares the bottom colour; CONTOUR replaces the image with
 # N_LEVELS log-spaced filled contours over the grid cubic-interpolated ZOOM_FAC times finer.
@@ -88,30 +100,33 @@ def notebook_guess(true_phys, box, seed):
     """The notebook's generate_initial_guess_from_true, verbatim logic; ``box = (lo, hi)`` clips x, y, z."""
     rng = np.random.default_rng(seed)
     t = dict(zip(PHYS_NAMES, np.array(true_phys, float)))
-    g = dict(x=t['x'] + rng.normal(0, GUESS_SIGMA['position']),       # draw order is the notebook's
-             y=t['y'] + rng.normal(0, GUESS_SIGMA['position']),
-             z=t['z'] + rng.normal(0, GUESS_SIGMA['position']),
-             t0=t['t0'] + rng.normal(0, GUESS_SIGMA['t0']),
-             theta=t['theta'] + rng.normal(0, GUESS_SIGMA['angle']),
-             phi=np.mod(t['phi'] + rng.normal(0, GUESS_SIGMA['angle']), 2 * np.pi),
-             E=np.clip(t['E'] + rng.normal(0, GUESS_SIGMA['energy']), 300.0, 2000.0))
-    g['theta'] = np.clip(g['theta'], 0, np.pi)
-    g['t0'] = np.clip(g['t0'], -20.0, 20.0)
+    g = dict(
+        x=t["x"] + rng.normal(0, GUESS_SIGMA["position"]),  # draw order is the notebook's
+        y=t["y"] + rng.normal(0, GUESS_SIGMA["position"]),
+        z=t["z"] + rng.normal(0, GUESS_SIGMA["position"]),
+        t0=t["t0"] + rng.normal(0, GUESS_SIGMA["t0"]),
+        theta=t["theta"] + rng.normal(0, GUESS_SIGMA["angle"]),
+        phi=np.mod(t["phi"] + rng.normal(0, GUESS_SIGMA["angle"]), 2 * np.pi),
+        E=np.clip(t["E"] + rng.normal(0, GUESS_SIGMA["energy"]), 300.0, 2000.0),
+    )
+    g["theta"] = np.clip(g["theta"], 0, np.pi)
+    g["t0"] = np.clip(g["t0"], -20.0, 20.0)
     lo, hi = box
-    for i, n in enumerate(('x', 'y', 'z')):
+    for i, n in enumerate(("x", "y", "z")):
         g[n] = np.clip(g[n], lo[i], hi[i])
     return np.array([g[n] for n in PHYS_NAMES])
 
 
 def _h5_path(ddir, event):
-    return Path(ddir) / f'loss_landscape_2d_ev{event}.h5'
+    return Path(ddir) / f"loss_landscape_2d_ev{event}.h5"
 
 
 def generate_data(cfg, event, n_scan, n_guesses, ddir):
     """Scan the loss over each plane, fit from the notebook's guesses, cache both in one h5."""
+    import h5py
     import jax
     import jax.numpy as jnp
-    import h5py
+
     from lucid.fitting import fit_track
 
     NS = n_scan
@@ -119,10 +134,11 @@ def generate_data(cfg, event, n_scan, n_guesses, ddir):
     # ---- event + truth + observables via the CURRENT pipeline (no seeder needed) ----------
     pipe = TrackingPipeline(dict(cfg))
     P = pipe.prepare_event(event)
-    oc = jnp.asarray(P['oc']); ot = jnp.asarray(P['ot'])
-    th9 = P['th9']
+    oc = jnp.asarray(P["oc"])
+    ot = jnp.asarray(P["ot"])
+    th9 = P["th9"]
     true_phys = vec9_to_phys(th9)
-    keys = pipe.fit.keys(P['fit_key'])
+    keys = pipe.fit.keys(P["fit_key"])
     print(f"event {event}: truth phys {PHYS_NAMES} = {np.round(true_phys, 3)}", flush=True)
 
     # ---- the actual reconstruction loss, as a function of the PHYSICAL params -------------
@@ -138,62 +154,70 @@ def generate_data(cfg, event, n_scan, n_guesses, ddir):
         ls, gs = 0.0, np.zeros(7)
         for k in keys:
             l, g = vg(jnp.asarray(p), k)
-            ls += float(l); gs += np.asarray(g)
+            ls += float(l)
+            gs += np.asarray(g)
         return ls / len(keys), gs / len(keys)
 
     # ---- 2D scans (notebook grid: NS x NS centered on truth) ------------------------------
     scans = []
-    for (n1, n2) in SCAN_PAIRS:
+    for n1, n2 in SCAN_PAIRS:
         t0s = time.time()
         i1, i2 = PHYS_NAMES.index(n1), PHYS_NAMES.index(n2)
         v1 = np.linspace(true_phys[i1] - HALF_RANGE[n1], true_phys[i1] + HALF_RANGE[n1], NS)
         v2 = np.linspace(true_phys[i2] - HALF_RANGE[n2], true_phys[i2] + HALF_RANGE[n2], NS)
-        L = np.zeros((NS, NS)); G = np.zeros((NS, NS, 2))
+        L = np.zeros((NS, NS))
+        G = np.zeros((NS, NS, 2))
         for a, p1 in enumerate(v1):
             for b, p2 in enumerate(v2):
-                p = true_phys.copy(); p[i1] = p1; p[i2] = p2
+                p = true_phys.copy()
+                p[i1] = p1
+                p[i2] = p2
                 l, g = loss_and_grad(p)
-                L[a, b] = l; G[a, b] = (g[i1], g[i2])
+                L[a, b] = l
+                G[a, b] = (g[i1], g[i2])
         scans.append(dict(n1=n1, n2=n2, v1=v1, v2=v2, L=L, G=G))
-        print(f"scan ({n1},{n2}): {time.time()-t0s:.0f}s", flush=True)
+        print(f"scan ({n1},{n2}): {time.time() - t0s:.0f}s", flush=True)
 
     # Cache the (expensive) scans IMMEDIATELY, before the optimizer fits, so a fit-time
     # failure (e.g. GPU OOM) never discards the ~30 min of loss scans.
     ddir.mkdir(parents=True, exist_ok=True)
     h5path = _h5_path(ddir, event)
-    with h5py.File(h5path, 'w') as h5:
-        h5.attrs['config_json'] = json.dumps(cfg); h5.attrs['event'] = event
-        h5.attrs['phys_order'] = ','.join(PHYS_NAMES)
-        h5.create_dataset('truth_phys', data=true_phys)
+    with h5py.File(h5path, "w") as h5:
+        h5.attrs["config_json"] = json.dumps(cfg)
+        h5.attrs["event"] = event
+        h5.attrs["phys_order"] = ",".join(PHYS_NAMES)
+        h5.create_dataset("truth_phys", data=true_phys)
         for si, sc in enumerate(scans):
-            g = h5.create_group(f'scan{si}_{sc["n1"]}_{sc["n2"]}')
-            for k in ('v1', 'v2', 'L', 'G'):
+            g = h5.create_group(f"scan{si}_{sc['n1']}_{sc['n2']}")
+            for k in ("v1", "v2", "L", "G"):
                 g.create_dataset(k, data=sc[k])
     print(f"cached scans -> {h5path}", flush=True)
 
     # ---- 3 optimizations from notebook-style Gaussian guesses -----------------------------
     trajs = []
     for gi in range(n_guesses):
-        gp = notebook_guess(true_phys, pipe.det.volume.scaled(GUESS_CLIP).bounding_box(),
-                            GUESS_SEED0 + gi)
+        gp = notebook_guess(
+            true_phys, pipe.det.volume.scaled(GUESS_CLIP).bounding_box(), GUESS_SEED0 + gi
+        )
         t9g = np.asarray(t9_of_phys(gp))
-        res, H = fit_track(pipe.model, oc, ot, t9g, pipe.fit, key=P['fit_key'])
-        tr_phys = np.stack([vec9_to_phys(v) for v in H['traj']])
+        res, H = fit_track(pipe.model, oc, ot, t9g, pipe.fit, key=P["fit_key"])
+        tr_phys = np.stack([vec9_to_phys(v) for v in H["traj"]])
         fit_phys = vec9_to_phys(res)
         trajs.append(dict(guess=gp, traj=tr_phys, fit=fit_phys))
-        print(f"guess {gi}: start {np.round(gp,2)} -> fit {np.round(fit_phys,2)}", flush=True)
+        print(f"guess {gi}: start {np.round(gp, 2)} -> fit {np.round(fit_phys, 2)}", flush=True)
 
-    with h5py.File(h5path, 'a') as h5:                    # append trajectories to the cached scans
-        h5.attrs['finished'] = datetime.now().isoformat()
+    with h5py.File(h5path, "a") as h5:  # append trajectories to the cached scans
+        h5.attrs["finished"] = datetime.now().isoformat()
         for gi, t in enumerate(trajs):
-            g = h5.create_group(f'traj{gi}')
-            g.create_dataset('guess', data=t['guess'])
-            g.create_dataset('traj', data=t['traj'])
-            g.create_dataset('fit', data=t['fit'])
+            g = h5.create_group(f"traj{gi}")
+            g.create_dataset("guess", data=t["guess"])
+            g.create_dataset("traj", data=t["traj"])
+            g.create_dataset("fit", data=t["fit"])
     print(f"cached trajectories -> {h5path}", flush=True)
 
 
 # ------------------------------------------------------------------ plotting (notebook style)
+
 
 def plot_results(h5_path, out):
     """Make the figure from a cached h5 — the aesthetics of the original notebook's
@@ -201,143 +225,209 @@ def plot_results(h5_path, out):
     trajectory colors from 'Oranges', vmax=95th pct of pooled dLoss), at vmin VMIN."""
     import h5py
     import matplotlib
-    matplotlib.use('Agg')
+
+    matplotlib.use("Agg")
+    import matplotlib.patheffects as pe
     import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm
-    import matplotlib.patheffects as pe
 
-    plt.rcParams['text.usetex'] = False
-    plt.rcParams['font.family'] = 'serif'
-    plt.rcParams['font.size'] = 12
+    plt.rcParams["text.usetex"] = False
+    plt.rcParams["font.family"] = "serif"
+    plt.rcParams["font.size"] = 12
 
     # notebook gradient pre-normalization scaling (cell 11)
-    GSCALE = {'x': .05, 'y': .05, 'z': .05, 'theta': .005, 'phi': .005, 't0': .1, 'E': 1000}
+    GSCALE = {"x": 0.05, "y": 0.05, "z": 0.05, "theta": 0.005, "phi": 0.005, "t0": 0.1, "E": 1000}
 
     def format_label(name):
-        if name == 'theta': return '$\\theta$ (rad)'
-        if name == 'phi': return '$\\phi$ (rad)'
-        if name == 't0': return '$t_0$ (ns)'
-        if name == 'E': return 'E (MeV)'
-        return f'{name.upper()} (m)'
+        if name == "theta":
+            return "$\\theta$ (rad)"
+        if name == "phi":
+            return "$\\phi$ (rad)"
+        if name == "t0":
+            return "$t_0$ (ns)"
+        if name == "E":
+            return "E (MeV)"
+        return f"{name.upper()} (m)"
 
     scans, trajs = [], []
-    with h5py.File(h5_path, 'r') as f:
-        if 'finished' not in f.attrs:
-            raise ValueError(f'{h5_path}: the scan never finished; rerun the figure')
+    with h5py.File(h5_path, "r") as f:
+        if "finished" not in f.attrs:
+            raise ValueError(f"{h5_path}: the scan never finished; rerun the figure")
         for k in sorted(f.keys()):
-            if k.startswith('scan'):
-                _, n1, n2 = k.split('_', 2)
+            if k.startswith("scan"):
+                _, n1, n2 = k.split("_", 2)
                 g = f[k]
-                scans.append(dict(n1=n1, n2=n2, v1=g['v1'][:], v2=g['v2'][:],
-                                  L=g['L'][:], G=g['G'][:]))
-            elif k.startswith('traj'):
-                trajs.append(dict(guess=f[k]['guess'][:], traj=f[k]['traj'][:],
-                                  fit=f[k]['fit'][:]))
-        truth = f['truth_phys'][:]
-        names = f.attrs['phys_order'].split(',')
+                scans.append(
+                    dict(n1=n1, n2=n2, v1=g["v1"][:], v2=g["v2"][:], L=g["L"][:], G=g["G"][:])
+                )
+            elif k.startswith("traj"):
+                trajs.append(dict(guess=f[k]["guess"][:], traj=f[k]["traj"][:], fit=f[k]["fit"][:]))
+        truth = f["truth_phys"][:]
+        names = f.attrs["phys_order"].split(",")
     idx = {n: i for i, n in enumerate(names)}
 
     # cell-12 color scale: pooled dLoss, vmin VMIN (the notebook's 1e-1), vmax = 95th percentile
-    all_l = np.concatenate([s['L'].flatten() for s in scans])
+    all_l = np.concatenate([s["L"].flatten() for s in scans])
     all_l = all_l - all_l.min() + 1e-6
     vmax = float(np.percentile(all_l, 95))
 
-    cmap = plt.get_cmap('Oranges')
+    cmap = plt.get_cmap("Oranges")
     n_ev = len(trajs)
-    colors = [cmap(0.5 + 0.45 * (i / max(n_ev - 1, 1))) for i in range(n_ev)]   # stronger orange
+    colors = [cmap(0.5 + 0.45 * (i / max(n_ev - 1, 1))) for i in range(n_ev)]  # stronger orange
 
     fig, axes = plt.subplots(2, 3, figsize=(12, 6))
     axes = axes.flatten()
-    axes[2], axes[4] = axes[4], axes[2]          # the notebook's panel swap
+    axes[2], axes[4] = axes[4], axes[2]  # the notebook's panel swap
 
     img_handles = []
     for scan, ax in zip(scans, axes):
-        n1, n2 = scan['n1'], scan['n2']
-        losses = scan['L'].copy()
-        losses -= losses.min(); losses += 1e-6
-        gradients = scan['G'].copy()
+        n1, n2 = scan["n1"], scan["n2"]
+        losses = scan["L"].copy()
+        losses -= losses.min()
+        losses += 1e-6
+        gradients = scan["G"].copy()
         gradients[:, :, 0] *= GSCALE[n1]
         gradients[:, :, 1] *= GSCALE[n2]
 
-        p1, p2 = scan['v1'], scan['v2']
-        U = -gradients[:, :, 0].T; V = -gradients[:, :, 1].T
-        nrm = np.sqrt(U**2 + V**2); nrm = np.where(nrm == 0, 1, nrm)
-        U /= nrm; V /= nrm
+        p1, p2 = scan["v1"], scan["v2"]
+        U = -gradients[:, :, 0].T
+        V = -gradients[:, :, 1].T
+        nrm = np.sqrt(U**2 + V**2)
+        nrm = np.where(nrm == 0, 1, nrm)
+        U /= nrm
+        V /= nrm
 
         if CONTOUR:
             # smooth filled contours: cubic-interpolate the coarse NSxNS grid to a fine mesh,
             # then draw log-spaced filled levels + light contour lines for the loss "topography".
             from scipy.ndimage import zoom
+
             Z = np.clip(zoom(losses.T, ZOOM_FAC, order=3), VMIN, None)
             xf = np.linspace(p1[0], p1[-1], Z.shape[1])
             yf = np.linspace(p2[0], p2[-1], Z.shape[0])
             levels = np.logspace(np.log10(VMIN), np.log10(vmax), N_LEVELS)
-            im = ax.contourf(xf, yf, Z, levels=levels, cmap='viridis',
-                             norm=LogNorm(vmin=VMIN, vmax=vmax), extend='both')
-            ax.contour(xf, yf, Z, levels=levels[::3], colors='white',
-                       linewidths=0.4, alpha=0.45, norm=LogNorm(vmin=VMIN, vmax=vmax))
-            ax.set_aspect('auto')
+            im = ax.contourf(
+                xf,
+                yf,
+                Z,
+                levels=levels,
+                cmap="viridis",
+                norm=LogNorm(vmin=VMIN, vmax=vmax),
+                extend="both",
+            )
+            ax.contour(
+                xf,
+                yf,
+                Z,
+                levels=levels[::3],
+                colors="white",
+                linewidths=0.4,
+                alpha=0.45,
+                norm=LogNorm(vmin=VMIN, vmax=vmax),
+            )
+            ax.set_aspect("auto")
         else:
-            im = ax.imshow(losses.T, extent=[p1[0], p1[-1], p2[0], p2[-1]],
-                           origin='lower', aspect='auto', cmap='viridis',
-                           norm=LogNorm(vmin=VMIN, vmax=vmax))
+            im = ax.imshow(
+                losses.T,
+                extent=[p1[0], p1[-1], p2[0], p2[-1]],
+                origin="lower",
+                aspect="auto",
+                cmap="viridis",
+                norm=LogNorm(vmin=VMIN, vmax=vmax),
+            )
         img_handles.append(im)
-        ax.streamplot(np.linspace(p1[0], p1[-1], len(p1)), np.linspace(p2[0], p2[-1], len(p2)),
-                      U, V, color='white', density=0.6, linewidth=0.9, arrowsize=1.0)
+        ax.streamplot(
+            np.linspace(p1[0], p1[-1], len(p1)),
+            np.linspace(p2[0], p2[-1], len(p2)),
+            U,
+            V,
+            color="white",
+            density=0.6,
+            linewidth=0.9,
+            arrowsize=1.0,
+        )
         for t, color in zip(trajs, colors):
-            xp, yp = t['traj'][:, idx[n1]], t['traj'][:, idx[n2]]
-            ax.plot(xp, yp, color=color, linewidth=3.6, zorder=90, solid_capstyle='round',
-                    path_effects=[pe.Stroke(linewidth=5.4, foreground='black', alpha=0.55),
-                                  pe.Normal()])
-            ax.scatter(xp, yp, color=color, s=24, zorder=91, edgecolors='black', linewidths=0.3)
-            ax.plot(t['fit'][idx[n1]], t['fit'][idx[n2]], color='cyan', marker='x',
-                    markersize=16, markeredgewidth=3.2, zorder=100)
-        ax.plot(truth[idx[n1]], truth[idx[n2]], color='deeppink', marker='*',
-                markersize=20, zorder=99)
-        ax.set_xlabel(format_label(n1)); ax.set_ylabel(format_label(n2))
-        ax.set_xlim(p1[0], p1[-1]); ax.set_ylim(p2[0], p2[-1])
+            xp, yp = t["traj"][:, idx[n1]], t["traj"][:, idx[n2]]
+            ax.plot(
+                xp,
+                yp,
+                color=color,
+                linewidth=3.6,
+                zorder=90,
+                solid_capstyle="round",
+                path_effects=[
+                    pe.Stroke(linewidth=5.4, foreground="black", alpha=0.55),
+                    pe.Normal(),
+                ],
+            )
+            ax.scatter(xp, yp, color=color, s=24, zorder=91, edgecolors="black", linewidths=0.3)
+            ax.plot(
+                t["fit"][idx[n1]],
+                t["fit"][idx[n2]],
+                color="cyan",
+                marker="x",
+                markersize=16,
+                markeredgewidth=3.2,
+                zorder=100,
+            )
+        ax.plot(
+            truth[idx[n1]], truth[idx[n2]], color="deeppink", marker="*", markersize=20, zorder=99
+        )
+        ax.set_xlabel(format_label(n1))
+        ax.set_ylabel(format_label(n2))
+        ax.set_xlim(p1[0], p1[-1])
+        ax.set_ylim(p2[0], p2[-1])
 
     cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.7])
     cbar = fig.colorbar(img_handles[0], cax=cbar_ax)
-    cbar.set_ticks([])                                    # no numeric ticks — just the label
-    cbar.set_label('$\\Delta$ Loss (log scale)', fontsize=12)
+    cbar.set_ticks([])  # no numeric ticks — just the label
+    cbar.set_label("$\\Delta$ Loss (log scale)", fontsize=12)
     legend_elements = [
-        plt.Line2D([], [], color=colors[-1], lw=2, label='Optimization paths'),
-        plt.Line2D([], [], color='cyan', marker='x', lw=0, markersize=10, label='Reconstructed'),
-        plt.Line2D([], [], color='deeppink', marker='*', lw=0, markersize=12, label='True')]
-    fig.legend(handles=legend_elements, loc='upper center', ncol=3, frameon=False, fontsize=13)
+        plt.Line2D([], [], color=colors[-1], lw=2, label="Optimization paths"),
+        plt.Line2D([], [], color="cyan", marker="x", lw=0, markersize=10, label="Reconstructed"),
+        plt.Line2D([], [], color="deeppink", marker="*", lw=0, markersize=12, label="True"),
+    ]
+    fig.legend(handles=legend_elements, loc="upper center", ncol=3, frameon=False, fontsize=13)
     plt.subplots_adjust(left=0.05, right=0.90, top=0.92, bottom=0.08, wspace=0.34, hspace=0.32)
 
-    out = Path(out); out.mkdir(parents=True, exist_ok=True)
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
     base = str(out / Path(h5_path).stem)
-    for ext in ('png', 'pdf'):
-        fig.savefig(f'{base}.{ext}', dpi=150, bbox_inches='tight')
+    for ext in ("png", "pdf"):
+        fig.savefig(f"{base}.{ext}", dpi=150, bbox_inches="tight")
     print(f"wrote {base}.png (+pdf)", flush=True)
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--generate-data', action='store_true')
-    ap.add_argument('--plot-results', action='store_true')
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--generate-data", action="store_true")
+    ap.add_argument("--plot-results", action="store_true")
     src = ap.add_mutually_exclusive_group()
-    src.add_argument('--study', default='nrays_mu_250k',
-                     help='a published study config by name (studies.named_config)')
-    src.add_argument('--config', help='a complete study config JSON')
-    ap.add_argument('--root-base', default=None, help='dir with <particle>/<E>MeV_<N>events.root')
-    ap.add_argument('--event', type=int, default=1)
-    ap.add_argument('--n-scan', type=int, default=21)
-    ap.add_argument('--n-guesses', type=int, default=3)
-    ap.add_argument('--data-dir', default=None, help='where the scan h5 is cached')
-    ap.add_argument('--out', default=None, help='figure output dir')
+    src.add_argument(
+        "--study",
+        default="nrays_mu_250k",
+        help="a published study config by name (studies.named_config)",
+    )
+    src.add_argument("--config", help="a complete study config JSON")
+    ap.add_argument("--root-base", default=None, help="dir with <particle>/<E>MeV_<N>events.root")
+    ap.add_argument("--event", type=int, default=1)
+    ap.add_argument("--n-scan", type=int, default=21)
+    ap.add_argument("--n-guesses", type=int, default=3)
+    ap.add_argument("--data-dir", default=None, help="where the scan h5 is cached")
+    ap.add_argument("--out", default=None, help="figure output dir")
     a = ap.parse_args()
 
     ddir = Path(a.data_dir) if a.data_dir else paths.data_dir(FIGURE)
     out_fig = Path(a.out) if a.out else paths.figure_dir()
-    both = not (a.generate_data or a.plot_results)      # no flags => do both
+    both = not (a.generate_data or a.plot_results)  # no flags => do both
     if a.generate_data or both:
-        cfg = (load_config(a.config) if a.config
-               else studies.named_config(a.study, n_events=a.event + 1, root_base=a.root_base))
+        cfg = (
+            load_config(a.config)
+            if a.config
+            else studies.named_config(a.study, n_events=a.event + 1, root_base=a.root_base)
+        )
         generate_data(cfg, a.event, a.n_scan, a.n_guesses, ddir)
         provenance.write_run_record(ddir, __file__, a)
     if a.plot_results or both:
@@ -345,5 +435,5 @@ def main():
         provenance.write_run_record(out_fig, __file__, a)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

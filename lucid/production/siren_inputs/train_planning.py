@@ -19,53 +19,52 @@ from __future__ import annotations
 import shlex
 from typing import Any, Dict, List
 
-
 # Maps a baseline / run-override key to the matching `lucid-train-siren` flag.
 # Unknown keys raise in resolve_run() so typos don't silently lose params.
 FLAG_MAP: Dict[str, str] = {
-    "h5_path":             "--h5-path",
-    "num_steps":           "--num-steps",
-    "batch_size":          "--batch-size",
-    "optimizer":           "--optimizer",
-    "learning_rate":       "--learning-rate",
-    "min_lr":              "--min-lr",
-    "patience":            "--patience",
+    "h5_path": "--h5-path",
+    "num_steps": "--num-steps",
+    "batch_size": "--batch-size",
+    "optimizer": "--optimizer",
+    "learning_rate": "--learning-rate",
+    "min_lr": "--min-lr",
+    "patience": "--patience",
     "lr_reduction_factor": "--lr-reduction-factor",
-    "zero_threshold":      "--zero-threshold",
-    "zero_keep_frac":      "--zero-keep-frac",
-    "energy_balance":      "--energy-balance",
-    "target_importance":   "--target-importance",
-    "val_split":           "--val-split",
-    "hidden_features":     "--hidden-features",
-    "hidden_layers":       "--hidden-layers",
-    "w0":                  "--w0",
-    "weight_decay":        "--weight-decay",
-    "grad_clip_norm":      "--grad-clip-norm",
-    "seed":                "--seed",
-    "log_every":           "--log-every",
-    "val_every":           "--val-every",
-    "checkpoint_every":    "--checkpoint-every",
+    "zero_threshold": "--zero-threshold",
+    "zero_keep_frac": "--zero-keep-frac",
+    "energy_balance": "--energy-balance",
+    "target_importance": "--target-importance",
+    "val_split": "--val-split",
+    "hidden_features": "--hidden-features",
+    "hidden_layers": "--hidden-layers",
+    "w0": "--w0",
+    "weight_decay": "--weight-decay",
+    "grad_clip_norm": "--grad-clip-norm",
+    "seed": "--seed",
+    "log_every": "--log-every",
+    "val_every": "--val-every",
+    "checkpoint_every": "--checkpoint-every",
     "prediction_plot_every": "--prediction-plot-every",
 }
 
 
 # Short labels for folder names. Unmapped keys fall back to the raw key.
 NAME_MAP: Dict[str, str] = {
-    "patience":       "p",
+    "patience": "p",
     "zero_threshold": "z",
     "zero_keep_frac": "zf",
     "energy_balance": "ebal",
     "target_importance": "ti",
-    "batch_size":     "b",
-    "learning_rate":  "lr",
-    "min_lr":         "minlr",
-    "num_steps":      "steps",
+    "batch_size": "b",
+    "learning_rate": "lr",
+    "min_lr": "minlr",
+    "num_steps": "steps",
     "hidden_features": "hf",
-    "hidden_layers":   "hl",
-    "w0":              "w0",
-    "val_split":       "vs",
-    "weight_decay":    "wd",
-    "grad_clip_norm":  "gc",
+    "hidden_layers": "hl",
+    "w0": "w0",
+    "val_split": "vs",
+    "weight_decay": "wd",
+    "grad_clip_norm": "gc",
 }
 
 
@@ -92,13 +91,11 @@ def derive_run_name(diff: Dict[str, Any]) -> str:
     """Compact folder name from a run's diff against baseline."""
     if not diff:
         return "baseline"
-    parts = [f"{NAME_MAP.get(k, k)}{_fmt_value(v)}"
-             for k, v in sorted(diff.items())]
+    parts = [f"{NAME_MAP.get(k, k)}{_fmt_value(v)}" for k, v in sorted(diff.items())]
     return "_".join(parts)
 
 
-def resolve_run(baseline: Dict[str, Any],
-                overrides: Dict[str, Any]) -> Dict[str, Any]:
+def resolve_run(baseline: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
     """Merge baseline + overrides, validate keys, return the full config."""
     unknown = [k for k in overrides if k not in FLAG_MAP]
     if unknown:
@@ -109,8 +106,10 @@ def resolve_run(baseline: Dict[str, Any],
     merged = dict(baseline)
     merged.update(overrides)
     if "h5_path" not in merged:
-        raise ValueError("baseline missing the required key 'h5_path' (the table names the "
-                         "material, particle and kind)")
+        raise ValueError(
+            "baseline missing the required key 'h5_path' (the table names the "
+            "material, particle and kind)"
+        )
     return merged
 
 

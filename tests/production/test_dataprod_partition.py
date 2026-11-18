@@ -1,5 +1,6 @@
 """Unit tests for the dataprod fan-out partition round-robin
 (`lucid.production.dataprod.fanout`)."""
+
 from lucid.production.dataprod.fanout import (
     _parse_partition_spec,
     _WeightedRoundRobin,
@@ -19,16 +20,14 @@ class TestParsePartitionSpec:
         assert _parse_partition_spec("roma,milano") == [("roma", 1), ("milano", 1)]
 
     def test_weighted(self):
-        assert _parse_partition_spec("roma:130,milano:272") == [
-            ("roma", 130), ("milano", 272)]
+        assert _parse_partition_spec("roma:130,milano:272") == [("roma", 130), ("milano", 272)]
 
     def test_empty_spec(self):
         assert _parse_partition_spec("") == []
         assert _parse_partition_spec("  ") == []
 
     def test_whitespace_and_trailing_comma(self):
-        assert _parse_partition_spec(" roma , milano ,") == [
-            ("roma", 1), ("milano", 1)]
+        assert _parse_partition_spec(" roma , milano ,") == [("roma", 1), ("milano", 1)]
 
     def test_non_integer_suffix_is_part_of_name(self):
         # A ':x' that isn't a positive int stays in the name (no weight split).
@@ -61,9 +60,9 @@ class TestWeightedRoundRobin:
         # Heavier target appears first and the two are mixed, not segregated.
         wrr = _WeightedRoundRobin([("roma", 130), ("milano", 272)])
         first20 = [wrr.next() for _ in range(20)]
-        assert first20[0] == "milano"          # heavier weight leads
-        assert "roma" in first20[:6]            # lighter target shows up early
-        assert 0 < first20.count("roma") < 20   # genuinely mixed
+        assert first20[0] == "milano"  # heavier weight leads
+        assert "roma" in first20[:6]  # lighter target shows up early
+        assert 0 < first20.count("roma") < 20  # genuinely mixed
 
     def test_proportional_for_partial_wave(self):
         # 398 jobs split ~ in proportion to 130:272.

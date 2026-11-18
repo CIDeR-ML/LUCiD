@@ -26,7 +26,6 @@ from typing import NamedTuple, Optional
 
 import jax.numpy as jnp
 
-
 # Control wavelengths (nm) at which the fittable λ-deviation curves are anchored.
 # These are the SK calibration-laser lines; the deviation field of every optical
 # property is a value PER control wavelength, interpolated to each photon's λ.
@@ -56,14 +55,22 @@ class OpticalArrays(NamedTuple):
     abs_len : jnp.ndarray       (n,) absorption length, m
     qe : jnp.ndarray or None    (n,) per-photon QE weight, or None in scalar mode
     """
+
     scatter_len: jnp.ndarray
     mie_len: jnp.ndarray
     abs_len: jnp.ndarray
     qe: Optional[jnp.ndarray]
 
 
-def evaluate_optical_model(detector_params, wavelengths, medium, n_photons,
-                           *, qe_fn=None, control_lambda=CONTROL_WAVELENGTHS_NM):
+def evaluate_optical_model(
+    detector_params,
+    wavelengths,
+    medium,
+    n_photons,
+    *,
+    qe_fn=None,
+    control_lambda=CONTROL_WAVELENGTHS_NM,
+):
     """Evaluate per-photon optical properties.
 
     Parameters
@@ -116,8 +123,7 @@ def evaluate_optical_model(detector_params, wavelengths, medium, n_photons,
 
     # Wavelength mode: clamp λ into the medium grid, then length = 1 / coeff(λ),
     # scaled by the per-property multiplicative deviation curve (dev ≡ 1 default).
-    wl = jnp.clip(jnp.asarray(wavelengths),
-                  medium.wavelength_grid[0], medium.wavelength_grid[-1])
+    wl = jnp.clip(jnp.asarray(wavelengths), medium.wavelength_grid[0], medium.wavelength_grid[-1])
     sc = jnp.interp(wl, medium.wavelength_grid, medium.scatter_coeff)
     asym = jnp.interp(wl, medium.wavelength_grid, medium.mie_scatter_coeff)
     ac = jnp.interp(wl, medium.wavelength_grid, medium.absorption_coeff)

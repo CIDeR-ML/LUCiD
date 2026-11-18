@@ -17,6 +17,7 @@ The sampled step must reproduce the expected-value step's means; both are
 checked against the closed forms, at 2e5 vmapped keys. Nothing here builds a
 detector, so it runs in the default lane.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -35,8 +36,8 @@ OBLIQUE = np.array([1.0, 2.0, -2.0]) / 3.0
 
 def _base_args(key, **overrides):
     # Convenience: tests pass scalar wall/sensor rates; pack them into the refl_params pytree.
-    wall = overrides.pop('wall_reflection_rate', 0.5)
-    sensor = overrides.pop('sensor_reflection_rate', 0.3)
+    wall = overrides.pop("wall_reflection_rate", 0.5)
+    sensor = overrides.pop("sensor_reflection_rate", 0.3)
     args = dict(
         position=jnp.array([0.0, 0.0, 0.0]),
         direction=jnp.array([0.0, 0.0, 1.0]),
@@ -46,8 +47,7 @@ def _base_args(key, **overrides):
         scatter_length=50.0,
         mie_scatter_length=1.0e9,  # ≈ no Mie channel
         g=0.0,
-        refl_params=ScalarReflection(wall_rate=jnp.asarray(wall),
-                                     sensor_rate=jnp.asarray(sensor)),
+        refl_params=ScalarReflection(wall_rate=jnp.asarray(wall), sensor_rate=jnp.asarray(sensor)),
         absorption_length=100.0,
         hit_sensor=True,
         lam=jnp.asarray(0.0),
@@ -65,7 +65,7 @@ def _ev(**overrides):
 def _vmapped(step, n=N_MC, seed=0, **overrides):
     """The step evaluated on n independent keys (jitted), as NumPy float64 arrays."""
     args = _base_args(jax.random.PRNGKey(0), **overrides)
-    f = jax.jit(jax.vmap(lambda k: step(**{**args, 'rng_key': k})))
+    f = jax.jit(jax.vmap(lambda k: step(**{**args, "rng_key": k})))
     out = f(jax.random.split(jax.random.PRNGKey(seed), n))
     return [np.asarray(o, dtype=np.float64) for o in out]
 
@@ -120,28 +120,47 @@ class TestDetectionProbability:
     @pytest.mark.parametrize("R", [0.3, 1.0], ids=["R0.3", "mirror-sensor"])
     def test_detection_prob_formula(self, L_mie, hit_sensor, R):
         D, S, L_abs = 2.0, 50.0, 100.0
-        dp = _ev(surface_distance=D, scatter_length=S, mie_scatter_length=L_mie,
-                 absorption_length=L_abs, hit_sensor=hit_sensor,
-                 sensor_reflection_rate=R, wall_reflection_rate=0.9)[3]
-        npt.assert_allclose(float(dp), detect_closed_form(D, S, L_mie, L_abs, R),
-                            rtol=1e-5, atol=1e-7)
+        dp = _ev(
+            surface_distance=D,
+            scatter_length=S,
+            mie_scatter_length=L_mie,
+            absorption_length=L_abs,
+            hit_sensor=hit_sensor,
+            sensor_reflection_rate=R,
+            wall_reflection_rate=0.9,
+        )[3]
+        npt.assert_allclose(
+            float(dp), detect_closed_form(D, S, L_mie, L_abs, R), rtol=1e-5, atol=1e-7
+        )
 
 
 class TestTimeAndPosition:
     """On the surface branch both steps advance t by D/c and x by D d (+1e-4 m inward)."""
 
-    @pytest.mark.parametrize("step", [photon_iteration_update_factors, photon_iteration_sample],
-                             ids=["expected", "sampled"])
+    @pytest.mark.parametrize(
+        "step",
+        [photon_iteration_update_factors, photon_iteration_sample],
+        ids=["expected", "sampled"],
+    )
     @pytest.mark.parametrize("D", [2.0, 4.0])
     def test_time_and_position(self, step, D):
         c, t0 = 0.3, 5.0
         pos = jnp.array([0.5, -0.2, 0.1])
         direction = jnp.array([0.0, 0.6, 0.8])
-        normal = jnp.array([0.0, 0.0, 1.0])            # outward; the nudge is along -normal
-        for i in range(3):                              # any key: the branch is fixed
-            new_pos, _, new_time, *_ = step(**_base_args(
-                jax.random.PRNGKey(i), surface_distance=D, speed_of_light=c, time=t0,
-                position=pos, direction=direction, normal=normal, **NO_SCATTER))
+        normal = jnp.array([0.0, 0.0, 1.0])  # outward; the nudge is along -normal
+        for i in range(3):  # any key: the branch is fixed
+            new_pos, _, new_time, *_ = step(
+                **_base_args(
+                    jax.random.PRNGKey(i),
+                    surface_distance=D,
+                    speed_of_light=c,
+                    time=t0,
+                    position=pos,
+                    direction=direction,
+                    normal=normal,
+                    **NO_SCATTER,
+                )
+            )
             npt.assert_allclose(float(new_time), t0 + D / c, rtol=1e-6)
             npt.assert_allclose(new_pos, pos + D * direction - 1e-4 * normal, atol=1e-6)
 
@@ -153,8 +172,9 @@ class TestContinuingFactor:
         """With scattering off, detect + continue = exp(-D/L_A): the photon reaching the
         surface is either detected (1-R) or reflected (R), with the same survival."""
         D, L_abs, R = 2.0, 100.0, 0.3
-        _, _, _, dp, _, cont, _, _ = _ev(surface_distance=D, absorption_length=L_abs,
-                                         sensor_reflection_rate=R, **NO_SCATTER)
+        _, _, _, dp, _, cont, _, _ = _ev(
+            surface_distance=D, absorption_length=L_abs, sensor_reflection_rate=R, **NO_SCATTER
+        )
         survival = np.exp(-D / L_abs)
         npt.assert_allclose(float(dp), (1.0 - R) * survival, rtol=1e-5)
         npt.assert_allclose(float(cont), R * survival, rtol=1e-5)
@@ -170,10 +190,13 @@ class TestSampleVsExpectedValue:
     scatter and absorption lengths moves it by >= 0.027.
     """
 
-    CASES = [dict(scatter_length=50.0, mie_scatter_length=1e9),
-             dict(scatter_length=50.0, mie_scatter_length=20.0),
-             dict(scatter_length=5.0, mie_scatter_length=8.0, absorption_length=3.0,
-                  surface_distance=1.5)]
+    CASES = [
+        dict(scatter_length=50.0, mie_scatter_length=1e9),
+        dict(scatter_length=50.0, mie_scatter_length=20.0),
+        dict(
+            scatter_length=5.0, mie_scatter_length=8.0, absorption_length=3.0, surface_distance=1.5
+        ),
+    ]
 
     def test_sampled_detection_is_binary(self):
         _, _, _, d, a, _, _, _ = _vmapped(photon_iteration_sample, n=2000)
@@ -183,23 +206,34 @@ class TestSampleVsExpectedValue:
     @pytest.mark.parametrize("case", CASES, ids=["no-mie", "mie-20m", "short-lengths"])
     def test_sampled_detected_weight_matches_expected_value(self, case):
         args = _base_args(None, **case)
-        D, S, M, L = (args['surface_distance'], args['scatter_length'],
-                      args['mie_scatter_length'], args['absorption_length'])
+        D, S, M, L = (
+            args["surface_distance"],
+            args["scatter_length"],
+            args["mie_scatter_length"],
+            args["absorption_length"],
+        )
         expected = detect_closed_form(D, S, M, L, 0.3)
         npt.assert_allclose(float(_ev(**case)[3]), expected, rtol=1e-5)
         _, _, _, d, a, _, _, _ = _vmapped(photon_iteration_sample, **case)
         npt.assert_allclose((d * a).mean(), expected, atol=5e-3)
 
     @pytest.mark.parametrize("case", CASES, ids=["no-mie", "mie-20m", "short-lengths"])
-    @pytest.mark.parametrize("step", [photon_iteration_update_factors, photon_iteration_sample],
-                             ids=["expected", "sampled"])
+    @pytest.mark.parametrize(
+        "step",
+        [photon_iteration_update_factors, photon_iteration_sample],
+        ids=["expected", "sampled"],
+    )
     def test_mean_continuing_weight(self, step, case):
         """Both steps' mean continuing weight equals the closed form (module docstring).
         The weight is in [0, 1], so its standard error at 2e5 keys is < 1.1e-3."""
         args = _base_args(None, **case)
-        expected = continuing_closed_form(args['surface_distance'], args['scatter_length'],
-                                          args['mie_scatter_length'],
-                                          args['absorption_length'], 0.3)
+        expected = continuing_closed_form(
+            args["surface_distance"],
+            args["scatter_length"],
+            args["mie_scatter_length"],
+            args["absorption_length"],
+            0.3,
+        )
         cont = _vmapped(step, **case)[5]
         npt.assert_allclose(cont.mean(), expected, atol=5e-3)
 
@@ -213,14 +247,23 @@ class TestScatterDirection:
     """
 
     @pytest.mark.parametrize("L_mie,g", [(1e9, 0.0), (3.0, 0.9)], ids=["rayleigh", "mie-mix"])
-    @pytest.mark.parametrize("step", [photon_iteration_update_factors, photon_iteration_sample],
-                             ids=["expected", "sampled"])
+    @pytest.mark.parametrize(
+        "step",
+        [photon_iteration_update_factors, photon_iteration_sample],
+        ids=["expected", "sampled"],
+    )
     def test_direction_moments(self, step, L_mie, g):
         S = 1.0
         p_m = (1 / L_mie) / (1 / S + 1 / L_mie)
         m2 = (1 - p_m) * 0.4 + p_m * (1 + 2 * g * g) / 3
-        out = _vmapped(step, direction=jnp.asarray(OBLIQUE), scatter_length=S,
-                       mie_scatter_length=L_mie, g=g, **ALWAYS_SCATTER)
+        out = _vmapped(
+            step,
+            direction=jnp.asarray(OBLIQUE),
+            scatter_length=S,
+            mie_scatter_length=L_mie,
+            g=g,
+            **ALWAYS_SCATTER,
+        )
         new_pos, new_dir = out[0], out[1]
         # every photon scattered: it stopped short of the surface 1e4 m away
         assert np.all(np.linalg.norm(new_pos, axis=1) < 1e3)
@@ -229,13 +272,15 @@ class TestScatterDirection:
         expected_ddT = (1 - m2) / 2 * np.eye(3) + (3 * m2 - 1) / 2 * np.outer(OBLIQUE, OBLIQUE)
         npt.assert_allclose(new_dir.T @ new_dir / len(new_dir), expected_ddT, atol=4e-3)
 
-    @pytest.mark.parametrize("step", [photon_iteration_update_factors, photon_iteration_sample],
-                             ids=["expected", "sampled"])
+    @pytest.mark.parametrize(
+        "step",
+        [photon_iteration_update_factors, photon_iteration_sample],
+        ids=["expected", "sampled"],
+    )
     def test_scatter_point_is_exponential(self, step):
         """The free path to a scatter is Exp(mu): mean 1/mu = 0.75 m at L_R=1, L_M=3
         (std 0.75, so the 2e5-key mean is good to 1.7e-3)."""
-        new_pos = _vmapped(step, scatter_length=1.0, mie_scatter_length=3.0,
-                           **ALWAYS_SCATTER)[0]
+        new_pos = _vmapped(step, scatter_length=1.0, mie_scatter_length=3.0, **ALWAYS_SCATTER)[0]
         npt.assert_allclose(new_pos[:, 2].mean(), 0.75, atol=8e-3)
         npt.assert_allclose(new_pos[:, :2], 0.0, atol=1e-6)
 
@@ -247,8 +292,12 @@ class TestGradients:
     @pytest.mark.parametrize("name", ["scatter_length", "mie_scatter_length", "absorption_length"])
     def test_length_gradient(self, name):
         D = 2.0
-        base = dict(surface_distance=D, scatter_length=50.0, mie_scatter_length=20.0,
-                    absorption_length=100.0)
+        base = dict(
+            surface_distance=D,
+            scatter_length=50.0,
+            mie_scatter_length=20.0,
+            absorption_length=100.0,
+        )
 
         def dp(x):
             return _ev(**{**base, name: x})[3]
@@ -263,8 +312,9 @@ class TestGradients:
         S, M, L = 50.0, 20.0, 100.0
 
         def dp(D):
-            return _ev(surface_distance=D, scatter_length=S, mie_scatter_length=M,
-                       absorption_length=L)[3]
+            return _ev(
+                surface_distance=D, scatter_length=S, mie_scatter_length=M, absorption_length=L
+            )[3]
 
         g = float(jax.grad(dp)(jnp.asarray(2.0)))
         npt.assert_allclose(g, -(1 / S + 1 / M + 1 / L) * float(dp(2.0)), rtol=1e-4)

@@ -6,6 +6,7 @@ CDF ``F(mu) = (mu^3 + 3 mu + 4) / 8`` and its moments, and the Lambertian
 ``E[cos] = 2/3``. Nothing here builds a detector, so it all runs in the default
 lane.
 """
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -13,11 +14,13 @@ import numpy.testing as npt
 import pytest
 
 from lucid.simulation.optics import (
-    compute_reflection_direction, sample_scatter_distance, solve_rayleigh_inverse_cdf,
-    compute_scatter_direction, sample_cosine_hemisphere,
+    compute_reflection_direction,
+    compute_scatter_direction,
+    sample_cosine_hemisphere,
+    sample_scatter_distance,
+    solve_rayleigh_inverse_cdf,
 )
 from lucid.utils import create_local_frame, normalize
-
 
 # Two oblique photon directions: one takes create_local_frame's |z_x| < 0.9 branch,
 # the other its |z_x| >= 0.9 branch. An axis-aligned direction cannot tell the
@@ -66,10 +69,12 @@ class TestReflectionPhysics:
     def test_45_degrees_and_head_on(self):
         n = jnp.array([0.0, 1.0, 0.0])
         d = jnp.array([1.0, -1.0, 0.0]) / jnp.sqrt(2.0)
-        npt.assert_allclose(compute_reflection_direction(d, n),
-                            np.array([1.0, 1.0, 0.0]) / np.sqrt(2.0), atol=1e-6)
-        npt.assert_allclose(compute_reflection_direction(jnp.array([0.0, -1.0, 0.0]), n),
-                            [0.0, 1.0, 0.0], atol=1e-6)
+        npt.assert_allclose(
+            compute_reflection_direction(d, n), np.array([1.0, 1.0, 0.0]) / np.sqrt(2.0), atol=1e-6
+        )
+        npt.assert_allclose(
+            compute_reflection_direction(jnp.array([0.0, -1.0, 0.0]), n), [0.0, 1.0, 0.0], atol=1e-6
+        )
 
     def test_angle_of_incidence_equals_reflection(self):
         normal = jnp.array([0.0, 1.0, 0.0])
@@ -77,8 +82,12 @@ class TestReflectionPhysics:
             theta = jnp.deg2rad(angle_deg)
             incident = jnp.array([jnp.sin(theta), -jnp.cos(theta), 0.0])
             reflected = compute_reflection_direction(incident, normal)
-            npt.assert_allclose(-jnp.dot(incident, normal), jnp.dot(reflected, normal),
-                                atol=1e-5, err_msg=f"Failed at {angle_deg} degrees")
+            npt.assert_allclose(
+                -jnp.dot(incident, normal),
+                jnp.dot(reflected, normal),
+                atol=1e-5,
+                err_msg=f"Failed at {angle_deg} degrees",
+            )
 
     def test_reflection_reverses_normal_component(self):
         """The normal component flips sign, the tangential part is unchanged, and the
@@ -96,8 +105,9 @@ class TestReflectionPhysics:
 class TestLocalFramePhysics:
     """create_local_frame returns an orthonormal right-handed frame whose third row is z."""
 
-    @pytest.mark.parametrize("z", [[0., 0., 1.], [1., 0., 0.], [1., 1., 1.], [3., -1., 2.],
-                                   [0.95, 0.1, 0.3]])
+    @pytest.mark.parametrize(
+        "z", [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [1.0, 1.0, 1.0], [3.0, -1.0, 2.0], [0.95, 0.1, 0.3]]
+    )
     def test_orthonormal_right_handed_z_preserved(self, z):
         z = normalize(jnp.array(z))
         frame = create_local_frame(z)
@@ -105,17 +115,22 @@ class TestLocalFramePhysics:
         npt.assert_allclose(jnp.linalg.det(frame), 1.0, atol=1e-5)
         npt.assert_allclose(frame[2], z, atol=1e-6)
 
-    @pytest.mark.parametrize("z", OBLIQUE_DIRS + [np.array([0., 0., -1.])])
+    @pytest.mark.parametrize("z", OBLIQUE_DIRS + [np.array([0.0, 0.0, -1.0])])
     def test_the_sources_place_the_azimuth_in_this_frame(self, z):
         """The cascade source's (theta, phi) about its axis is the local direction mapped by this
         frame, as the Cherenkov cone and the laser are: one azimuth origin across lucid."""
         from lucid.sources.cascade import _cone_to_world
+
         theta = jnp.array([0.3, 0.7, 2.0, 0.7])
         phi = jnp.array([0.0, 1.0, 4.0, np.pi])
-        local = jnp.stack([jnp.sin(theta) * jnp.cos(phi), jnp.sin(theta) * jnp.sin(phi),
-                           jnp.cos(theta)], axis=1)
-        npt.assert_allclose(_cone_to_world(jnp.asarray(z), theta, phi),
-                            local @ create_local_frame(jnp.asarray(z)), atol=1e-6)
+        local = jnp.stack(
+            [jnp.sin(theta) * jnp.cos(phi), jnp.sin(theta) * jnp.sin(phi), jnp.cos(theta)], axis=1
+        )
+        npt.assert_allclose(
+            _cone_to_world(jnp.asarray(z), theta, phi),
+            local @ create_local_frame(jnp.asarray(z)),
+            atol=1e-6,
+        )
 
 
 class TestScatterDistancePhysics:
@@ -124,7 +139,8 @@ class TestScatterDistancePhysics:
     def test_always_less_than_D(self):
         D, S = 5.0, 2.0
         d = jax.vmap(lambda k: sample_scatter_distance(D, S, k))(
-            jax.random.split(jax.random.PRNGKey(0), 1000))
+            jax.random.split(jax.random.PRNGKey(0), 1000)
+        )
         assert float(d.min()) >= 0.0 and float(d.max()) < D + 1e-6
 
     def test_mean_matches_truncated_exponential(self):
@@ -132,7 +148,8 @@ class TestScatterDistancePhysics:
         The sample std is about 1.3, so the 5e4-draw mean is good to 0.006 (1 sigma)."""
         D, S = 5.0, 2.0
         samples = jax.vmap(lambda k: sample_scatter_distance(D, S, k))(
-            jax.random.split(jax.random.PRNGKey(42), 50000))
+            jax.random.split(jax.random.PRNGKey(42), 50000)
+        )
         e = np.exp(-D / S)
         npt.assert_allclose(jnp.mean(samples), S - D * e / (1 - e), atol=0.02)
 
@@ -140,7 +157,8 @@ class TestScatterDistancePhysics:
         """S >> D: the truncated exponential is uniform on [0, D], mean D/2."""
         D, S = 1.0, 1000.0
         samples = jax.vmap(lambda k: sample_scatter_distance(D, S, k))(
-            jax.random.split(jax.random.PRNGKey(0), 10000))
+            jax.random.split(jax.random.PRNGKey(0), 10000)
+        )
         npt.assert_allclose(jnp.mean(samples), D / 2, atol=0.01)
 
 
@@ -180,8 +198,11 @@ class TestRayleighPhaseFunction:
     def test_symmetry(self):
         """P(mu) = P(-mu), so F^-1(u) = -F^-1(1 - u)."""
         u = jnp.linspace(0.0, 0.5, 26)
-        npt.assert_allclose(jax.vmap(solve_rayleigh_inverse_cdf)(u),
-                            -jax.vmap(solve_rayleigh_inverse_cdf)(1.0 - u), atol=1e-4)
+        npt.assert_allclose(
+            jax.vmap(solve_rayleigh_inverse_cdf)(u),
+            -jax.vmap(solve_rayleigh_inverse_cdf)(1.0 - u),
+            atol=1e-4,
+        )
 
 
 class TestScatterDirectionPhysics:
@@ -196,8 +217,10 @@ class TestScatterDirectionPhysics:
         by 0.067; scattering about a fixed z axis misses entries by up to ~0.09.
         """
         keys = jax.random.split(jax.random.PRNGKey(42), 200_000)
-        d = np.asarray(jax.jit(jax.vmap(
-            lambda k: compute_scatter_direction(jnp.asarray(inc), k)))(keys), np.float64)
+        d = np.asarray(
+            jax.jit(jax.vmap(lambda k: compute_scatter_direction(jnp.asarray(inc), k)))(keys),
+            np.float64,
+        )
         npt.assert_allclose(np.linalg.norm(d, axis=1), 1.0, atol=1e-5)
         npt.assert_allclose(d.mean(axis=0), 0.0, atol=6e-3)
         npt.assert_allclose(d.T @ d / len(d), rayleigh_second_moment(inc), atol=4e-3)
@@ -206,14 +229,17 @@ class TestScatterDirectionPhysics:
 class TestCosineHemispherePhysics:
     """Lambertian sampling about a normal: p(theta) ~ cos theta sin theta."""
 
-    @pytest.mark.parametrize("normal", [np.array([0.0, 0.0, 1.0])] + OBLIQUE_DIRS,
-                             ids=["z", "oblique-x", "oblique-y"])
+    @pytest.mark.parametrize(
+        "normal", [np.array([0.0, 0.0, 1.0])] + OBLIQUE_DIRS, ids=["z", "oblique-x", "oblique-y"]
+    )
     def test_hemisphere_and_moments(self, normal):
         """All samples lie on the normal's side, E[cos] = 2/3, E[cos^2] = 1/2, and the
         tangential mean is zero (a transposed frame tilts the mean off the normal)."""
         keys = jax.random.split(jax.random.PRNGKey(0), 50000)
-        s = np.asarray(jax.jit(jax.vmap(
-            lambda k: sample_cosine_hemisphere(jnp.asarray(normal), k)))(keys), np.float64)
+        s = np.asarray(
+            jax.jit(jax.vmap(lambda k: sample_cosine_hemisphere(jnp.asarray(normal), k)))(keys),
+            np.float64,
+        )
         c = s @ normal
         assert c.min() >= -1e-6
         # std of cos is sqrt(1/2 - 4/9) = 0.24 -> 1e-3 standard error at 5e4 draws

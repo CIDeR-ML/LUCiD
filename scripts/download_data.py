@@ -17,6 +17,7 @@ go to the repository root instead, the first place ``lucid.overlap`` looks for t
 that does not is replaced.
 Standard library only, so it runs wherever Python does (macOS has no ``sha256sum``).
 """
+
 import argparse
 import hashlib
 import os
@@ -31,18 +32,20 @@ import zlib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-DATA = REPO / 'data'
-PAPER_DATA = REPO / 'analysis' / 'paper' / 'output' / 'data'
+DATA = REPO / "data"
+PAPER_DATA = REPO / "analysis" / "paper" / "output" / "data"
 # A new version of an asset is a new release: change its tag and its manifest together.
-RELEASE = 'lucid-data-v1'
-PAPER_RELEASE = 'lucid-paper-results-v1'
-MANIFESTS = {RELEASE: DATA / 'MANIFEST.sha256',
-             PAPER_RELEASE: REPO / 'analysis' / 'paper' / 'RESULTS.sha256'}
-TABLES = 'spatial_overlap_integrals/'
+RELEASE = "lucid-data-v1"
+PAPER_RELEASE = "lucid-paper-results-v1"
+MANIFESTS = {
+    RELEASE: DATA / "MANIFEST.sha256",
+    PAPER_RELEASE: REPO / "analysis" / "paper" / "RESULTS.sha256",
+}
+TABLES = "spatial_overlap_integrals/"
 
 
 def url(release):
-    return f'https://github.com/CIDeR-ML/LUCiD/releases/download/{release}/{release}.tar.gz'
+    return f"https://github.com/CIDeR-ML/LUCiD/releases/download/{release}/{release}.tar.gz"
 
 
 def target(rel, release=RELEASE):
@@ -66,20 +69,20 @@ def fetch(link, dest, attempts=6, wait=2.0):
         except urllib.error.HTTPError as err:
             if err.code < 500 or i == attempts - 1:
                 raise
-            reason = f'HTTP {err.code}'
+            reason = f"HTTP {err.code}"
         except (urllib.error.URLError, ConnectionError, TimeoutError) as err:
             if i == attempts - 1:
                 raise
-            reason = str(getattr(err, 'reason', err))
-        print(f'  {reason}; retrying in {wait * 2 ** i:.0f} s', file=sys.stderr)
-        time.sleep(wait * 2 ** i)
+            reason = str(getattr(err, "reason", err))
+        print(f"  {reason}; retrying in {wait * 2**i:.0f} s", file=sys.stderr)
+        time.sleep(wait * 2**i)
 
 
 def read_manifest(path):
     """``{path relative to data/: sha256}`` from a ``sha256sum``-format file; ``#`` starts a comment."""
     rows = {}
     for line in Path(path).read_text().splitlines():
-        if line.strip() and not line.startswith('#'):
+        if line.strip() and not line.startswith("#"):
             digest, rel = line.split(maxsplit=1)
             rows[rel] = digest
     return rows
@@ -87,18 +90,20 @@ def read_manifest(path):
 
 def sha256(path):
     h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for block in iter(lambda: f.read(1 << 20), b''):
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
 
 
 def status(rows, release):
     """``{rel: 'ok' | 'MISSING' | 'MISMATCH'}`` for every manifest row."""
+
     def one(path, digest):
         if not path.is_file():
-            return 'MISSING'
-        return 'ok' if sha256(path) == digest else 'MISMATCH'
+            return "MISSING"
+        return "ok" if sha256(path) == digest else "MISMATCH"
+
     return {rel: one(target(rel, release), digest) for rel, digest in rows.items()}
 
 
@@ -109,19 +114,23 @@ def install(archive, rows, release):
     its sha256; nothing is then moved. Only manifest paths are read out of the archive,
     so a member elsewhere in it cannot write anywhere.
     """
-    with tempfile.TemporaryDirectory(dir=DATA, prefix='.install-') as stage, \
-            tarfile.open(archive) as tar:
+    with (
+        tempfile.TemporaryDirectory(dir=DATA, prefix=".install-") as stage,
+        tarfile.open(archive) as tar,
+    ):
         for rel, digest in rows.items():
             try:
-                member = tar.extractfile(f'{release}/{rel}')
+                member = tar.extractfile(f"{release}/{rel}")
             except KeyError:
-                raise ValueError(f'{archive} has no {release}/{rel}') from None
+                raise ValueError(f"{archive} has no {release}/{rel}") from None
             staged = Path(stage) / rel
             staged.parent.mkdir(parents=True, exist_ok=True)
-            with open(staged, 'wb') as f:
+            with open(staged, "wb") as f:
                 shutil.copyfileobj(member, f)
             if sha256(staged) != digest:
-                raise ValueError(f'{rel} in {archive} does not match its sha256 in {MANIFESTS[release]}')
+                raise ValueError(
+                    f"{rel} in {archive} does not match its sha256 in {MANIFESTS[release]}"
+                )
         for rel in rows:
             dest = target(rel, release)
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -130,47 +139,57 @@ def install(archive, rows, release):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--paper', action='store_true',
-                    help=f'install {PAPER_RELEASE} (the paper figures\' inputs) instead of {RELEASE}')
-    ap.add_argument('--from-dir', type=Path, metavar='DIR',
-                    help='install from DIR/<asset>.tar.gz (a local copy of the release asset) '
-                         'instead of downloading it')
-    ap.add_argument('--verify-only', action='store_true',
-                    help='check the installed files against the manifest and exit; no network')
+    ap.add_argument(
+        "--paper",
+        action="store_true",
+        help=f"install {PAPER_RELEASE} (the paper figures' inputs) instead of {RELEASE}",
+    )
+    ap.add_argument(
+        "--from-dir",
+        type=Path,
+        metavar="DIR",
+        help="install from DIR/<asset>.tar.gz (a local copy of the release asset) "
+        "instead of downloading it",
+    )
+    ap.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="check the installed files against the manifest and exit; no network",
+    )
     args = ap.parse_args(argv)
     release = PAPER_RELEASE if args.paper else RELEASE
-    manifest, asset = MANIFESTS[release], f'{release}.tar.gz'
+    manifest, asset = MANIFESTS[release], f"{release}.tar.gz"
     rows = read_manifest(manifest)
 
     before = status(rows, release)
     if args.verify_only:
         for rel, state in before.items():
-            print(f'  {state:8s} {rel}')
-        bad = sum(state != 'ok' for state in before.values())
-        print(f'{len(rows) - bad} of {len(rows)} files match {manifest.relative_to(REPO)}')
+            print(f"  {state:8s} {rel}")
+        bad = sum(state != "ok" for state in before.values())
+        print(f"{len(rows) - bad} of {len(rows)} files match {manifest.relative_to(REPO)}")
         return 1 if bad else 0
-    todo = {rel: rows[rel] for rel, state in before.items() if state != 'ok'}
+    todo = {rel: rows[rel] for rel, state in before.items() if state != "ok"}
     if not todo:
-        print(f'every file of {release} is already installed')
+        print(f"every file of {release} is already installed")
         return 0
     for rel in todo:
-        if before[rel] == 'MISMATCH':
-            print(f'  replacing {rel} (its sha256 differs from the manifest)')
+        if before[rel] == "MISMATCH":
+            print(f"  replacing {rel} (its sha256 differs from the manifest)")
 
     try:
         if args.from_dir:
             install(args.from_dir / asset, todo, release)
         else:
-            with tempfile.TemporaryDirectory(dir=DATA, prefix='.download-') as tmp:
-                print(f'fetching {url(release)}')
+            with tempfile.TemporaryDirectory(dir=DATA, prefix=".download-") as tmp:
+                print(f"fetching {url(release)}")
                 fetch(url(release), Path(tmp) / asset)
                 install(Path(tmp) / asset, todo, release)
     except (OSError, EOFError, ValueError, tarfile.TarError, zlib.error) as err:
-        print(f'error: {err}; nothing was installed', file=sys.stderr)
+        print(f"error: {err}; nothing was installed", file=sys.stderr)
         return 1
-    print(f'installed {len(todo)} files of {release}')
+    print(f"installed {len(todo)} files of {release}")
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

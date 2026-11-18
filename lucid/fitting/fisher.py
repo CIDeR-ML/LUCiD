@@ -21,11 +21,11 @@ by ``honesty = √12`` (covariance × 12) so we quote the *honest* uncertainty, 
 engine's artificially-low scatter. Pass ``honesty=1.0`` for the raw engine bound.
 """
 
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 
-__all__ = ['crb', 'make_constrained_schur']
+__all__ = ["crb", "make_constrained_schur"]
 
 SQRT12 = float(np.sqrt(12.0))
 
@@ -48,8 +48,9 @@ def make_constrained_schur(Hkk):
     return Minv
 
 
-def crb(forward, theta, *, lk_true=None, nphot=None, nb_h=3, honesty=SQRT12, ridge_rel=1e-9,
-        eps=1e-8):
+def crb(
+    forward, theta, *, lk_true=None, nphot=None, nb_h=3, honesty=SQRT12, ridge_rel=1e-9, eps=1e-8
+):
     """Cramér-Rao bound on the fit parameters at ``theta``.
 
     Parameters
@@ -88,7 +89,8 @@ def crb(forward, theta, *, lk_true=None, nphot=None, nb_h=3, honesty=SQRT12, rid
     def key(b0):
         return jax.random.fold_in(jax.random.PRNGKey(b0), 1)
 
-    Htt = np.zeros((P, P)); Htk = np.zeros((P, NS))
+    Htt = np.zeros((P, P))
+    Htk = np.zeros((P, NS))
     Hkk = np.zeros(NS) + 1e-12
     for wl in range(forward.W):
         for s, src in enumerate(forward.sources):
@@ -106,6 +108,6 @@ def crb(forward, theta, *, lk_true=None, nphot=None, nb_h=3, honesty=SQRT12, rid
     Minv = make_constrained_schur(Hkk)
     F = 4.0 * (Htt - Htk @ Minv(Htk.T))
     cov_raw = np.linalg.inv(F + ridge_rel * np.median(np.diag(F)) * np.eye(P))
-    cov = cov_raw * (honesty ** 2)
+    cov = cov_raw * (honesty**2)
     sigma = np.sqrt(np.clip(np.diag(cov), 0, None))
     return dict(cov=cov, sigma=sigma, fisher=F, cov_raw=cov_raw)

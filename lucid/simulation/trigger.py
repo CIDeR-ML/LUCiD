@@ -17,6 +17,7 @@ below ~0.1 Hz — not the naive 3σ.
 
 Pure NumPy; operates on the per-event digit time list, host-side.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ class TriggerConfig:
     ``pad_before_ns`` — gate expansion before the up-crossing (pre-trigger).
     ``pad_after_ns``  — gate expansion after the down-crossing (post-trigger).
     """
+
     window_ns: float = 200.0
     n_thr: int = 30
     pad_before_ns: float = 30.0
@@ -76,15 +78,15 @@ def find_trigger_gates(times: np.ndarray, cfg: TriggerConfig) -> np.ndarray:
     n = t.size
     if n == 0:
         return np.empty((0, 2))
-    ev_t = np.concatenate([t, t + cfg.window_ns])                 # +1 at hit, -1 at hit+W
+    ev_t = np.concatenate([t, t + cfg.window_ns])  # +1 at hit, -1 at hit+W
     ev_d = np.concatenate([np.ones(n, np.int64), -np.ones(n, np.int64)])
-    order = np.lexsort((-ev_d, ev_t))                             # time asc; +1 before -1 at ties
+    order = np.lexsort((-ev_d, ev_t))  # time asc; +1 before -1 at ties
     ev_t, ev_d = ev_t[order], ev_d[order]
     count = np.cumsum(ev_d)
     above = count >= cfg.n_thr
     prev = np.concatenate([[False], above[:-1]])
-    starts = ev_t[above & ~prev] - cfg.pad_before_ns              # up-crossings
-    ends = ev_t[~above & prev] + cfg.pad_after_ns                 # down-crossings
+    starts = ev_t[above & ~prev] - cfg.pad_before_ns  # up-crossings
+    ends = ev_t[~above & prev] + cfg.pad_after_ns  # down-crossings
     gates = np.column_stack([starts, ends])
     if gates.shape[0] == 0:
         return np.empty((0, 2))
@@ -107,7 +109,7 @@ def assign_windows(times: np.ndarray, gates: np.ndarray) -> np.ndarray:
     win = np.full(times.shape[0], -1, dtype=np.int64)
     if gates.shape[0] == 0 or times.size == 0:
         return win
-    idx = np.searchsorted(gates[:, 0], times, side="right") - 1   # candidate gate
+    idx = np.searchsorted(gates[:, 0], times, side="right") - 1  # candidate gate
     ok = idx >= 0
     inside = np.zeros(times.shape[0], dtype=bool)
     inside[ok] = times[ok] <= gates[idx[ok], 1]
@@ -120,8 +122,7 @@ def hits_in_gates(times: np.ndarray, gates: np.ndarray) -> np.ndarray:
     return assign_windows(times, gates) >= 0
 
 
-def apply_trigger(sensor_digits: dict, hits_sparse: dict, seg_hits: dict,
-                  cfg: TriggerConfig):
+def apply_trigger(sensor_digits: dict, hits_sparse: dict, seg_hits: dict, cfg: TriggerConfig):
     """Apply the readout trigger to one event's digitizer output.
 
     Keeps only in-gate digits, **canonically re-sorts** them by
@@ -139,7 +140,7 @@ def apply_trigger(sensor_digits: dict, hits_sparse: dict, seg_hits: dict,
     gates = find_trigger_gates(T, cfg)
     if gates.shape[0] == 0:
         return None
-    win = assign_windows(T, gates)                    # per-digit window, -1 if out
+    win = assign_windows(T, gates)  # per-digit window, -1 if out
     kept = np.flatnonzero(win >= 0)
     if kept.size == 0:
         return None
@@ -147,7 +148,7 @@ def apply_trigger(sensor_digits: dict, hits_sparse: dict, seg_hits: dict,
     # Canonical order of kept digits: window, then sensor, then time.
     si = np.asarray(sensor_digits["sensor_idx"])[kept]
     order = np.lexsort((T[kept], si, win[kept]))
-    new_of_kept = kept[order]                          # old digit index in new order
+    new_of_kept = kept[order]  # old digit index in new order
 
     new_sd = {k: np.asarray(sensor_digits[k])[new_of_kept] for k in ("sensor_idx", "PE", "T")}
 
