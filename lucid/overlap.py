@@ -1,36 +1,12 @@
 import jax.numpy as jnp
 import jax
 from typing import Callable, Tuple, Optional
-from jax import vmap, jit
-from functools import partial
+from jax import vmap
 import os
 import json
 import tempfile
 import numpy as np
 from lucid.utils import base_dir_path
-
-def _natural_cubic_moments(x, y):
-    """Second derivatives M_i for the natural cubic spline through (x, y), with M_0 = M_{n-1} = 0.
-    Solved once at build time (Thomas algorithm); supports non-uniform knots. Used by the 'cubic'
-    overlap mode to give a value-exact-at-knots AND C2 (continuous-curvature) overlap, so the
-    autodiff Hessian wrt the photon->sensor distance is correct (unlike the C0 jnp.interp lookup)."""
-    import numpy as _np
-    x = _np.asarray(x, dtype=float); y = _np.asarray(y, dtype=float); n = x.shape[0]
-    if n < 3:
-        return _np.zeros(n)
-    h = _np.diff(x)
-    a = _np.zeros(n); b = _np.zeros(n); c = _np.zeros(n); rhs = _np.zeros(n)
-    b[0] = 1.0; b[n - 1] = 1.0                              # natural BC: M_0 = M_{n-1} = 0
-    for i in range(1, n - 1):
-        a[i] = h[i - 1]; b[i] = 2.0 * (h[i - 1] + h[i]); c[i] = h[i]
-        rhs[i] = 6.0 * ((y[i + 1] - y[i]) / h[i] - (y[i] - y[i - 1]) / h[i - 1])
-    for i in range(1, n):                                  # forward elimination
-        w = a[i] / b[i - 1]; b[i] -= w * c[i - 1]; rhs[i] -= w * rhs[i - 1]
-    M = _np.zeros(n); M[n - 1] = rhs[n - 1] / b[n - 1]      # back substitution
-    for i in range(n - 2, -1, -1):
-        M[i] = (rhs[i] - c[i] * M[i + 1]) / b[i]
-    return M
-
 
 # TABLE GEOMETRY CONSTANTS.
 #
@@ -73,56 +49,6 @@ _ST_MIN_SIGMA = 0.02
 _trapezoid = getattr(np, 'trapezoid', None) or np.trapz
 
 
-def gaussian_kernel(rho: float, theta: float, d: float, r: float, sigma: float) -> float:
-    """2D Gaussian distribution centered at the origin with std sigma.
-
-    Parameters
-    ----------
-    rho : float
-        Radial coordinate for integration
-    theta : float
-        Angular coordinate for integration
-    d : float
-        Distance from center
-    r : float
-        Circle radius
-    sigma : float
-        Standard deviation of the Gaussian
-
-    Returns
-    -------
-    float
-        Value of the Gaussian kernel at the given point
-    """
-    dist_sq = d ** 2 + rho ** 2 - 2 * d * rho * jnp.cos(theta)
-    return (rho / (2 * jnp.pi * sigma ** 2)) * jnp.exp(-dist_sq / (2 * sigma ** 2))
-
-
-def lorentz_kernel(rho: float, theta: float, d: float, r: float, gamma: float) -> float:
-    """2D Lorentzian distribution centered at the origin.
-
-    Parameters
-    ----------
-    rho : float
-        Radial coordinate for integration
-    theta : float
-        Angular coordinate for integration
-    d : float
-        Distance from center
-    r : float
-        Circle radius
-    gamma : float
-        Width parameter of the Lorentzian
-
-    Returns
-    -------
-    float
-        Value of the Lorentzian kernel at the given point
-    """
-    dist_sq = d ** 2 + rho ** 2 - 2 * d * rho * jnp.cos(theta)
-    return (gamma / (2 * jnp.pi)) * (rho / (gamma ** 2 + dist_sq) ** (3 / 2))
-
-
 def get_cache_filename(r: float, sigma: float) -> str:
     """Generate a unique filename for caching results.
 
@@ -157,7 +83,7 @@ def set_cache_dir(path: Optional[str]) -> None:
     """Point the overlap cache at an explicit directory (None restores default).
 
     The forward path reads no environment itself — see the B6 ratchet in
-    tests/test_unification_pins.py — so a site that wants one warm shared cache
+    tests/fitting/test_fitting_and_loss_pins.py — so a site that wants one warm shared cache
     sets it from the production/orchestration layer, which owns infra config.
     """
     global _CACHE_DIR_OVERRIDE
@@ -271,42 +197,6 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
         return None        # unreadable or partial: rebuild it, as if it were not cached
 
 
-@partial(jax.jit, device=jax.devices('cpu')[0])
-def integral_f_of_d(d: float, r: float, sigma: float,
-                    theta_vals: jnp.ndarray, rho_vals: jnp.ndarray) -> float:
-    """Computes the double integral of the Gaussian kernel over polar coordinates.
-
-    Parameters
-    ----------
-    d : float
-        Distance from center
-    r : float
-        Circle radius
-    sigma : float
-        Standard deviation of the Gaussian
-    theta_vals : jnp.ndarray
-        Array of theta values for angular integration
-    rho_vals : jnp.ndarray
-        Array of rho values for radial integration
-
-    Returns
-    -------
-    float
-        Value of the double integral
-    """
-
-    def integrand_theta(theta):
-        def integrand_rho(rho_):
-            return gaussian_kernel(rho_, theta, d, r, sigma)
-
-        return vmap(integrand_rho)(rho_vals)
-
-    integrand = vmap(integrand_theta)(theta_vals)
-    integral_theta = jnp.trapezoid(integrand, theta_vals, axis=0)
-    integral_rho = jnp.trapezoid(integral_theta, rho_vals)
-    return integral_rho
-
-
 def precompute_lookup(r: float,
                       sigma: float,
                       n_theta: int = 1000,
@@ -345,8 +235,6 @@ def precompute_lookup(r: float,
         # The table must reach past the disk edge. At d_max_factor <= 1 the dense region can start
         # beyond d_max and the node grid runs backwards, which jnp.interp does not detect.
         raise ValueError(f"d_max_factor must exceed 1, got {d_max_factor}")
-    theta_vals = jnp.linspace(0, 2 * jnp.pi, n_theta)
-    rho_vals = jnp.linspace(0, r, n_rho)
 
     # WHERE THE DENSE REGION HANDS OFF TO THE SPARSE ONE.
     #
@@ -392,16 +280,15 @@ def precompute_lookup(r: float,
     # O(h^2) radial grid error (both ~5e-05 at temperature 0.02), which float64 does not touch (it
     # falls 16x per 4x in n_rho); narrowing the width is limited by n_rho as much as by precision.
     #
-    # The cost is build time: about a minute per table on one CPU core, against under a second in
+    # The cost is build time: minutes per table on a CPU (measured 280 s for SK_like's on 4 cores in
+    # develop.sif, 2026-11-02), against under a second in
     # float32 JAX. It is paid once per (r, sigma) because the table is cached -- but by the container
     # build (which warms the cache), a cold-cache first job, and tests that use use_cache=False.
     #
     # NumPy rather than jax.config: this is a one-off, non-differentiated, cached computation, and
     # flipping the global x64 flag mid-session would silently change dtypes everywhere else.
     #
-    # Build the grids in float64; do not convert `theta_vals`/`rho_vals`, which are float32 and
-    # already rounded (promoting them caps the error near 3e-06). They are kept above only for
-    # `integral_f_of_d`, which the overlap tests use as an independent reference.
+    # Build the grids in float64 directly; float32 grids promoted to float64 cap the error near 3e-06.
     th = np.linspace(0.0, 2.0 * np.pi, n_theta, dtype=np.float64)
     rh = np.linspace(0.0, float(r), n_rho, dtype=np.float64)
     dv = np.asarray(d_values, dtype=np.float64)
@@ -414,7 +301,7 @@ def precompute_lookup(r: float,
     step = max(1, int(4e7 // max(1, rr.size)))
     for i0 in range(0, dv.shape[0], step):
         dd = dv[i0:i0 + step][:, None, None]
-        # Same kernel as `gaussian_kernel`: squared distance from the disk point (rho, theta) to a
+        # The Gaussian kernel: squared distance from the disk point (rho, theta) to a
         # source offset by d along theta = 0, times the polar area element rho.
         dist2 = rr ** 2 + dd ** 2 - 2.0 * rr * dd * cos_t
         integ = (rr / (2.0 * np.pi * sigma ** 2)) * np.exp(-dist2 / (2.0 * sigma ** 2))
@@ -430,9 +317,7 @@ def create_overlap_prob(sigma: Optional[float],
                         num_sparse: int = _NUM_SPARSE,
                         d_max_factor: float = _D_MAX_FACTOR,
                         use_cache: bool = True,
-                        st_width_frac: float = 0.35,
-                        renorm: float = 1.0,
-                        mode: str = 'interp') -> Callable[[float], float]:
+                        st_width_frac: float = 0.35) -> Callable[[float], float]:
     """Creates a function that calculates overlap probability between sensor and photon.
 
     Parameters
@@ -457,14 +342,6 @@ def create_overlap_prob(sigma: Optional[float],
         Straight-through surrogate width (fraction of r) for the hard-step
         overlap (sigma None / tiny). Backward gradient only; forward stays the
         hard step. ``<= 0`` -> pure hard step, no surrogate. Default 0.35.
-    renorm : float, optional
-        Global soft-overlap renormalization constant C = hard_total/soft_total
-        (restores the total/energy lost to inter-sensor gaps without changing
-        the gradient direction). Default 1.0 = OFF (byte-identical).
-    mode : str, optional
-        Lookup interpolation for the soft overlap: ``'interp'`` (default,
-        piecewise-linear jnp.interp) or ``'cubic'`` (natural cubic spline, C2 —
-        correct curvature for the autodiff Hessian wrt the photon->sensor distance).
 
     Returns
     -------
@@ -506,19 +383,6 @@ def create_overlap_prob(sigma: Optional[float],
 
         return overlap_prob
 
-    # SOFT-OVERLAP RENORMALIZATION (default 1.0 = OFF, byte-identical).
-    # The soft overlap f(d) = mass of a sigma-Gaussian (centered at the photon) inside the sensor disk.
-    # Convolution conserves the integral ONLY if all the spread is captured; the fraction landing in the
-    # GAPS between sensors (no sensor to catch it) is LOST -> the soft total under-counts the hard top-hat
-    # by ~1% (worse in sparse/dim regions). A GLOBAL constant C = hard_total/soft_total restores the total
-    # (and hence the energy) without changing the gradient DIRECTION (it is a pure scale). Calibrate C once
-    # per detector (ratio of temp=None to temp=0.1 total charge). See MISMATCH_PLAN.md.
-    _RENORM = renorm
-
-    # mode == 'cubic' falls through: load the EXACT lookup below, then interpolate it with a
-    # natural cubic spline (C2) instead of jnp.interp (C0) -- value-exact at the knots AND correct
-    # curvature, so it carries value, gradient, AND Hessian wrt the photon->sensor distance.
-
     # Try to load from cache first
     # The cache key names only (r, sigma) and the default layout (_KSIG, _NUM_DENSE, float64), so a
     # table built with any other layout would be served to every default caller. Non-default layouts
@@ -539,26 +403,9 @@ def create_overlap_prob(sigma: Optional[float],
             r, sigma, n_theta, n_rho, num_dense, num_sparse, d_max_factor
         )
 
-    if mode == 'cubic':
-        # Natural cubic spline through the precomputed knots: passes through the exact overlap value at
-        # every knot (so value+gradient match the lookup) and is C2 (continuous 2nd derivative), so the
-        # autodiff Hessian wrt d is correct -- unlike jnp.interp (C0: 2nd deriv 0 a.e. + delta spikes).
-        _M = _natural_cubic_moments(d_values, f_values)
-        _xk = jnp.asarray(d_values); _yk = jnp.asarray(f_values); _Mk = jnp.asarray(_M)
-        _hk = _xk[1:] - _xk[:-1]
-        _nseg = _xk.shape[0] - 1
-        def overlap_prob(d: float) -> float:
-            d_c = jnp.clip(d, _xk[0], _xk[-1])
-            i = jnp.clip(jnp.searchsorted(_xk, d_c) - 1, 0, _nseg - 1)
-            x0 = _xk[i]; x1 = _xk[i + 1]; y0 = _yk[i]; y1 = _yk[i + 1]
-            m0 = _Mk[i]; m1 = _Mk[i + 1]; h = _hk[i]
-            A = (x1 - d_c) / h; B = (d_c - x0) / h
-            return _RENORM * (A * y0 + B * y1 + ((A ** 3 - A) * m0 + (B ** 3 - B) * m1) * (h * h) / 6.0)
-        return overlap_prob
-
     def overlap_prob(d: float) -> float:
         d_clamped = jnp.clip(d, d_values[0], d_values[-1])
-        return _RENORM * jnp.interp(d_clamped, d_values, f_values)
+        return jnp.interp(d_clamped, d_values, f_values)
 
     return overlap_prob
 

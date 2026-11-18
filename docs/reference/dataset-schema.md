@@ -1,324 +1,223 @@
-# LUCiD Dataset Layout
+# Dataset schema
 
-This document describes the concrete HDF5 schema for LUCiD water-Cherenkov
-simulation output, produced by the
-[LUCiD](https://github.com/CIDeR-ML/LUCiD) production pipeline using PhotonSim ROOT files
-as input.
-
-The design splits detector output into four parallel HDF5 files -- raw sensor
-readout, per-particle signal decomposition, 3D track segments, and labels --
-so that each ML task can load only the modalities it needs. This document
-specifies the LUCiD-specific instantiation of that design.
-
-> Looking for "how do I read these files"? Start with the shorter
-> [working with data](working-with-data.md) page; this one is the field-by-field reference.
-
-## Overview
-
-LUCiD output for one batch consists of four parallel HDF5 files, all sharing
-the same per-event indexing:
+`lucid-run-job` writes each batch as four HDF5 files with the same events in the same order, so
+a task can load only what it needs:
 
 ```
-dataset_root/
-├── sensor/    wc_sensor_NNNN.h5    — raw PMT readout (post-smearing)
-├── hits/      wc_hits_NNNN.h5      — per-particle decomposition of PMT signal
-├── step/      wc_step_NNNN.h5       — 3D track segments (Geant4 truth)
-└── labl/      wc_labl_NNNN.h5      — labels, truth metadata, dimension tables
+<output-dir>/
+├── sensor/  wc_sensor_NNNN.h5   recorded PMT digits (what the electronics record)
+├── hits/    wc_hits_NNNN.h5     the digits' charge split by source particle
+├── step/    wc_step_NNNN.h5     GEANT4 track segments, with their charge per sensor
+└── labl/    wc_labl_NNNN.h5     labels and truth tables
 ```
 
-Each file is independently loadable. Each file contains a `config/` group
-holding file-level metadata and a sequence of `event_NNN/` groups (NNN is the
-sequence position in the file, zero-padded).
+`NNNN` is the batch's file index, `--job-id − 1`. Format version 6.
 
-## Standard conventions
+## Reading a batch
 
-These apply across all four files:
+```python
+from lucid.dataset.layout import batch_paths
+from lucid.dataset.reader import (list_events, read_sensor_event, read_hits_event,
+                                  read_step_event, read_labl_event)
 
-- **Group naming**: `event_000/`, `event_001/`, ... — sequence positions, not
-  canonical event IDs. The canonical PhotonSim entry index is the
-  `source_event_idx` attribute on each group and listed in the file-level
-  `config/source_event_idx` array.
-- **Index locality**: every index column inside `event_NNN/` ranges over
-  `[0, count_for_this_event)`. No global IDs are used as indices anywhere.
-- **Foreign keys**: cross-table joins within an event use FK columns
-  (`particle_idx`, `track_idx`) rather than CSR offset arithmetic.
-- **Time convention**: all times in `sensor/`, `hits/`, and `step/` are stored
-  in the **detector frame** — the per-event `t0` offset has been added at
-  write time. The truth `t0` itself lives in `labl/event_NNN/per_event/t0`.
-- **Cross-file alignment**: parallel filenames (`*_NNNN.h5`) and matching
-  `event_NNN/` group names align modalities. Each `event_NNN/` carries an
-  `source_event_idx` attribute that loaders cross-check.
-- **Emission-process encoding**: per-row `emission_process: int8` columns on
-  `hits/` and `step/sensor_hits/` tag what produced each charge contribution.
-  Enum: `0 = Cherenkov`, `1 = scintillation`, `2 = dark noise` (electronics, on
-  `hits/` only — dark has no segment). A given `(particle_idx, sensor_idx,
-  digit_idx)` (or `(segment_idx, sensor_idx, digit_idx)`) key can appear in
-  multiple rows differing only in `emission_process` when more than one process
-  contributes. Cherenkov-only datasets carry the column with all-zeros so
-  consumers can group/filter by it without a presence check. Pre-Phase-0
-  datasets that lack the column read as all-zeros via the reader's backward-
-  compat default.
+paths = batch_paths('out/', 0)                 # {'sensor': Path, 'hits': ..., 'step': ..., 'labl': ...}
+n = len(list_events(paths['sensor']))
+sensor = read_sensor_event(paths['sensor'], 0)  # one event as a dict of arrays
+labels = read_labl_event(paths['labl'], 0)      # nested: per_event, per_interaction, per_particle, per_track
+```
 
-## Provenance block (every file's `config/`)
+The readers need only h5py. From the shell, `python scripts/inspect_dataset.py --path out/`
+prints event counts, charge statistics and array shapes (`--event N` for one event). The
+`viewer/` app (`python viewer/serve_viewer.py <dataset_dir> --open`) is an interactive 3D event
+display of the same files; see `viewer/README.md`. `lucid/production/derived_views/` writes
+copies of a dataset with its labels redefined (what a particle is, hits inside a cone), without
+re-simulating.
 
-The following attrs appear on `config/` of every file:
+## Conventions
 
-- `format_version` (int)
-- `n_events` (int)
-- `git_commit` (str) — LUCiD repository commit
-- `reflection_model` (str) — reflection model used (`scalar_mix` default, `scalar`, or `angular`) — distinguishes datasets by reflection physics
-- `run_id` (str) — unique batch identifier
-- `dataset_name` (str)
-- `file_index` (int) — NNNN of `wc_*_NNNN.h5`
-- `source_file` (str) — input PhotonSim ROOT path
-- `lucid_master_seed` (int) — JAX PRNG root seed for this batch
-- `photonsim_seed` (int, optional) — Geant4 seed used when generating the
-  source ROOT file. `-1` if not propagated.
+- Groups `event_000/`, `event_001/`, ... are positions in the file. The PhotonSim entry of each
+  is its `source_event_idx` attribute, also listed in `config/source_event_idx`. Events the
+  trigger or selection drops are absent, so `source_event_idx` has gaps; join datasets on it,
+  not on position.
+- Indices inside an event run over `[0, count)` for that event. Joins use foreign-key columns
+  (`particle_idx`, `track_idx`, `digit_idx`, `segment_idx`).
+- Times in `sensor/`, `hits/` and `step/` are in the detector frame: the event's `t0` is
+  already added. The truth `t0` is `labl/event_NNN/per_event/t0`. All absolute times are
+  float64 (a supernova burst spans seconds at sub-ns resolution).
+- `emission_process` (int8) on `hits/` and `step/sensor_hits/` rows: `0` Cherenkov, `1`
+  scintillation, `2` dark noise (`hits/` only). A key such as `(particle_idx, sensor_idx,
+  digit_idx)` can appear once per contributing process. Cherenkov-only datasets carry the column
+  as all zeros.
+- Lengths in m, energies in MeV, charge in photoelectrons, times in ns.
 
-Plus a per-file `source_event_idx (n_events,) uint32` array in `config/`
-for integrity checks and fast event enumeration.
+## File metadata (`config/` attributes, every file)
 
-## File schemas
+| attribute | meaning |
+|---|---|
+| `format_version` | 6 |
+| `n_events` | events kept |
+| `n_events_requested` | events generated (optional); the difference is the selection loss |
+| `complete` | `False` while writing, `True` once every event is written; a killed job leaves `False` |
+| `git_commit`, `git_dirty`, `lucid_ref` | the LUCiD commit that wrote the file (from the checkout, or `/opt/VERSIONS` in the production image; `"unknown"` otherwise), whether tracked files differed (optional), and its release tag (`"none"` when untagged) |
+| `photonsim_ref`, `photonsim_commit`, `geant4_version` | the PhotonSim that made the source file: known when the job ran the image's own build (`/opt/VERSIONS`), `"unknown"` otherwise (a build elsewhere, or `--skip-photonsim`) |
+| `reflection_model` | `scalar_mix`, `scalar` or `angular` |
+| `run_id`, `dataset_name`, `file_index` | batch identifier, dataset name, `NNNN` |
+| `source_file` | the PhotonSim ROOT file |
+| `master_seed` | the job's master seed, from which the generator and PhotonSim seeds derive (`lucid-run-job` only) |
+| `photonsim_seeds` | `(n_streams, 2)` int64: the two GEANT4 seeds of each PhotonSim stream (one per pile-up vertex) |
+| `generator_seeds` | `(n_streams,)` int64: the GENIE or sntools seed of each stream; `-1` for a particle gun |
+| `lucid_master_seed`, `job_id` | the LUCiD-side seed and the job number its per-event keys are folded with |
+| `detector`, `physics_config`, `geometry_config` | the detector name and its two config files, verbatim |
+| `digitizer_config` | the digitizer as resolved (preset and dataset overrides), JSON |
+| `dataset_config`, `run_job_args` | the `--config` file verbatim, and the `lucid-run-job` arguments (JSON list) |
+| `trigger` | `"none"` without a trigger; otherwise `trigger_window_ns`, `trigger_n_thr`, `trigger_pad_before_ns`, `trigger_pad_after_ns` describe it |
+| `selection`, `selection_min_physics_hits` | how interactions were kept: `"trigger"` or `"min_physics_hits"` with its threshold (optional) |
+| `sn_direction`, `sn_ordering`, `sn_transformation` | supernova only: burst direction (unit vector), mass ordering, and the sntools transformation it maps to |
 
-### `sensor.h5` — recorded PMT digits (hit-making output)
+`config/source_event_idx` (`(n_events,)` uint32) lists the kept events' PhotonSim entries.
 
-Post-smearing, t0-shifted. This is what the detector electronics record — a
-list of **digits** produced by the digitizer (see `lucid/simulation/digitizer.py`).
-A digit is one recorded hit: charge integrated over a per-sensor time window at
-its first-arrival time. **A `sensor_idx` may appear in more than one row** when
-light arrives in well-separated time clusters (delayed coincidence, pile-up,
-dark noise). The `basic` model (default) uses an infinite window, so it yields
-exactly one digit per sensor — the legacy one-hit-per-sensor behaviour.
+A batch written by `lucid-run-job` carries everything that regenerates it: run the image of
+`lucid_ref` / `git_commit` (PhotonSim `photonsim_ref`), with `dataset_config` saved as the
+`--config` file, the other `run_job_args`, and `--master-seed master_seed --lucid-seed
+lucid_master_seed`. The physics and digitizer it ran with are in the file itself, so a changed
+`config/` does not go unnoticed.
+
+## `sensor/`: recorded digits
 
 ```
 sensor.h5
 ├── config/
-│   ├── attrs: provenance + n_sensors, detector_type, material,
-│   │           smearing_applied, smearing_charge_function, smearing_time_function,
-│   │           digitizer_model   — "basic" | "ski" | "hk"
+│   ├── attrs: metadata + n_sensors, detector_type, material, digitizer_model ("basic" | "ski" | "hk"),
+│   │          smearing_applied, smearing_charge_function, smearing_time_function
 │   ├── source_event_idx      (n_events,) uint32
 │   └── sensor_positions      (n_sensors, 3) float32
-└── event_NNN/
-    │ attrs: source_event_idx, n_hits   (= number of digits)
-    ├── sensor_idx            (n_hits,) uint16   — PMT index; may repeat (multi-hit)
-    ├── PE                    (n_hits,) float32   — digit charge (post readout resolution)
-    └── T                     (n_hits,) float32   — digit first-arrival time, detector frame
+└── event_NNN/  attrs: source_event_idx, n_hits (number of digits)
+    ├── sensor_idx            (n_hits,) uint16    PMT index; repeats when a PMT has several digits
+    ├── PE                    (n_hits,) float32   digit charge, after the charge resolution
+    └── T                     (n_hits,) float64   digit time, detector frame
 ```
 
-Notes:
-- `sensor_idx` is the PMT index (0..n_sensors-1); one row per **digit**, not per PMT.
-- `hits.h5` / `step.h5` rows carry a `digit_idx` FK into this file's per-event
-  digit list, decomposing each digit's charge by source (and dark noise).
-- Digitizer model + electronics parameters come from the detector physics
-  config's optional `"digitizer"` block; absent ⇒ `basic`.
-- Sensor file is the only file that needs smearing parameters in its config.
-- **Readout trigger** (optional `"trigger"` block in the physics config; provenance
-  in `config/` attrs `trigger*`): a sliding-window coincidence trigger keeps only
-  in-gate digits and **drops events that don't trigger** (they are absent, leaving
-  gaps in `source_event_idx`). Triggered datasets write digits in a **canonical
-  `(window_idx, sensor_idx, T)` order**, so each readout window is a contiguous
-  digit slice (see `labl/…/per_window`) and a PMT's hits within a window are
-  time-ordered. Untriggered datasets keep the digitizer's native order.
+A digit is one recorded hit: charge integrated over a time window. One PMT can have several
+digits when light arrives in separate bursts (delayed coincidence, pile-up, dark noise); the
+`basic` digitizer gives one digit per hit PMT. With a trigger, only digits inside a trigger
+window are kept, ordered by `(window, sensor_idx, T)`, so each window is a contiguous slice
+(`labl/.../per_window`). The digitizer and trigger are described in
+[digitizer and trigger](digitizer-and-trigger.md).
 
-### `hits.h5` — per-particle PMT decomposition
-
-Pre-smearing per-particle contributions to the PMT signal. This is
-the truth-level sensor decomposition by source particle.
+## `hits/`: charge by source particle
 
 ```
 hits.h5
-├── config/
-│   ├── attrs: provenance + n_sensors, detector_type, material
-│   ├── source_event_idx      (n_events,) uint32
-│   └── sensor_positions      (n_sensors, 3) float32   — duplicated for standalone use
-└── event_NNN/
-    │ attrs: source_event_idx, n_particles, n_particle_hits
-    ├── particle_idx          (n_particle_hits,) int32   — local FK to labl/per_particle row; -1 for dark noise
-    ├── digit_idx             (n_particle_hits,) int32   — FK to sensor.h5 digit (which recorded hit)
+├── config/  attrs: metadata + n_sensors, detector_type, material; source_event_idx; sensor_positions
+└── event_NNN/  attrs: source_event_idx, n_particles, n_particle_hits
+    ├── particle_idx          (n_particle_hits,) int32    row of labl per_particle; -1 for dark noise
+    ├── digit_idx             (n_particle_hits,) int32    the sensor/ digit it contributes to
     ├── sensor_idx            (n_particle_hits,) uint16
-    ├── PE                    (n_particle_hits,) float32   — pre-smearing per-source contribution
-    ├── T                     (n_particle_hits,) float32   — pre-smearing per-source, detector frame
-    └── emission_process      (n_particle_hits,) int8     — 0=Cherenkov, 1=scintillation, 2=dark noise
+    ├── PE                    (n_particle_hits,) float32  contribution before charge resolution
+    ├── T                     (n_particle_hits,) float64  first arrival of this contribution, detector frame
+    ├── T_reco                (n_particle_hits,) float64  the same after the timing response (optional)
+    └── emission_process      (n_particle_hits,) int8
 ```
 
-Notes:
-- Each row is one `(source, sensor, digit, emission_process)` contribution;
-  summing `PE` over the rows of a given `(sensor_idx, digit_idx)` gives that
-  `sensor.h5` digit's charge. **Dark noise** is a labelled source:
-  `emission_process = 2` with `particle_idx = -1` (no owning particle / segment),
-  so "dark contribution to a recorded hit" = filter `emission_process == 2`.
-- `particle_idx` is local to the event (`0..n_particles-1`).
-- A `(particle_idx, sensor_idx)` pair can appear in **multiple rows** differing
-  only in `emission_process` when both processes contribute to that sensor from
-  that particle. Cherenkov-only datasets emit one row per pair, all with
-  `emission_process = 0`. Aggregating PE/T over the `emission_process` axis
-  recovers a process-agnostic per-(particle, sensor) view.
-- Loaders that train on `hits/` alone use `sensor_positions` from this file's
-  `config/` to map `sensor_idx` to physical positions.
+Each row is one `(particle, sensor, digit, emission_process)` contribution. Summing `PE` over
+the rows of one `(sensor_idx, digit_idx)` gives that digit's charge before smearing. Dark noise
+rows have `emission_process = 2` and `particle_idx = -1`.
 
-### `step.h5` — 3D Geant4 track segments
-
-Per-segment truth from Geant4: trajectory geometry, energy deposition,
-direction, kinetic state.
+## `step/`: GEANT4 segments
 
 ```
 step.h5
-├── config/
-│   ├── attrs: provenance + detector_type, material, detector_shape,
-│   │           detector_bbox (6,), detector_radius, detector_half_height, detector_axis (3,)
-│   └── source_event_idx      (n_events,) uint32
-└── event_NNN/
-    │ attrs: source_event_idx, n_tracks, n_segments, has_segment_sensor_map (always true for data-mode datasets)
-    ├── track_idx             (n_segments,) int32   — local FK to labl/per_track row
-    ├── start_x, start_y, start_z   (n_segments,) float32  — meters
-    ├── end_x, end_y, end_z         (n_segments,) float32  — meters
-    ├── dir_x, dir_y, dir_z         (n_segments,) float16
-    ├── time                       (n_segments,) float32   — ns, detector frame (t0-shifted)
-    ├── edep                       (n_segments,) float32   — MeV
-    ├── beta_start                 (n_segments,) float32   — particle β at segment start
-    ├── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
-    ├── group_id                   (n_segments,) int32     — coarser segment grouping (see notes)
-    ├── contained                  (n_segments,) bool      — both endpoints inside detector_bounds
-    └── sensor_hits/                — flat per-(segment, sensor, digit) PE/T (n_segment_hits rows)
-        │ attrs: n_segment_hits
-        ├── segment_idx           (n_segment_hits,) int32  — FK to this event's segments (0..n_segments-1)
-        ├── digit_idx             (n_segment_hits,) int32  — FK to the sensor.h5 digit
-        ├── sensor_idx            (n_segment_hits,) uint16 — FK to sensor_positions
-        ├── PE                    (n_segment_hits,) float32 — segment's contribution to that (sensor, digit) PE
-        ├── T                     (n_segment_hits,) float32 — segment's first-arrival time in that digit (ns, detector frame)
-        └── emission_process      (n_segment_hits,) int8    — 0=Cherenkov, 1=scintillation
+├── config/  attrs: metadata + detector_type, material, detector_shape, detector_bbox (6,),
+│            detector_radius, detector_half_height, detector_axis (3,); source_event_idx
+└── event_NNN/  attrs: source_event_idx, n_tracks, n_segments, has_segment_sensor_map
+    ├── track_idx                  (n_segments,) int32    row of labl per_track
+    ├── start_x, start_y, start_z  (n_segments,) float32  m
+    ├── end_x, end_y, end_z        (n_segments,) float32  m
+    ├── dir_x, dir_y, dir_z        (n_segments,) float16
+    ├── time                       (n_segments,) float64  ns, detector frame
+    ├── edep                       (n_segments,) float32  MeV
+    ├── beta_start                 (n_segments,) float32  β at the segment start
+    ├── n_cherenkov                (n_segments,) int32    Cherenkov photons GEANT4 emitted in it
+    ├── group_id                   (n_segments,) int32    coarser grouping of consecutive segments
+    ├── contained                  (n_segments,) bool     both ends inside the detector
+    └── sensor_hits/  attrs: n_segment_hits
+        ├── segment_idx            (n_segment_hits,) int32
+        ├── digit_idx              (n_segment_hits,) int32
+        ├── sensor_idx             (n_segment_hits,) uint16
+        ├── PE                     (n_segment_hits,) float32
+        ├── T                      (n_segment_hits,) float64
+        ├── T_reco                 (n_segment_hits,) float64  (optional)
+        └── emission_process       (n_segment_hits,) int8     0 or 1
 ```
 
-Notes:
-- `track_idx` is local; ranges `0..n_tracks-1`. Joins to `labl/event_NNN/per_track/`.
-- `beta_start` is the particle's β at the start of the segment — sufficient to
-  reconstruct Cherenkov physics (opening angle, photon yield, spectrum) outside
-  Geant4. Storing per-segment beta avoids re-deriving it from the kinetic
-  energy and mass, and keeps each segment self-contained for forward-simulation
-  tasks.
-- `n_cherenkov` is Geant4's exact count for this segment — direct truth label
-  for forward-simulation ML.
-- Each segment row is one raw G4 sub-step (PhotonSim ships unmerged
-  segments; the prior in-PhotonSim merger now runs in Python at
-  ingestion time — see `lucid/sources/segment_grouping.py`).
-  `group_id` holds the merger's output: aggregating segments by
-  `group_id` (start = first row's start, end = last row's end, edep
-  and n_cherenkov summed, dir / beta_start / time = first row's value)
-  reproduces the coarser pre-merge schema. Group ids are contiguous
-  within an event (`0..n_groups-1`) and never re-used across tracks.
-  Consumers should pick whichever granularity their task needs.
-- Segments are physically ordered by track (so segments belonging to track k
-  appear contiguously), but the ordering is **not** required for correctness
-  — `track_idx` is the canonical link. Loaders may shuffle segments freely.
-- `sensor_hits/` is the per-(segment, sensor) ground truth that `hits.h5`
-  is aggregated from: aggregating `sensor_hits.PE` over `segment_idx →
-  track_idx → particle_idx` reproduces `hits.h5/event_NNN/PE` exactly
-  (column-sums match `sensor.h5/event_NNN/PE` by construction — shared
-  `qe_weights` in `sensor_response.make_hits_per_segment`). Mandatory in
-  data-mode datasets — re-bucketing into a different particle definition
-  is a Python re-aggregation over the same on-disk file.
+- Each row is one GEANT4 step. Aggregating rows by `group_id` (start of the first, end of the
+  last, `edep` and `n_cherenkov` summed, other fields from the first) gives the coarser
+  segments; group ids are contiguous per event and never shared between tracks.
+- `sensor_hits/` is the charge per `(segment, sensor, digit)`. Summing its `PE` over
+  `segment_idx → track_idx → particle_idx` reproduces `hits/` exactly, and over everything a
+  digit's charge; all three come from one deposit list. This allows regrouping charge by any
+  particle definition without re-simulating.
+- Rows are ordered by track, but `track_idx` is the link; order does not matter.
 
-### `labl.h5` — labels and truth dimension tables
-
-Multi-granularity truth: per-event scalars, per-particle metadata, per-track
-metadata.
+## `labl/`: labels and truth tables
 
 ```
 labl.h5
-├── config/
-│   ├── attrs: provenance + label_names
-│   └── source_event_idx      (n_events,) uint32
-└── event_NNN/
-    │ attrs: source_event_idx, n_particles, n_tracks
+├── config/  attrs: metadata + label_names (["category"]); source_event_idx
+└── event_NNN/  attrs: source_event_idx, n_particles, n_tracks
     ├── per_event/
-    │   ├── t0                                   ()   float32 — true emission time
-    │   └── contained                            ()   bool    — True iff every meaningful segment is fully inside detector; False for empty events
-    ├── per_window/                              (triggered datasets only; n_win readout windows)
-    │   │ attrs: n_windows
-    │   ├── window_start                         (n_win,)   float32 — gate start, detector frame [ns]
-    │   ├── window_end                           (n_win,)   float32 — gate end
-    │   └── digit_offsets                        (n_win+1,) int32   — CSR into sensor.h5: window w = digit rows [off[w], off[w+1])
-    ├── per_interaction/                         (1 row for non-pile-up; N rows for N-way pile-up)
-    │   ├── source_type, t0, vertex_{x,y,z}       — see save_labl_event docstring
-    │   ├── n_primaries, n_particles              — ints per interaction
-    │   ├── neutrino_pdg, neutrino_energy_MeV     — GENIE/supernova-only, zeroed for particle-gun
-    │   ├── interaction_channel, channel          — supernova-only: sntools channel code (int) + name ("ibd"/"es"/"o16e"/"o16eb")
-    │   ├── contained                            (n_interactions,) bool — AND over particles attributed to this interaction; False if interaction has no particles
-    │   └── CSR primary_{track_ids,pdgs,energies}_{offsets,data}
-    ├── per_particle/                            (~8 rows for typical LUCiD events)
-    │   ├── category                             (n_particles,) uint8
-    │   ├── contained                            (n_particles,) bool — AND over meaningful segments attributed to this particle; False if particle has no segments
-    │   ├── genealogy_data                       (vlen int32) — categorized chain
-    │   ├── genealogy_offsets                    (n_particles+1,) uint32
-    │   ├── ext_genealogy_data                   (vlen int32) — full Geant4 chain
-    │   ├── ext_genealogy_offsets                (n_particles+1,) uint32
-    │   └── interaction_idx                      (n_particles,) int32 — row into per_interaction/
-    └── per_track/                               (~600 rows for typical LUCiD events)
-        ├── track_id            (n_tracks,) int32   — Geant4 track ID (truth metadata)
-        ├── parent_id           (n_tracks,) int32
-        ├── pdg                 (n_tracks,) int32   — raw PDG code (nuclear PDGs ~1e9 do not fit in int16)
-        ├── initial_energy      (n_tracks,) float32 — MeV (kinetic)
-        ├── dir_x, dir_y, dir_z (n_tracks,) float32 — initial direction, unit; (0,0,0) if the track has no segments
-        ├── n_cherenkov         (n_tracks,) int32   — total Cherenkov for this track
-        ├── particle_idx        (n_tracks,) int32   — FK to per_particle row
-        ├── ancestor            (n_tracks,) int32   — primary track_id at root of parent chain
-        └── interaction         (n_tracks,) int32   — 0-based rank of ancestor among event primaries
+    │   ├── t0                 ()  float64   earliest interaction t0
+    │   └── contained          ()  bool      every meaningful segment inside the detector
+    ├── per_window/            triggered datasets only; attrs: n_windows
+    │   ├── window_start       (n_win,)   float64  gate start, detector frame, ns
+    │   ├── window_end         (n_win,)   float64
+    │   └── digit_offsets      (n_win+1,) int32    window w is sensor/ digits [off[w], off[w+1])
+    ├── per_interaction/       one row per interaction (several with pile-up)
+    │   ├── source_type, t0, vertex_x, vertex_y, vertex_z
+    │   ├── n_primaries, n_particles
+    │   ├── neutrino_pdg, neutrino_energy_MeV     GENIE and supernova only; zero otherwise
+    │   ├── interaction_channel                   sntools channel code; -1 otherwise
+    │   ├── contained          (n_int,) bool
+    │   └── primary_{track_ids,pdgs,energies}_{offsets,data}   per-interaction primaries, CSR
+    ├── per_particle/          categorised particles, about 8 per event
+    │   ├── category           (n_particles,) uint8
+    │   ├── contained          (n_particles,) bool
+    │   ├── genealogy_data, genealogy_offsets            chain through categorised particles
+    │   ├── ext_genealogy_data, ext_genealogy_offsets    full GEANT4 chain
+    │   └── interaction_idx    (n_particles,) int32      row of per_interaction
+    └── per_track/             GEANT4 tracks, about 600 per event
+        ├── track_id, parent_id  (n_tracks,) int32   GEANT4 ids (metadata, never used as indices)
+        ├── pdg                  (n_tracks,) int32
+        ├── initial_energy       (n_tracks,) float32 kinetic, MeV
+        ├── dir_x, dir_y, dir_z  (n_tracks,) float32 initial direction; zero if the track has no segments
+        ├── n_cherenkov          (n_tracks,) int32
+        ├── particle_idx         (n_tracks,) int32   row of per_particle; -1 if none
+        ├── ancestor             (n_tracks,) int32   track_id of its primary
+        └── interaction          (n_tracks,) int32   rank of that primary among the event's primaries
 ```
 
-Notes:
-- `label_names` (config attr) is a small list of column names within
-  `per_particle/` and `per_track/` that count as classification label schemes
-  (as opposed to truth metadata or join keys). For LUCiD currently:
-  `["category"]`. Added if more taxonomies are introduced (e.g.,
-  `["category", "shower_or_track"]`).
-- The two granularities reflect a real LUCiD distinction:
-  - **Particles** (`per_particle`) are Geant4-categorized objects (Primary,
-    DecayElectron, SecondaryPion, Gamma) — typically ~8 per event. Used to
-    decompose the PMT signal in `hits/`.
-  - **Tracks** (`per_track`) are full Geant4 tracks — typically ~600 per
-    event. The 3D truth in `step/` is organized at this granularity.
+Particles are GEANT4 tracks grouped into categories (primary, decay electron, secondary pion,
+gamma, ...). A reconstruction target, a primary with its meaningful decay products, is a
+particle, which is why `hits/` splits charge by `particle_idx`. Each track maps to the
+particle reached by walking its parent chain.
 
-  "The reconstructed track" (what a vertex/energy/direction fit targets — a
-  primary and its physically meaningful decay products) lives at the
-  **`per_particle`** granularity, *not* the ~600 `per_track` Geant4 sub-tracks:
-  the ~600 rows are the raw simulation bookkeeping (every delta ray, every
-  scattered secondary), which is why `hits/` decomposes by `particle_idx`, not
-  `track_idx`.
-- Each track maps to exactly one particle via `particle_idx`. The mapping is
-  derived at write time by walking the parent chain from each track until it
-  reaches a categorized particle. Verified injective on production data
-  (>99.9% of tracks map cleanly; orphan housekeeping tracks are flagged as
-  `particle_idx = -1`).
-- `genealogy_data` is the compressed chain through categorized particles only.
-  `ext_genealogy_data` is the full Geant4 chain through all intermediate
-  meaningful tracks. Both are kept; they answer different questions.
-- `track_id` is the Geant4 ID (sparse integers up to ~10⁶). It is **not** used
-  as an index anywhere — purely truth metadata.
-
-## Cross-modality joins
-
-For an event:
+Joins within an event:
 
 ```
-hits hit (h)  ──particle_idx[h]──►  labl/per_particle row (p)
-step segment (s)  ──track_idx[s]──►  labl/per_track row (k)
-labl/per_track row (k)  ──particle_idx[k]──►  labl/per_particle row (p)
+hits row        ──particle_idx──►  labl per_particle row
+step segment    ──track_idx─────►  labl per_track row
+per_track row   ──particle_idx──►  labl per_particle row
 ```
 
-All joins are local-integer-index lookups within the same event. No offset
-arithmetic, no graph walking, no cross-event references.
+## Which files a task needs
 
-## Tasks → files (LUCiD-specific)
-
-| Task | sensor | hits | step | labl |
+| task | sensor | hits | step | labl |
 |---|:-:|:-:|:-:|:-:|
-| SSL on raw PMT readout | x | | | |
-| SSL on per-particle PMT decomposition | | x | | |
-| SSL on 3D segments | | | x | |
-| Per-segment Cherenkov forward simulation (resimulate photons from segments) | | | x | |
-| sensor → hits denoising / deconvolution | x | x | | |
-| sensor → step reconstruction (vertex, energy, direction) | x | | x | |
-| Per-PMT semantic / instance segmentation | | x | | x |
-| 3D semantic / instance segmentation on segments | | | x | x |
-| Event classification or regression (energy, direction, vertex via primary) | x | x | | x |
-| Containment-filtered training | | x or | x or | x (filter) |
+| models of the raw readout | x | | | |
+| per-particle charge | | x | | |
+| 3D segments, or re-simulating photons from segments | | | x | |
+| denoising readout into per-particle charge | x | x | | |
+| vertex, energy, direction from readout | x | | x | |
+| per-PMT segmentation | | x | | x |
+| 3D segmentation | | | x | x |
+| event classification or regression | x | x | | x |

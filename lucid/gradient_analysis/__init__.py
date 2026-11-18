@@ -1,3 +1,5 @@
+"""Loss-landscape sweeps: 1D and 2D scans of a loss and its autodiff gradient over a parameter,
+with finite-difference checks (``sweep``) and their plots (``plotting``)."""
 from .sweep import (
     SweepParam,
     SweepResult1D,

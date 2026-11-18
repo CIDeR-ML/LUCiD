@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Figure: tracking resolution vs energy (muons, 400-1800 MeV, TTS=2.0).
+"""Figure: tracking resolution vs energy (muons, 400-1800 MeV, TTS=2.1).
 
 Composite time-weight policy: w=1 below 1600 MeV, w=0.75 at/above (the measured
 crossover). Two reconstruction passes are generated (w=1 over the full range, w=0.75
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from analysis.paper.utils import paths, studies, run, plotting   # noqa: E402
+from analysis.paper.utils import paths, provenance, studies, run, plotting   # noqa: E402
 
 FIGURE = 'energy'
 PARTICLE = 'muon'
@@ -46,8 +46,7 @@ def plot_results(backend, out, energies):
     energies = energies or (studies.ENERGIES if backend == 's3df' else LOCAL_ENERGIES)
     ddir = paths.data_dir(FIGURE, backend)
     pdf = plotting.energy_composite(w1_dir=ddir, w075_dir=ddir, energies=energies,
-                                    crossover=studies.W_CROSSOVER, out=out,
-                                    max_energy=max(energies))
+                                    crossover=studies.W_CROSSOVER, out=out)
     print(f'wrote {pdf}')
 
 
@@ -67,7 +66,9 @@ def main():
     if a.generate_data or both:
         generate_data(a.backend, a.events, a.root_base, energies)
     if a.plot_results or both:
-        plot_results(a.backend, Path(a.out) if a.out else paths.figure_dir(), energies)
+        out = Path(a.out) if a.out else paths.figure_dir()
+        plot_results(a.backend, out, energies)
+        provenance.write_run_record(out, __file__, a)
 
 
 if __name__ == '__main__':

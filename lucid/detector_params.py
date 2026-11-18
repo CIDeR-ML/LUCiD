@@ -15,10 +15,8 @@ Helpers:
     normalize / denormalize      — map pytrees to/from [0,1]
     default_bounds               — physical bounds for DetectorParams
     make_optimization_mask       — boolean pytree for optax.masked
-    create_default_detector_params / create_default_particle_params
-    default_gradient_scales      — per-field gradient scaling
-    save_detector_params / load_detector_params
-    save_particle_params / load_particle_params
+    create_default_detector_params
+    load_detector_params
 """
 
 from typing import NamedTuple
@@ -29,7 +27,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from lucid.utils import spherical_to_cartesian
+from lucid.utils import cartesian_to_spherical, spherical_to_cartesian
 from lucid.wavelength.optical_model import N_CONTROL as _N_CTRL
 
 
@@ -113,13 +111,11 @@ class ResponseParams(NamedTuple):
     qe : jnp.ndarray         scalar, quantum efficiency at the scalar reference
                              wavelength (400 nm) [0, 1], per photon arriving at a
                              PMT (its reflection included, as PMT QE is quoted)
-    spe_width : jnp.ndarray  scalar, single-photoelectron charge resolution (default 0.0)
     tts : jnp.ndarray        scalar, transit-time spread, ns (default 0.0)
     qe_dev : jnp.ndarray     (n_ctrl,) QE λ-deviation curve, default ones (≡1)
 
-    ``spe_width`` and ``tts`` are calibrated PMT-response fields. Their neutral
-    defaults (0.0) leave the current forward model unchanged; wiring them into
-    ``make_hits`` is a later step. Scalar mode applies ``qe`` to every photon; wavelength
+    ``tts`` is a calibrated PMT-response field, read by the hits; its neutral default (0.0)
+    leaves the forward model unchanged. Scalar mode applies ``qe`` to every photon; wavelength
     mode applies ``qe * qe_fn(λ) / qe_fn(400 nm)``, which is ``qe_fn(λ)`` itself when ``qe``
     was projected from the curve. ``qe_dev`` multiplies that per-photon weight in
     wavelength mode (≡1 default; see ``ScatteringParams``). The photon step reflects part
@@ -128,7 +124,6 @@ class ResponseParams(NamedTuple):
     must therefore not exceed ``1 - R0``.
     """
     qe: jnp.ndarray
-    spe_width: jnp.ndarray
     tts: jnp.ndarray
     qe_dev: jnp.ndarray
 
@@ -139,23 +134,13 @@ class PerPmtParams(NamedTuple):
     Fields
     ------
     qe_corrections : jnp.ndarray  shape (num_sensors,), per-sensor QE multipliers
-    gain : jnp.ndarray            shape (num_sensors,), per-sensor gain (default ones)
     t0 : jnp.ndarray              shape (num_sensors,), per-sensor time offset, ns (default zeros)
-    walk : jnp.ndarray            shape (num_sensors,), per-sensor time-walk (default zeros)
 
-    ``gain`` (charge moments) and ``t0`` (first-arrival offset, the TQ-map constant) are
-    live calibration parameters. ``walk`` is the **electronics time-walk** (the charge-
-    AMPLITUDE-dependent threshold-crossing shift) — a distinct effect from the TTS
-    occupancy order-statistic that already lives in ``make_hits_moments``. It has **no
-    mechanism in the first-arrival engine** (which has no pulse shape / discriminator),
-    so it is INERT here and reserved for a future waveform-based timing calibration; do
-    not expect it to be fit by the first-arrival path. Neutral defaults leave the forward
-    unchanged.
+    ``t0`` is a per-PMT first-arrival offset (the TQ-map constant), not yet applied by the
+    hits; its default is zero.
     """
     qe_corrections: jnp.ndarray
-    gain: jnp.ndarray
     t0: jnp.ndarray
-    walk: jnp.ndarray
 
 
 class ScintillationParams(NamedTuple):
@@ -167,10 +152,9 @@ class ScintillationParams(NamedTuple):
     S, kB, C : jnp.ndarray   Chou light yield  dL/dx = S·(dE/dx)/(1+kB·(dE/dx)+C·(dE/dx)²)
                              [S ph/MeV, kB mm/keV, C (mm/keV)²]. LIVE-differentiable.
     tau_rise, tau_fall : jnp.ndarray  hypoexp emission timing (ns). LIVE-differentiable.
-    moyal_amp, moyal_loc, moyal_scale : jnp.ndarray  emission-spectrum shape. Currently
-                             BAKED from the material JSON at setup (closed into the Moyal
-                             inverse-CDF), so dormant on the pytree — carried for a future
-                             reparametrized-sampler calibration; moyal_amp is unused.
+
+    The emission-spectrum shape (``moyal_loc``, ``moyal_scale``) is static medium data, on
+    :class:`lucid.wavelength.medium.MediumProperties`.
 
     All default to 0.0 (NEUTRAL: S=0 → zero scintillation light → forward byte-identical
     for non-scintillating media; finite, NOT NaN, so the generic normalize/bounds tree-walk
@@ -178,14 +162,11 @@ class ScintillationParams(NamedTuple):
     ``emission_processes``. Excluded from optimization by default (not in any default
     trainable-field set).
     """
-    S: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
-    kB: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
-    C: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
-    tau_rise: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
-    tau_fall: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
-    moyal_amp: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
-    moyal_loc: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
-    moyal_scale: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+    S: jnp.ndarray = np.float32(0.0)
+    kB: jnp.ndarray = np.float32(0.0)
+    C: jnp.ndarray = np.float32(0.0)
+    tau_rise: jnp.ndarray = np.float32(0.0)
+    tau_fall: jnp.ndarray = np.float32(0.0)
 
 
 class DetectorParams(NamedTuple):
@@ -196,10 +177,9 @@ class DetectorParams(NamedTuple):
     scattering   : ScatteringParams   scatter_length, mie_scatter_length, g
     absorption   : AbsorptionParams   absorption_length
     reflection   : ReflectionParams   wall_reflection_rate, sensor_reflection_rate
-    response     : ResponseParams     qe, spe_width, tts
-    per_pmt      : PerPmtParams        qe_corrections, gain, t0, walk
-    scintillation: ScintillationParams S, kB, C, tau_*, moyal_* (appended LAST so the
-                   existing 23-leaf flatten order is preserved; neutral=0 for non-scint media)
+    response     : ResponseParams     qe, tts, qe_dev
+    per_pmt      : PerPmtParams        qe_corrections, t0
+    scintillation: ScintillationParams S, kB, C, tau_* (neutral=0 for non-scint media)
     """
     scattering: ScatteringParams
     absorption: AbsorptionParams
@@ -216,9 +196,8 @@ class DetectorParams(NamedTuple):
         any subset of the leaf fields (``scatter_length``, ``qe``,
         ``qe_corrections``, ...) and the rest are filled with neutral defaults
         (no-Mie scattering, identity response/per-PMT) so the forward is
-        unchanged. Per-sensor placeholder fields (``gain``/``t0``/``walk``)
-        default to ``(num_sensors,)`` arrays; ``num_sensors`` is inferred from
-        ``qe_corrections`` when not given.
+        unchanged. The per-sensor ``t0`` defaults to a ``(num_sensors,)`` array;
+        ``num_sensors`` is inferred from ``qe_corrections`` when not given.
         """
         ns = num_sensors
         if ns is None and "qe_corrections" in flat:
@@ -228,30 +207,23 @@ class DetectorParams(NamedTuple):
             ns = 1
         defaults = dict(
             scatter_length=50.0,
-            mie_scatter_length=_MIE_DEFAULTS["mie_scatter_length"],
-            g=_MIE_DEFAULTS["g"],
+            mie_scatter_length=1.0e9,       # no Mie channel, which makes g immaterial
+            g=0.0,
             rayleigh_dev=jnp.ones(_N_CTRL),
             mie_dev=jnp.ones(_N_CTRL),
             absorption_length=100.0,
             abs_dev=jnp.ones(_N_CTRL),
             wall_reflection_rate=0.0,
             sensor_reflection_rate=0.0,
-            wall_R0=_ANGULAR_REFL_DEFAULTS["wall_R0"],
-            wall_p=_ANGULAR_REFL_DEFAULTS["wall_p"],
-            wall_fspec=_ANGULAR_REFL_DEFAULTS["wall_fspec"],
-            cathode_nr=_ANGULAR_REFL_DEFAULTS["cathode_nr"],
-            cathode_nk=_ANGULAR_REFL_DEFAULTS["cathode_nk"],
-            sensor_fspec=_ANGULAR_REFL_DEFAULTS["sensor_fspec"],
+            wall_fspec=0.55,                # the SK-lit specular fractions
+            sensor_fspec=0.90,
+            **_ANGULAR_REFERENCE,
             qe=0.2,
-            spe_width=0.0,
             tts=0.0,
             qe_dev=jnp.ones(_N_CTRL),
             qe_corrections=jnp.ones(ns),
-            gain=jnp.ones(ns),
             t0=jnp.zeros(ns),
-            walk=jnp.zeros(ns),
             S=0.0, kB=0.0, C=0.0, tau_rise=0.0, tau_fall=0.0,    # scintillation: neutral (S=0 → no scint light)
-            moyal_amp=0.0, moyal_loc=0.0, moyal_scale=0.0,
         )
         defaults.update(flat)
         merged = {k: jnp.asarray(v) for k, v in defaults.items()}
@@ -271,7 +243,8 @@ class ParticleParams(NamedTuple):
     position : jnp.ndarray  (3,), meters
     theta : jnp.ndarray     scalar, polar angle radians
     phi : jnp.ndarray       scalar, azimuthal angle radians
-    t0 : jnp.ndarray        scalar, vertex time offset (ns)
+    t0 : jnp.ndarray        scalar, the track's start time (ns): the track forward offsets
+                            every photon's emission time by it
     """
     energy: jnp.ndarray
     position: jnp.ndarray
@@ -283,9 +256,7 @@ class ParticleParams(NamedTuple):
     def from_cartesian(cls, energy, position, direction, t0=0.0):
         """Create from Cartesian direction vector (e.g. data mode)."""
         direction = jnp.asarray(direction, dtype=jnp.float32)
-        norm = jnp.linalg.norm(direction)
-        theta = jnp.arccos(jnp.clip(direction[2] / norm, -1.0, 1.0))
-        phi = jnp.arctan2(direction[1], direction[0])
+        theta, phi = cartesian_to_spherical(direction / jnp.linalg.norm(direction))
         return cls(
             energy=jnp.asarray(energy, dtype=jnp.float32),
             position=jnp.asarray(position, dtype=jnp.float32),
@@ -323,13 +294,6 @@ from lucid.sources.calibration_sources import (  # noqa: F401, E402
 
 
 # ---------------------------------------------------------------------------
-# File I/O
-# ---------------------------------------------------------------------------
-
-_ARRAY_SENTINEL = "__array__:"
-
-
-# ---------------------------------------------------------------------------
 # Flat <-> nested mapping.
 #
 # The on-disk JSON format keeps FLAT physics-config keys (scatter_length, qe,
@@ -351,11 +315,6 @@ _SUBTUPLES = (
 _FLAT_FIELDS = tuple(
     field for _, cls in _SUBTUPLES for field in cls._fields
 )
-
-# leaf field name -> sub-tuple attribute name (e.g. 'scatter_length' -> 'scattering')
-_FIELD_TO_SUBTUPLE = {
-    field: attr for attr, cls in _SUBTUPLES for field in cls._fields
-}
 
 
 def _nest_flat_kwargs(flat: dict) -> DetectorParams:
@@ -382,96 +341,70 @@ def _flatten_detector_params(params: DetectorParams) -> dict:
     return flat
 
 
-def save_detector_params(params: DetectorParams, filepath: str):
-    """Save DetectorParams to JSON + companion .npy files for arrays.
+# ---------------------------------------------------------------------------
+# Physics config loading
+# ---------------------------------------------------------------------------
 
-    Scalars are stored directly in JSON.  Arrays whose size > 1 are saved to
-    ``<filepath_stem>_<field>.npy`` and referenced in JSON via the sentinel
-    ``"__array__:<filename>"`` convention.
-    """
-    dirpath = os.path.dirname(filepath) or "."
-    stem = os.path.splitext(os.path.basename(filepath))[0]
-    data = {}
-    flat = _flatten_detector_params(params)
-    for field in _FLAT_FIELDS:
-        val = flat[field]
-        arr = np.asarray(val)
-        if arr.ndim == 0:
-            data[field] = float(arr)
-        else:
-            npy_name = f"{stem}_{field}.npy"
-            np.save(os.path.join(dirpath, npy_name), arr)
-            data[field] = f"{_ARRAY_SENTINEL}{npy_name}"
-    with open(filepath, "w") as f:
-        json.dump(data, f, indent=2)
+# Keys a physics config may carry besides the leaf fields (and ``_``-prefixed comments).
+# ``digitizer`` and ``trigger`` are production's readout blocks (lucid.production.dataprod.run_job).
+_CONFIG_KEYS = ("medium_model", "qe_curve", "scalar_mode", "angular_reflection", "digitizer",
+                "trigger")
+
+# The optical lengths only scalar mode (wavelength_mode=False) reads: wavelength mode takes
+# them from the medium's curves. A config states them under "scalar_mode", which says so.
+_SCALAR_MODE_FIELDS = ("scatter_length", "absorption_length", "mie_scatter_length")
+
+# Leaves every config states: nothing to project them from and no neutral value.
+_REQUIRED_FIELDS = ("wall_reflection_rate", "sensor_reflection_rate",
+                    "wall_fspec", "sensor_fspec", "qe_corrections")
+
+# Leaves projected from the medium at the scalar reference wavelength when a config gives a
+# medium_model and omits them; required otherwise. ``qe`` likewise from the qe_curve.
+_MEDIUM_FIELDS = ("scatter_length", "absorption_length", "mie_scatter_length", "g")
+
+# Leaves only reflection_model='angular' reads (Schlick blacksheet wall, Fresnel cathode). A
+# config states them in an "angular_reflection" block, all four, which says which model reads
+# them; a setup that selects the angular model with a physics config requires the block.
+# Without it they hold these reference values (blacksheet near-diffuse with a low R0; bialkali
+# cathode n = 2.8 + 1.5i), which no other model reads.
+_ANGULAR_REFERENCE = {"wall_R0": 0.05, "wall_p": 1.0, "cathode_nr": 2.8, "cathode_nk": 1.5}
+
+# Identity values: the forward is unchanged by them (no TTS smearing, no per-PMT offset, no λ
+# deviation, no scintillation light).
+_IDENTITY = {"tts": 0.0, "t0": 0.0,
+             "S": 0.0, "kB": 0.0, "C": 0.0, "tau_rise": 0.0, "tau_fall": 0.0}
+_DEV_CURVE_FIELDS = ("rayleigh_dev", "mie_dev", "abs_dev", "qe_dev")
+
+
+def _check_keys(keys, allowed, where):
+    """Raise on a key outside ``allowed`` (``_``-prefixed comments pass), naming the closest one."""
+    import difflib
+    for key in keys:
+        if key.startswith("_") or key in allowed:
+            continue
+        close = difflib.get_close_matches(key, allowed, n=1)
+        hint = f"; did you mean {close[0]!r}?" if close else ""
+        raise ValueError(f"{where}: unknown key {key!r}{hint}")
 
 
 def _resolve_field(val, config_dir):
-    """Resolve a single physics config field value.
-
-    - ``null`` / missing → ``jnp.asarray(jnp.nan)`` (unresolved placeholder;
-      wavelength-projectable scalars are filled in later from curves if
-      ``medium_model`` / ``qe_curve`` is referenced)
-    - number     → ``jnp.asarray(float)``
-    - list       → ``jnp.asarray(list)``
-    - string ending in ``.json`` → loaded from file (relative to *config_dir*)
-    - ``"__array__:filename.npy"`` → loaded from companion ``.npy``
-    """
-    if val is None:
-        return jnp.asarray(jnp.nan)
+    """A physics config field value: a number, an inline list, or ``"file.json"`` (relative to
+    *config_dir*) holding a list."""
     if isinstance(val, str):
         if val.endswith(".json"):
             with open(os.path.join(config_dir, val)) as f:
                 arr = json.load(f)
             return jnp.asarray(arr, dtype=jnp.float32)
-        if val.startswith(_ARRAY_SENTINEL):
-            npy_name = val[len(_ARRAY_SENTINEL):]
-            return jnp.asarray(np.load(os.path.join(config_dir, npy_name)))
         raise ValueError(f"Unrecognised string value: {val!r}")
     if isinstance(val, list):
         return jnp.asarray(val, dtype=jnp.float32)
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        raise ValueError(f"not a number, list or file: {val!r}")
     return jnp.asarray(float(val))
 
 
-# Essential scalars — must come from a value or be projectable from a curve, else error.
-_PROJECTABLE_FIELDS = ("scatter_length", "absorption_length", "qe")
-
-# Mie-engine scalars (``mie_scatter_length``, ``g``) were added later; existing configs
-# omit them. Project from the medium when one is referenced (its ``mie_scatter_coeff`` /
-# ``mie_asymmetry``); otherwise fall back to a "no Mie" default — never raise and never
-# leave them NaN (a NaN ``g`` poisons the expected-value photon step: effective_ratio =
-# ... (1-g)/L_M → NaN → zero charge + NaN gradients). ``mie_scatter_length`` huge ⇒
-# 1/L_M ≈ 0 (no Mie channel), which makes ``g`` immaterial.
-_MIE_DEFAULTS = {"mie_scatter_length": 1.0e9, "g": 0.0}
-
-# New calibrated-response / per-PMT placeholder fields (added with the nested
-# refactor). Existing configs omit them entirely → loaded NaN → filled with a
-# neutral default so the forward is unchanged. Per-sensor fields (gain/t0/walk)
-# are kept scalar here and broadcast to (num_sensors,) by the caller.
-_NEUTRAL_DEFAULTS = {
-    "spe_width": 0.0,
-    "tts": 0.0,
-    "gain": 1.0,
-    "t0": 0.0,
-    "walk": 0.0,
-}
-
-# Wavelength λ-deviation curves (one value per control wavelength). Existing configs
-# omit them → loaded NaN scalar → filled with an all-ones curve (≡ pure medium
-# reference, byte-identical). A config may supply a curve as an inline list instead.
-_DEV_CURVE_FIELDS = ("rayleigh_dev", "mie_dev", "abs_dev", "qe_dev")
-
-# Scintillation scalars (refactor-v2 wbls/ice merge). Configs without a 'scintillation'
-# block omit them → loaded NaN scalar → filled 0.0 (NEUTRAL: S=0 → no scint light; finite
-# so normalize/bounds never poison). A scintillating material JSON supplies real values.
-_SCINT_DEFAULTS = {
-    "S": 0.0, "kB": 0.0, "C": 0.0, "tau_rise": 0.0, "tau_fall": 0.0,
-    "moyal_amp": 0.0, "moyal_loc": 0.0, "moyal_scale": 0.0,
-}
-
-
-def _scintillation_defaults_from_medium(medium_model_path):
-    """Pull DetectorParams-bound scintillation values from a material JSON.
+def _scintillation_defaults_from_medium(medium):
+    """Pull DetectorParams-bound scintillation values from a loaded material.
 
     The material file (e.g. ``config/materials/wbls.json``) is the canonical home
     for the scintillator's physical numbers — the physics config inherits them so
@@ -479,248 +412,166 @@ def _scintillation_defaults_from_medium(medium_model_path):
     dict for non-scintillating media (no ``scintillation`` block, e.g. water) or
     when no material model is referenced — so water stays neutral (S=0).
     """
-    if not medium_model_path:
+    if medium is None:
         return {}
-    with open(medium_model_path) as f:
-        m = json.load(f)
-    scint = m.get("scintillation")
+    scint = medium.model.get("scintillation")
     if not scint:
         return {}
     ly = scint.get("light_yield", {})
     tm = scint.get("timing", {})
-    sp = scint.get("spectrum", {})
     pick = lambda d, k: d[k] if k in d else None
     out = {
         "S": pick(ly, "S"), "kB": pick(ly, "kB"), "C": pick(ly, "C"),
         "tau_rise": pick(tm, "tau_rise"), "tau_fall": pick(tm, "tau_fall"),
-        "moyal_amp": pick(sp, "moyal_amp"),
-        "moyal_loc": pick(sp, "moyal_loc"),
-        "moyal_scale": pick(sp, "moyal_scale"),
     }
     return {k: v for k, v in out.items() if v is not None}
 
-# Reflection scalars filled in when a config omits them.
-#
-# `wall_fspec` and `sensor_fspec` are NOT inert: the default `scalar_mix` reflection model
-# consumes both fractions on every reflection. A config that sets a reflection RATE but no
-# fraction therefore silently inherits Super-K's surface split, so water-Cherenkov configs
-# should state theirs explicitly.
-#
-# wall_R0/wall_p/cathode_nr/cathode_nk are angular-model only. Bialkali cathode ~ n_r=2.8,
-# n_k=1.5; blacksheet near-diffuse low-R0.
-_ANGULAR_REFL_DEFAULTS = {
-    "wall_R0": 0.05,
-    "wall_p": 1.0,
-    "wall_fspec": 0.55,      # blacksheet specular fraction (SK lit ~0.55; 1-f diffuse)
-    "cathode_nr": 2.8,
-    "cathode_nk": 1.5,
-    "sensor_fspec": 0.90,    # PMT glass/cathode near-specular (SK lit ~0.90)
-}
 
+def _project_missing_scalars(kwargs, medium, qe_curve, source_filepath):
+    """Fill the omitted :data:`_MEDIUM_FIELDS` and ``qe`` from the medium and the QE curve at the
+    scalar reference wavelength; raise for one with nothing to project from.
 
-def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
-                             source_filepath):
-    """Fill NaN scalar fields by evaluating wavelength curves at ``ref_wavelength_nm``.
-
-    Modifies *kwargs* in place. Raises if an *essential* scalar is missing and no curve
-    is available to project from. Mie scalars fall back to a no-Mie default instead.
+    Modifies *kwargs* in place. ``medium`` (loaded, or None) is evaluated once, on the one-point
+    grid ``[λ_ref]``.
     """
-    for field in _PROJECTABLE_FIELDS:
-        v = kwargs[field]
-        if v.ndim != 0 or not bool(jnp.isnan(v)):
-            continue
+    from lucid.wavelength import DEFAULT_WAVELENGTH_NM as ref_wl
+    if "qe" not in kwargs:
+        if qe_curve is None:
+            raise ValueError(f"Physics config {source_filepath!r} has no scalar 'qe' and no "
+                             f"'qe_curve' to project from at λ={ref_wl}nm.")
+        kwargs["qe"] = jnp.asarray(float(qe_curve(ref_wl)), dtype=jnp.float32)
 
-        if field == "qe":
-            if qe_path is None:
-                raise ValueError(
-                    f"Physics config {source_filepath!r} has no scalar 'qe' "
-                    f"and no 'qe_curve' to project from at "
-                    f"λ={ref_wavelength_nm}nm.")
-            from lucid.wavelength.medium import load_qe_curve
-            scalar = float(load_qe_curve(qe_path)(ref_wavelength_nm))
-        else:
-            if medium_path is None:
-                raise ValueError(
-                    f"Physics config {source_filepath!r} has no scalar "
-                    f"{field!r} and no 'medium_model' to project from at "
-                    f"λ={ref_wavelength_nm}nm.")
-            from lucid.wavelength.medium import make_medium
-            wl_grid = jnp.array([ref_wavelength_nm], dtype=jnp.float32)
-            m = make_medium("water", wavelength_grid=wl_grid,
-                            medium_model_path=medium_path)
-            coeff = m.scatter_coeff if field == "scatter_length" else m.absorption_coeff
-            scalar = float(1.0 / (coeff[0] + 1e-30))
-
-        kwargs[field] = jnp.asarray(scalar, dtype=jnp.float32)
-
-    # Mie scalars: project from the medium if present, else default to "no Mie".
-    for field, default in _MIE_DEFAULTS.items():
-        v = kwargs[field]
-        if v.ndim != 0 or not bool(jnp.isnan(v)):
-            continue
-        if medium_path is not None:
-            from lucid.wavelength.medium import make_medium
-            wl_grid = jnp.array([ref_wavelength_nm], dtype=jnp.float32)
-            m = make_medium("water", wavelength_grid=wl_grid,
-                            medium_model_path=medium_path)
-            scalar = (float(m.mie_asymmetry) if field == "g"
-                      else float(1.0 / (m.mie_scatter_coeff[0] + 1e-30)))
-        else:
-            scalar = default
-        kwargs[field] = jnp.asarray(scalar, dtype=jnp.float32)
-
-    # New response / per-PMT placeholder scalars: neutral defaults when absent.
-    for field, default in _NEUTRAL_DEFAULTS.items():
-        v = kwargs[field]
-        if v.ndim == 0 and bool(jnp.isnan(v)):
-            kwargs[field] = jnp.asarray(default, dtype=jnp.float32)
-
-    # λ-deviation curves: an all-ones curve (≡ pure reference) when absent.
-    for field in _DEV_CURVE_FIELDS:
-        v = kwargs[field]
-        if v.ndim == 0 and bool(jnp.isnan(v)):
-            kwargs[field] = jnp.ones(_N_CTRL, dtype=jnp.float32)
-
-    # Angular/mixture-reflection scalars: physical defaults when absent. Inert for the
-    # legacy 'scalar' model; CONSUMED by 'angular' and by the DEFAULT 'scalar_mix' model.
-    # fspec defaults are the SK-lit specular fractions (wall 0.55, sensor 0.90); override
-    # per detector in the physics config (wall_fspec/sensor_fspec) if the surfaces differ.
-    for field, default in _ANGULAR_REFL_DEFAULTS.items():
-        v = kwargs[field]
-        if v.ndim == 0 and bool(jnp.isnan(v)):
-            kwargs[field] = jnp.asarray(default, dtype=jnp.float32)
-
-    # Scintillation scalars: neutral 0.0 when absent (non-scintillating media never read them).
-    for field, default in _SCINT_DEFAULTS.items():
-        v = kwargs[field]
-        if v.ndim == 0 and bool(jnp.isnan(v)):
-            kwargs[field] = jnp.asarray(default, dtype=jnp.float32)
+    missing = [f for f in _MEDIUM_FIELDS if f not in kwargs]
+    if not missing:
+        return
+    if medium is None:
+        raise ValueError(f"Physics config {source_filepath!r} has no {missing} and no "
+                         f"'medium_model' to project from at λ={ref_wl}nm.")
+    from lucid.wavelength.medium import medium_on_grid
+    m = medium_on_grid(medium, jnp.array([ref_wl], dtype=jnp.float32))
+    projected = {
+        "scatter_length": lambda: float(1.0 / (m.scatter_coeff[0] + 1e-30)),
+        "absorption_length": lambda: float(1.0 / (m.absorption_coeff[0] + 1e-30)),
+        "mie_scatter_length": lambda: float(1.0 / (m.mie_scatter_coeff[0] + 1e-30)),
+        "g": lambda: float(m.mie_asymmetry),
+    }
+    for field in missing:
+        kwargs[field] = jnp.asarray(projected[field](), dtype=jnp.float32)
 
 
-def load_detector_params(filepath: str, num_sensors: int = None,
-                         scalar_ref_wavelength: float = None) -> DetectorParams:
-    """Load DetectorParams from a composable physics config JSON.
-
-    The physics config may contain only the fields relevant to the detector.
-    Missing scalar fields for ``scatter_length``, ``absorption_length`` or
-    ``qe`` are projected from the referenced wavelength curves at
-    ``scalar_ref_wavelength`` (default 400 nm). If neither a scalar value nor
-    a curve reference is available, loading fails.
-
-    Field values can be:
-      - ``null`` / missing → projected from curves (see above), else error
-      - number     → scalar
-      - list       → inline array
-      - ``"path/to/file.json"`` → loaded from JSON file (relative to config dir)
-      - ``"__array__:file.npy"`` → loaded from companion ``.npy`` (legacy)
-
-    The following extra keys are recognised but not stored in DetectorParams:
-      - ``medium_model`` — path to medium model JSON
-      - ``qe_curve`` — path to PMT QE curve JSON
-
-    If *num_sensors* is given, scalar ``qe_corrections`` are automatically
-    expanded to ``jnp.ones(num_sensors) * value``.
-    """
-    dp, _, _ = load_physics_config(filepath, num_sensors=num_sensors,
-                                   scalar_ref_wavelength=scalar_ref_wavelength)
+def load_detector_params(filepath: str, num_sensors: int = None) -> DetectorParams:
+    """The DetectorParams of :func:`load_physics_config`."""
+    dp, _, _ = load_physics_config(filepath, num_sensors=num_sensors)
     return dp
 
 
-def load_physics_config(filepath: str, num_sensors: int = None,
-                        scalar_ref_wavelength: float = None):
-    """Load a composable physics config — returns DetectorParams plus extras.
+def load_physics_config(filepath: str, num_sensors: int = None, reflection_model: str = None):
+    """Load a physics config JSON: its DetectorParams, medium and QE curve.
 
-    Missing scalar fields (``scatter_length``, ``absorption_length``, ``qe``)
-    are projected from the referenced wavelength curves at
-    ``scalar_ref_wavelength`` (default 400 nm). If neither a scalar value nor
-    a curve reference is available, loading fails with a clear error.
+    Keys are the DetectorParams leaf names, ``medium_model`` and ``qe_curve`` (paths relative
+    to the config), ``scalar_mode``, ``angular_reflection``, production's ``digitizer`` /
+    ``trigger`` blocks and ``_``-prefixed comments; any other key raises. A value is a number,
+    an inline list or a ``"file.json"`` holding a list.
+
+    - ``wall_reflection_rate``, ``sensor_reflection_rate``, ``wall_fspec``, ``sensor_fspec`` and
+      ``qe_corrections`` are required.
+    - ``scatter_length``, ``absorption_length`` and ``mie_scatter_length`` are read only in
+      scalar mode (``wavelength_mode=False``; wavelength mode evaluates the medium's curves), so
+      a config states them inside a ``"scalar_mode"`` block. Omitted, they and ``g`` are the
+      medium's values at the scalar reference wavelength (400 nm), and ``qe`` the QE curve's;
+      with nothing to project from, loading raises.
+    - ``wall_R0``, ``wall_p``, ``cathode_nr`` and ``cathode_nk`` are read only by
+      ``reflection_model='angular'``, so a config states all four inside an
+      ``"angular_reflection"`` block. ``reflection_model='angular'`` requires the block; without
+      it the four hold reference values no other model reads.
+    - The other leaves take identity values when omitted; a scintillating medium supplies
+      ``S``, ``kB``, ``C``, ``tau_rise`` and ``tau_fall``.
+
+    If *num_sensors* is given, scalar per-PMT leaves (``qe_corrections``, ``t0``)
+    are expanded to ``(num_sensors,)``, and a per-PMT file of another length raises.
 
     Returns
     -------
     detector_params : DetectorParams
-    medium_model_path : str or None
-        Resolved path to the medium model JSON, if present.
-    qe_curve_path : str or None
-        Resolved path to the PMT QE curve JSON, if present.
-    """
-    from lucid.wavelength import DEFAULT_WAVELENGTH_NM
-    ref_wl = (scalar_ref_wavelength if scalar_ref_wavelength is not None
-              else DEFAULT_WAVELENGTH_NM)
+    medium : MediumProperties or None
+        The ``medium_model`` material, loaded (:func:`lucid.wavelength.medium.load_medium`).
+    qe_curve : QECurve or None
+        The ``qe_curve``, loaded (:func:`lucid.wavelength.medium.load_qe_curve`).
 
+    Each referenced file is read once.
+    """
     config_dir = os.path.dirname(filepath) or "."
     with open(filepath) as f:
         data = json.load(f)
+    leaf_keys = tuple(f for f in _FLAT_FIELDS
+                      if f not in _SCALAR_MODE_FIELDS and f not in _ANGULAR_REFERENCE)
+    for key in _SCALAR_MODE_FIELDS:
+        if key in data:
+            raise ValueError(
+                f"physics config {filepath!r}: {key!r} is read only in scalar mode "
+                "(wavelength_mode=False); wavelength mode takes it from the medium. State it "
+                'under "scalar_mode".')
+    for key in _ANGULAR_REFERENCE:
+        if key in data:
+            raise ValueError(
+                f"physics config {filepath!r}: {key!r} is read only by "
+                "reflection_model='angular'. State it under \"angular_reflection\".")
+    _check_keys(data, leaf_keys + _CONFIG_KEYS, f"physics config {filepath!r}")
+    scalar_mode = data.get("scalar_mode", {})
+    _check_keys(scalar_mode, _SCALAR_MODE_FIELDS, f"physics config {filepath!r} 'scalar_mode'")
+    angular = data.get("angular_reflection")
+    if angular is not None:
+        _check_keys(angular, tuple(_ANGULAR_REFERENCE),
+                    f"physics config {filepath!r} 'angular_reflection'")
+        missing = [f for f in _ANGULAR_REFERENCE if f not in angular]
+        if missing:
+            raise ValueError(f"physics config {filepath!r} 'angular_reflection' does not state "
+                             f"{missing}")
+    elif reflection_model == 'angular':
+        raise ValueError(
+            f"reflection_model='angular' reads {list(_ANGULAR_REFERENCE)}; physics config "
+            f"{filepath!r} has no \"angular_reflection\" block stating them.")
+    missing = [f for f in _REQUIRED_FIELDS if f not in data]
+    if missing:
+        raise ValueError(f"physics config {filepath!r} does not state {missing}")
 
-    medium_model = data.get("medium_model")
-    qe_curve = data.get("qe_curve")
+    from lucid.wavelength.medium import load_medium, load_qe_curve
+    medium_model, qe_curve = data.get("medium_model"), data.get("qe_curve")
+    medium = (load_medium(medium_model_path=os.path.join(config_dir, medium_model))
+              if medium_model is not None else None)
+    qe_curve = load_qe_curve(os.path.join(config_dir, qe_curve)) if qe_curve is not None else None
 
-    medium_model_path = os.path.join(config_dir, medium_model) if medium_model else None
-    qe_curve_path = os.path.join(config_dir, qe_curve) if qe_curve else None
-
-    # Read FLAT JSON keys for every leaf field. New response/per_pmt fields
-    # (spe_width, tts, gain, t0, walk) are typically absent from existing configs;
-    # _resolve_field returns NaN, which _project_missing_scalars fills with the
-    # neutral default below.
+    given = {k: v for k, v in data.items() if k in leaf_keys}
+    for block in (scalar_mode, angular or {}):
+        given.update({k: v for k, v in block.items() if not k.startswith("_")})
     kwargs = {}
-    for field in _FLAT_FIELDS:
-        val = data.get(field, None)
-        kwargs[field] = _resolve_field(val, config_dir)
+    for field, val in given.items():
+        try:
+            kwargs[field] = _resolve_field(val, config_dir)
+        except ValueError as e:
+            raise ValueError(f"physics config {filepath!r}, {field!r}: {e}") from None
 
-    # Scintillation scalars: a scintillating material JSON (wbls) supplies the
-    # physical S/kB/C/tau/moyal values; inherit them for any scint field the
-    # config left absent (NaN). Water's material has no scintillation block →
-    # this is a no-op and _project_missing_scalars fills the neutral 0.0.
-    scint_defaults = _scintillation_defaults_from_medium(medium_model_path)
-    for field, val in scint_defaults.items():
-        v = kwargs.get(field)
-        if v is not None and v.ndim == 0 and bool(jnp.isnan(v)):
-            kwargs[field] = jnp.asarray(val, dtype=jnp.float32)
-
-    _project_missing_scalars(kwargs, medium_model_path, qe_curve_path,
-                             ref_wl, filepath)
+    _project_missing_scalars(kwargs, medium, qe_curve, filepath)
+    # Scintillation scalars: a scintillating material JSON (wbls) supplies the physical
+    # S/kB/C/tau values for any the config leaves out; otherwise the identity (no light).
+    for field, val in _scintillation_defaults_from_medium(medium).items():
+        kwargs.setdefault(field, jnp.asarray(val, dtype=jnp.float32))
+    for field, val in {**_IDENTITY, **_ANGULAR_REFERENCE}.items():
+        kwargs.setdefault(field, jnp.asarray(val, dtype=jnp.float32))
+    for field in _DEV_CURVE_FIELDS:
+        kwargs.setdefault(field, jnp.ones(_N_CTRL, dtype=jnp.float32))
 
     if num_sensors is not None:
         qe_corr = kwargs['qe_corrections']
         if qe_corr.ndim == 0:
-            # NaN qe_corrections means the config omitted it entirely — default
-            # to neutral (1.0) rather than poisoning the array.
-            fill = jnp.where(jnp.isnan(qe_corr), jnp.float32(1.0), qe_corr)
-            kwargs['qe_corrections'] = jnp.ones(num_sensors) * fill
-        # Per-sensor placeholders (gain/t0/walk): broadcast scalar neutral
-        # defaults to (num_sensors,) so the in-memory pytree is well-shaped.
-        for field, neutral in (('gain', 1.0), ('t0', 0.0), ('walk', 0.0)):
-            v = kwargs[field]
-            if v.ndim == 0:
-                kwargs[field] = jnp.full(num_sensors, neutral, dtype=jnp.float32)
+            kwargs['qe_corrections'] = jnp.ones(num_sensors) * qe_corr
+        elif qe_corr.shape[0] != num_sensors:
+            raise ValueError(f"qe_corrections has {qe_corr.shape[0]} entries for {num_sensors} "
+                             f"sensors ({filepath})")
+        if kwargs['t0'].ndim == 0:
+            kwargs['t0'] = jnp.full(num_sensors, kwargs['t0'], dtype=jnp.float32)
 
-    return _nest_flat_kwargs(kwargs), medium_model_path, qe_curve_path
-
-
-def save_particle_params(params: ParticleParams, filepath: str):
-    """Save ParticleParams to JSON."""
-    data = {}
-    for field in ParticleParams._fields:
-        val = np.asarray(getattr(params, field))
-        if val.ndim == 0:
-            data[field] = float(val)
-        else:
-            data[field] = val.tolist()
-    with open(filepath, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-def load_particle_params(filepath: str) -> ParticleParams:
-    """Load ParticleParams from JSON."""
-    with open(filepath) as f:
-        data = json.load(f)
-    kwargs = {}
-    for field in ParticleParams._fields:
-        val = data[field]
-        if isinstance(val, list):
-            kwargs[field] = jnp.asarray(val, dtype=jnp.float32)
-        else:
-            kwargs[field] = jnp.asarray(float(val), dtype=jnp.float32)
-    return ParticleParams(**kwargs)
+    return _nest_flat_kwargs(kwargs), medium, qe_curve
 
 
 # ---------------------------------------------------------------------------
@@ -763,16 +614,12 @@ def default_bounds(num_sensors: int):
         wall_R0=jnp.array(0.0), wall_p=jnp.array(0.5), wall_fspec=jnp.array(0.0),
         cathode_nr=jnp.array(1.5), cathode_nk=jnp.array(0.0), sensor_fspec=jnp.array(0.0),
         qe=jnp.array(0.0),
-        spe_width=jnp.array(0.0),
         tts=jnp.array(0.0),
         qe_dev=jnp.full(_N_CTRL, 0.1),
         qe_corrections=jnp.zeros(num_sensors),
-        gain=jnp.full(num_sensors, 0.3),
         t0=jnp.full(num_sensors, -10.0),
-        walk=jnp.full(num_sensors, -5.0),
         S=jnp.array(0.0), kB=jnp.array(0.0), C=jnp.array(0.0),       # scintillation (inert unless fit)
         tau_rise=jnp.array(0.0), tau_fall=jnp.array(0.0),
-        moyal_amp=jnp.array(0.0), moyal_loc=jnp.array(0.0), moyal_scale=jnp.array(0.0),
     ))
     bounds_max = _nest_flat_kwargs(dict(
         scatter_length=jnp.array(100.0),
@@ -787,16 +634,12 @@ def default_bounds(num_sensors: int):
         wall_R0=jnp.array(0.5), wall_p=jnp.array(12.0), wall_fspec=jnp.array(1.0),
         cathode_nr=jnp.array(4.0), cathode_nk=jnp.array(4.0), sensor_fspec=jnp.array(1.0),
         qe=jnp.array(1.0),
-        spe_width=jnp.array(1.0),
         tts=jnp.array(5.0),
         qe_dev=jnp.full(_N_CTRL, 10.0),
         qe_corrections=jnp.full(num_sensors, 2.0),
-        gain=jnp.full(num_sensors, 3.0),
         t0=jnp.full(num_sensors, 10.0),
-        walk=jnp.full(num_sensors, 5.0),
         S=jnp.array(5000.0), kB=jnp.array(1e-3), C=jnp.array(1e-6), # scintillation physical ranges
         tau_rise=jnp.array(10.0), tau_fall=jnp.array(50.0),
-        moyal_amp=jnp.array(10.0), moyal_loc=jnp.array(600.0), moyal_scale=jnp.array(100.0),
     ))
     return bounds_min, bounds_max
 
@@ -845,7 +688,7 @@ def make_optimization_mask(params, trainable_fields):
     def build(node):
         # Recurse into nested NamedTuples, keying the decision on the LEAF field
         # name. For DetectorParams this descends scattering/absorption/... into
-        # their leaf fields (scatter_length, gain, tts, ...).
+        # their leaf fields (scatter_length, t0, tts, ...).
         fields = getattr(type(node), "_fields", None)
         if fields is None:
             # Reached a leaf array — caller decided trainability already.
@@ -877,60 +720,12 @@ def create_default_detector_params(num_sensors: int) -> DetectorParams:
         abs_dev=jnp.ones(_N_CTRL),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
-        wall_R0=jnp.array(_ANGULAR_REFL_DEFAULTS["wall_R0"]),
-        wall_p=jnp.array(_ANGULAR_REFL_DEFAULTS["wall_p"]),
-        wall_fspec=jnp.array(_ANGULAR_REFL_DEFAULTS["wall_fspec"]),
-        cathode_nr=jnp.array(_ANGULAR_REFL_DEFAULTS["cathode_nr"]),
-        cathode_nk=jnp.array(_ANGULAR_REFL_DEFAULTS["cathode_nk"]),
-        sensor_fspec=jnp.array(_ANGULAR_REFL_DEFAULTS["sensor_fspec"]),
+        wall_fspec=jnp.array(0.55),
+        sensor_fspec=jnp.array(0.90),
+        **{k: jnp.array(v) for k, v in _ANGULAR_REFERENCE.items()},
         qe=jnp.array(0.2),
-        spe_width=jnp.array(0.0),
         tts=jnp.array(0.0),
         qe_dev=jnp.ones(_N_CTRL),
         qe_corrections=jnp.ones(num_sensors),
-        gain=jnp.ones(num_sensors),
         t0=jnp.zeros(num_sensors),
-        walk=jnp.zeros(num_sensors),
-    ))
-
-
-def create_default_particle_params() -> ParticleParams:
-    """Sensible initialization defaults for track reconstruction."""
-    return ParticleParams(
-        energy=jnp.array(500.0),
-        position=jnp.zeros(3),
-        theta=jnp.array(jnp.pi / 2),
-        phi=jnp.array(0.0),
-        t0=jnp.array(0.0),
-    )
-
-
-def default_gradient_scales(num_sensors: int) -> DetectorParams:
-    """Per-field gradient scaling factors.
-
-    Useful for applying different effective learning rates to each parameter
-    group::
-
-        scaled_grads = jax.tree.map(lambda g, s: g * s, grads, scales)
-    """
-    return _nest_flat_kwargs(dict(
-        scatter_length=jnp.array(1.0),
-        mie_scatter_length=jnp.array(1.0),
-        g=jnp.array(1.0),
-        rayleigh_dev=jnp.ones(_N_CTRL),
-        mie_dev=jnp.ones(_N_CTRL),
-        absorption_length=jnp.array(1.0),
-        abs_dev=jnp.ones(_N_CTRL),
-        wall_reflection_rate=jnp.array(1.0),
-        sensor_reflection_rate=jnp.array(1.0),
-        wall_R0=jnp.array(1.0), wall_p=jnp.array(1.0), wall_fspec=jnp.array(1.0),
-        cathode_nr=jnp.array(1.0), cathode_nk=jnp.array(1.0), sensor_fspec=jnp.array(1.0),
-        qe=jnp.array(1.0),
-        spe_width=jnp.array(1.0),
-        tts=jnp.array(1.0),
-        qe_dev=jnp.ones(_N_CTRL),
-        qe_corrections=jnp.full(num_sensors, 0.1),
-        gain=jnp.full(num_sensors, 0.1),
-        t0=jnp.full(num_sensors, 0.1),
-        walk=jnp.full(num_sensors, 0.1),
     ))

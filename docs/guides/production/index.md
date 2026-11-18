@@ -1,61 +1,51 @@
 # Producing datasets
 
-LUCiD has two very different jobs, and it is easy to end up in the wrong part
-of the docs looking for the other one.
+This section is for producing new labelled datasets from GEANT4: PhotonSim simulates the
+events, LUCiD simulates the detector and writes HDF5. Simulating, reconstructing and calibrating
+with the shipped emitters need none of it ([quickstart](../../getting-started/quickstart.md)).
 
-- **Explore, reconstruct, or calibrate** using the bundled, pre-trained SIREN
-  emitter weights. This is the fast path — no GEANT4, no PhotonSim, nothing to
-  build. Everything you need ships with the repo or comes down with
-  `./scripts/download_data.sh`. Start at the
-  [Getting Started quickstart](../../getting-started/quickstart.md).
-- **Produce a labeled dataset** — new GEANT4-simulated events, saved as HDF5,
-  for training a SIREN emitter or for other downstream analysis. This needs an
-  external simulation engine (**PhotonSim**), built from source or pulled as
-  part of the published container. This section is about that path.
+Every path needs the PhotonSim binary, built yourself or inside the published container image
+`ghcr.io/cider-ml/lucid` (GEANT4, ROOT, GENIE, PhotonSim and LUCiD).
 
-If you only want to simulate an event, look at a display, run a
-reconstruction, or run a calibration, you do not need anything on this page —
-those all consume the bundled SIREN weights already in `data/`.
-
-## I want to…
-
-| I want to… | Go to |
+| I want to | Go to |
 |---|---|
-| Run the tutorial notebooks | [Getting Started quickstart](../../getting-started/quickstart.md) |
-| Simulate an event and look at a display | [Getting Started quickstart](../../getting-started/quickstart.md) (`examples/hello_simulate.py`, `00_quickstart` notebook) |
-| Produce a dataset from the container (Apptainer or Docker) | [Container production](container.md) |
-| Produce a labeled dataset on my own machine | [Local production](local.md) |
-| Produce at scale on a cluster (S3DF / NERSC / LXPLUS) | [S3DF](deploy-s3df.md), [NERSC](deploy-nersc.md), [LXPLUS](deploy-lxplus.md) — see [how the cluster layer works](cluster-abstraction.md) |
-| Train a new SIREN emitter from GEANT4 output | [SIREN training inputs](siren-training-inputs.md) |
-| Post-process a dataset I already produced | [Working with LUCiD data](../../reference/working-with-data.md) |
+| run a job with the container (Apptainer or Docker), no build | [From the container](container.md) |
+| build PhotonSim and run jobs on my own machine | [On your machine](local.md) |
+| produce a full dataset on S3DF, NERSC or LXPLUS | [On a cluster](clusters.md) |
+| train a new SIREN emitter from PhotonSim output | [Training a SIREN emitter](siren-training-inputs.md) |
+| read what a job wrote | [Dataset schema](../../reference/dataset-schema.md) |
 
-## What production writes
+One job is one `lucid-run-job` call ([flags](../../reference/cli.md#lucid-run-job)). It writes
+one batch: four HDF5 files (`sensor/`, `hits/`, `step/`, `labl/`) with the readout of the
+[digitizer and trigger](../../reference/digitizer-and-trigger.md) the dataset uses.
 
-Whichever path you take, a production run ends with the same thing: one batch
-of **four parallel HDF5 files** (`sensor/`, `hits/`, `step/`, `labl/`), sharing
-per-event indexing, plus whatever digitizer and trigger model the dataset
-config selected — the digitizer turns raw per-photon deposits into
-per-sensor charge/time readout, and an optional trigger window decides which
-stretches of time are kept. The full field-by-field layout is in the
-[dataset schema reference](../../reference/dataset-schema.md); how the
-digitizer and trigger models work is in
-[digitizer & trigger](../../reference/digitizer-and-trigger.md). For the
-`lucid-run-job` command-line flags, see the [CLI reference](../../reference/cli.md).
+## Config blocks
 
-## Before you start
+Dataset configs are `lucid/production/dataprod/configs/<block>/NN_name.json`; copy one to make
+your own. Event counts are the configs' `nominal_train` and `nominal_test`.
 
-Every path in this section needs the **PhotonSim** binary (GEANT4-based photon
-transport) — either built locally against your own GEANT4 + ROOT install, or
-available pre-built inside the published container image. Pick
-[local](local.md) if you already have GEANT4/ROOT/GENIE installed and want to
-build PhotonSim yourself; pick [the container](container.md) if you are on macOS or don't
-want to install those dependencies; pick a cluster runbook
-([S3DF](deploy-s3df.md), [NERSC](deploy-nersc.md), [LXPLUS](deploy-lxplus.md))
-once you are ready to generate a full training or production dataset rather
-than a handful of test events.
+| block | configs | nominal events | detector |
+|---|---|---|---|
+| `GeV` | `01_pbomb` (particle bomb); `02_mu`, `03_pi`, `04_e`, `06_pi0`, `07_gamma` (single particles); `08_2mu`, `09_mu_pip`, `10_e_pip`, `11_e_pi0`, `12_mu_pi0` (two particles at one vertex); `02_mu_fast`, `02_mu_metrics`, `02_mu_smoke` (small `02_mu` variants) | `01`: train 1,000,000, test 50,000. `02` to `07` and `08`: test 50,000; `09` to `12`: test 10,000 (variants 60, 500, 10) | none: pass `SK_WAND` or `HK_WAND` |
+| `Solar` | `01_e_low_energy` | train 1,000,000, test 50,000 | `HK_WAND` (declared) |
+| `SN` | `01_supernova_50kpc` | 5 bursts | `HK_WAND` (declared) |
+| `Test` | `01_pile_up_bombs` | 500 | `HK_WAND` (declared) |
 
-Production configs live under `lucid/production/configs/<block>/`, grouped
-into blocks (`GeV`, `SN`, `Solar`, `Test`) that each bundle a set of particle
-and interaction choices with their own train/test event counts — pick a
-config from there (or write your own alongside them) for any of the paths
-above.
+The particle bomb is the training set: 1 to 5 particles per event, mixed as in real
+interactions. The single-particle configs are test sets, one per species in the bomb. What each
+`GeV` config generates is listed in [the container guide](container.md#3-the-configs).
+
+## Where a batch run writes
+
+The cluster fan-out writes one directory per config and split:
+
+```
+<OUTPUT_BASE_PATH>/<detector>/[_test/]<block>/[<split>/]config_NN/
+    submit_job_NNNNNN.{sbatch,sub}, job_NNNNNN-<jobid>.{out,err}
+    sensor/ hits/ step/ labl/           one wc_<kind>_NNNN.h5 per job
+```
+
+- `_test/` appears only for a test wave (`-t`: one job of 2 events per split).
+- `<split>` (`train`, `test`) appears for `GeV` and `Solar`; `SN` and `Test` have none. A
+  supernova config adds `<model>/<ordering>/` below the directory, a monoenergetic one `<E>MeV/`.
+- `NNNN = job_id − 1`. Each directory is one dataset; train and test use different seeds.

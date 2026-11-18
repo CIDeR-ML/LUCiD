@@ -1,0 +1,48 @@
+# The toolchain LUCiD's results were captured against.
+#
+# Use it as a pip constraints file, never as a requirements file:
+#
+#     pip install -e . -c tests/constraints.txt
+#
+# pyproject.toml states the supported RANGE (`jax>=0.5.3,<0.6`, ...); this file states the ONE point
+# in that range the CI jobs run at, and the one a reported number should be read against. Every
+# version below was read out of the reference container /sdf/group/neutrino/images/develop.sif
+# (python 3.10.12) with importlib.metadata, except the four the container lacks (below).
+#
+# Changing a line here is a numerics change. jax, jaxlib, numpy and scipy in particular reassociate
+# reductions between releases, and lucid pins neither the matmul precision (it runs at JAX's
+# default) nor the reduction order.
+
+# --- the JAX stack: jax and jaxlib move together, and ml_dtypes/opt_einsum come with them
+jax==0.5.3
+jaxlib==0.5.3
+ml_dtypes==0.5.1
+opt_einsum==3.4.0
+
+# --- numerics
+numpy==2.1.3
+scipy==1.15.2
+
+# --- neural network layers and the training stack.
+# NOT IN THE CONTAINER. develop.sif ships none of these four, so inside it LUCiD is installed into a
+# venv made with --system-site-packages (docs/getting-started/install.md); the versions below are
+# the ones the paper run resolved to.
+flax==0.10.6
+optax==0.2.4
+chex==0.1.89
+orbax-checkpoint==0.11.13
+
+# --- IO
+h5py==3.13.0
+uproot==5.6.0
+awkward==2.8.0
+
+# --- plotting and progress; plotly, kaleido and imageio are the `viz` extra
+matplotlib==3.10.0
+plotly==6.0.1
+kaleido==0.2.1
+imageio==2.37.0
+tqdm==4.67.1
+
+# --- test runner
+pytest==8.3.5

@@ -1,145 +1,105 @@
-# LUCiD Production Pipeline
+# Production
 
-Turns a PhotonSim particle-based ROOT file into a four-file HDF5 dataset
-(`sensor/`, `inst/`, `seg/`, `labl/`). Full schema in
-[`docs/reference/dataset-schema.md`](../../docs/reference/dataset-schema.md).
+Turns PhotonSim (Geant4) output into LUCiD datasets: four parallel HDF5 files per batch
+(`sensor/`, `hits/`, `step/`, `labl/`), described in the
+[dataset schema](../../docs/reference/dataset-schema.md). The workflow and its configs are in
+[producing datasets](../../docs/guides/production/index.md). Units are metres, nanoseconds and
+MeV.
 
-## Config blocks
+| directory | contents |
+|---|---|
+| `dataprod/` | the dataset line: `lucid-run-job`, the event loops, the generators (Geant4 macros, GENIE, sntools), the cluster fan-out, the dataset configs and the submit/monitor/verify scripts ([README](dataprod/README.md)) |
+| `siren_inputs/` | PhotonSim scans for SIREN training: the s_max scan (`smax/`), the training-input scan, the t0 fit (`t0/`), and training sweeps (`train_siren/`) ([README](siren_inputs/README.md)) |
+| `qa/` | validation of a written dataset (`validations.py`), the trigger study, job-log parsing |
+| `derived_views/` | new labelings of an existing dataset without re-simulating ([README](derived_views/README.md)) |
+| `platform/` | the cluster adapters (Slurm on S3DF and NERSC, HTCondor on LXPLUS), `run_in_container.sh`, and the `user_paths.sh` templates |
 
-Configs live under `configs/<block>/NN_name.json` (2-digit, numbering restarts
-per block):
+The applications share only `platform/` and the library; the dataset format is `lucid.dataset`.
 
-| block | contents | splits |
-|---|---|---|
-| `GeV` | particle-bomb (01), single particles (02–07) | 01 train+test (1M/50k); 02–07 **test-only** (50k) |
-| `Solar` | low-energy e⁻ (01) | train+test (1M/50k) |
-| `SN` | supernova bursts (01) | flat |
-| `Test` | dev/scratch (pile-up bombs 01) | flat |
+## One job
 
-The particle bomb is config 01 because it is the training set: it spans the
-multiplicities and species a real event mixes, so the single-particle configs
-(02-07) are kept test-only, giving one evaluation cell per species in the pool,
-rather than training on any single species. Its pool is
-{e-, mu-, pi+, pi-, pi0, gamma}; e+ and mu+ are omitted as near-twins of their
-negative counterparts in the optical forward.
-
-A config declares `nominal_train` / `nominal_test`; the detector comes from
-`-D` (or the config's own `detector`, for the self-contained blocks). The
-fanout writes `OUTPUT_BASE/<detector>/<block>/[<split>]/config_NN/` and sizes jobs
-from `nominal / (target_seconds_per_job / seconds_per_event)`. Train/test datasets
-use disjoint master seeds. See
-[`jobs/dataprod/`](jobs/dataprod/) and [`docs/guides/production/deploy-nersc.md`](../../docs/guides/production/deploy-nersc.md).
-
-## Example
+A dataset config is `dataprod/configs/<block>/NN_name.json`. One job of one config, on a
+PhotonSim file already in the output directory as `output_job_<job-id>.root` (the id
+zero-padded to six digits, e.g. `output_job_000001.root`):
 
 ```bash
-python -m lucid.production.generate_events_with_particles \
-    --root-file /path/to/photonsim_output.root \
-    --output     /path/to/dataset_root/ \
-    --dataset-name my_run_2026_04_20 \
-    --apply-smearing
+lucid-run-job --config lucid/production/dataprod/configs/GeV/02_mu_smoke.json \
+    --detector SK_WAND --output-dir /path/to/dataset_root/ --job-id 1 --n-events 2 --skip-photonsim
 ```
 
-Writes `{output}/{sensor,hits,step,labl}/wc_*_0000.h5`. Use `--help` for
-the full flag list (`--batch-size`, `--n-events`, `--master-seed`,
-`--physics-config`, ...).
+This writes `{output}/{sensor,hits,step,labl}/wc_*_0000.h5` (batch index = job id − 1). The
+flags are in the [CLI reference](../../docs/reference/cli.md).
 
-**Units:** meters, nanoseconds, MeV throughout.
+The `GeV` configs declare no detector, so they need `--detector`. The digitizer and trigger
+come from the dataset config or else from the detector's physics config; of the bundled
+detectors only `SK_WAND` and `HK_WAND` carry both. On any other detector (`SK_like`, `HK`, ...)
+the job stops before PhotonSim unless the config states its readout (`"digitizer": "basic"`,
+`"trigger": null`). The `Solar`, `SN` and `Test` configs declare their own detector (`HK`) and
+readout; a `--detector` given with them must match.
 
-## Medium / scintillation (WbLS)
+## Medium
 
-The medium is set by the **detector config** (`--detector`), not by the
-dataprod config's `material` field. The default `--detector SK_like` is
-water → Cherenkov-only output (every `emission_process` row is 0). To
-produce scintillation, run with `--detector SK_like_wbls`; the log then
-reports `geometry: cylinder / wbls` and `emission_process` carries both
-Cherenkov (0) and scintillation (1) hits.
+The medium comes from the detector (`--detector`), not from the dataset config's `material`
+field. The WAND detectors and `SK_like` are water, so their output is Cherenkov only (every
+`emission_process` is 0). For scintillation use a WbLS detector such as `SK_like_wbls`:
+`emission_process` is then 0 for Cherenkov and 1 for scintillation hits. `SK_like_wbls` has no
+digitizer or trigger either, so a `GeV` config on it must state both.
 
-## Digitizer / hit-making
+## Digitizer
 
-Sensor hit-making is a per-sensor sliding-window integrator
-(`lucid/simulation/digitizer.py`). The model is set by an optional `"digitizer"`
-block in the **detector physics config** (e.g. `config/SK_like_physics_config.json`);
-absent ⇒ `basic`.
+The digitizer models (`basic`, `ski`, `hk`), where the `"digitizer"` and `"trigger"` blocks
+are read from, and their overrides are in
+[digitizer and trigger](../../docs/reference/digitizer-and-trigger.md). Models other than
+`basic` can record several digits per sensor. Dark noise is a labelled source in `hits.h5`
+(`emission_process = 2`, `particle_idx = -1`).
 
-```json
-"digitizer": { "model": "ski" }
-```
+Pile-up is digitized across vertices: the deposits of all vertices in an event are pooled in
+time and digitized once, so light from different vertices that lands on one PMT within the
+integration window becomes one digit, with its charge attributed to each contributing vertex in
+`hits.h5`.
 
-Models (every electronics/PMT number sourced from WCSim — see
-`lucid/simulation/digitizer.py` for `WCSim/...` citations):
-- **`basic`** — ∞ window → one digit per sensor, the legacy first-arrival + summed
-  charge behaviour (default; idealized passthrough).
-- **`ski`** — SK 20″ PMT (`PMT20inch`): 200 ns window, no deadtime, 0.25 pe
-  threshold, per-photoelectron SPE charge, charge-dependent Gaussian time jitter,
-  4.2 kHz dark.
-- **`hk`** — HK 20″ Box&Line PMT (`BoxandLine20inchHQE`): same window/threshold,
-  its own (sharper) SPE + exponentially-modified-Gaussian time jitter, 4.2 kHz dark.
+## Supernova bursts
 
-Any parameter (`integration_window_ns`, `deadtime_ns`, `threshold_pe`,
-`dark_rate_khz`, …) is overridable in the block.
+`"primary_source": "supernova"` replaces GENIE with [sntools](https://github.com/SNEWS2/sntools),
+which samples supernova-neutrino interactions in water (IBD, ν-e elastic scattering, νe and ν̄e
+CC on ¹⁶O) from a flux and cross sections. `dataprod/generators/supernova.py` converts them to
+the rooTracker format GENIE writes, and PhotonSim reads them through `/gun/genieInput`. These
+datasets have `source_type = 2` and the true `neutrino_pdg` and `neutrino_energy` in `labl/`.
+`labl/.../per_interaction/interaction_channel` holds sntools' NUANCE channel code (-1 in other
+datasets); the rooTracker format has no slot for it, so it travels in a per-event sidecar file.
 
-Non-`basic` models can record **multiple digits per sensor** when light arrives
-in separated time clusters (delayed coincidence, pile-up, dark noise), so
-`sensor.h5` becomes a digit list and `hits.h5` / `step/sensor_hits` carry a
-`digit_idx` FK. **Dark noise** is a labelled source in the
-`hits.h5` decomposition (`emission_process = 2`, `particle_idx = -1`). See
-`docs/reference/dataset-schema.md`.
+A dataset runs one subcase per entry of `supernova.models` × `supernova.orderings`.
+`supernova.orderings` is required: a non-empty list whose entries are labels (`NMO`, `NO`,
+`normal`, `IMO`, `IO`, `inverted`; `noosc` or `none` for `NoTransformation`) or sntools
+`--transformation` names (`NoTransformation`, `AdiabaticMSW_NMO`, `AdiabaticMSW_IMO`,
+`SNEWPY-CompleteExchange`, `SNEWPY-NonAdiabaticMSWH`, `SNEWPY-TwoFlavorDecoherence_NMO`,
+`SNEWPY-TwoFlavorDecoherence_IMO`, `SNEWPY-ThreeFlavorDecoherence`). The singular
+`supernova.ordering` is refused. Each job runs one ordering: the fan-out passes it as
+`--sn-ordering`, and a direct `lucid-run-job` may omit the flag only when the list has one
+entry. Every batch records it as `config/sn_ordering` and `sn_transformation`.
 
-**Pile-up** is digitized **cross-vertex**: all vertices' per-photon deposits are
-pooled in absolute time and windowed once, so light from different vertices that
-overlaps on a PMT within the integration window merges into one digit (with the
-decomposition attributing its charge across the contributing vertices). `basic`
-pile-up reproduces the legacy per-sensor first-arrival + summed charge.
-
-## Supernova bursts (sntools)
-
-`primary_source: "supernova"` injects supernova-burst neutrino interactions
-in water instead of running GENIE. [sntools](https://github.com/SNEWS2/sntools)
-Monte-Carlo–samples the interactions (IBD, ν-e ES, νe/ν̄e CC on ¹⁶O) from a
-supernova flux × cross section; `run_supernova.py` converts them to the same
-rooTracker file GENIE produces, so PhotonSim consumes them through the
-existing `/gun/genieInput` path (no PhotonSim change). Datasets get
-`source_type = 2` and true `neutrino_pdg` / `neutrino_energy` in `labl/`.
-
-Each event's **interaction channel** is preserved: `labl/…/per_interaction`
-carries `interaction_channel` (sntools' integer NUANCE code) and `channel`
-(string — `"ibd"`, `"es"`, `"o16e"`, `"o16eb"`). sntools' channel code has no
-slot in the rooTracker, so `run_supernova.py` writes it to a per-event sidecar
-aligned 1:1 with the rooTracker entries, and the runner stamps it into the
-labl truth after the writer completes.
-
-A dataset fans out into one `<model>/<ordering>/` subcase per
-`supernova.models × supernova.orderings` — mass ordering maps to sntools'
-`AdiabaticMSW_NMO` / `AdiabaticMSW_IMO` transformation:
-
-```
-<detector>/SN/config_NN/                     # SN block is flat (no train/test)
-  analytic_accretion/{NMO,IMO}/{sensor,hits,step,labl}/
-  analytic_hot/{NMO,IMO}/{sensor,hits,step,labl}/
-```
-
-Config block (see `configs/SN/01_supernova_50kpc.json`):
+The shipped config, `dataprod/configs/SN/01_supernova_50kpc.json`, has this block (comments
+added):
 
 ```json
 "primary_source": "supernova",
 "supernova": {
-  "detector": "HyperK",        // sntools fiducial → realistic event count
-  "distance_kpc": 10.0,
-  "channels": "all",           // or ["ibd","es","o16e","o16eb"]
-  "cap_events": 50,            // omit/null for a full realistic burst
+  "detector": "HyperK",        // sntools fiducial volume, for a realistic event count
+  "distance_kpc": 50.0,
+  "channels": "all",           // or a list: ["ibd", "es", "o16e", "o16eb"]
+  "direction": [0.0, 0.0, 1.0],
+  "cap_events": 25,            // omit or null for a full burst
   "models": [
-    {"name": "analytic_accretion", "format": "gamma",
-     "flux_file": "lucid/production/configs/sn_fluxes/analytic_burst_gamma.txt"}
+    {"name": "nakazato_20Msun_shen_trev100", "format": "SNEWPY-Nakazato_2013",
+     "flux_file": "nakazato-shen-z0.02-t_rev100ms-s20.0.fits"}
   ],
-  "orderings": ["NMO", "IMO"]
+  "orderings": ["NMO"]
 }
 ```
 
-One job = one burst realization (a distinct seed); `/run/beamOn` is the
-sntools event count. For physics, set each model's `format` to
-`SNEWPY-<Model>` (e.g. `SNEWPY-Nakazato_2013`) and `flux_file` to that
-model's SNEWPY data file. Requires sntools+snewpy on `SN_ENV_BASE`
-(see `jobs/user_paths.nersc.sh.template`); the shipped analytic `gamma`
-fluxes + the built-in MSW transformations validate end-to-end with no
-download.
+It writes `<OUT>/HK/SN/config_01/nakazato_20Msun_shen_trev100/NMO/{sensor,hits,step,labl}/`
+(the `SN` block has no train/test split). One job is one burst with its own seed. A
+`SNEWPY-<Model>` format names that model's SNEWPY data file, which must already be in the SNEWPY
+cache; other sntools formats (`gamma`, `nakazato` ASCII) take a repository-relative `flux_file`,
+and none is shipped. sntools and snewpy must be installed in `SN_ENV_BASE` (see
+`platform/templates/user_paths.nersc.sh.template`).

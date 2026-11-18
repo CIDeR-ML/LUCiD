@@ -15,23 +15,9 @@ from pathlib import Path
 
 import numpy as np
 
-
-def _dirs_from_traj(tr):
-    """(niters+1, 9) -> (niters+1, 3) unit directions (numpy mirror of vec9_dir)."""
-    st, ct, sp, cp = tr[:, 4], tr[:, 5], tr[:, 6], tr[:, 7]
-    nt = np.hypot(st, ct) + 1e-12; npp = np.hypot(sp, cp) + 1e-12
-    st, ct, sp, cp = st / nt, ct / nt, sp / npp, cp / npp
-    return np.stack([st * cp, st * sp, ct], 1)
-
-
-def event_err_curves(traj, truth, tdir):
-    """(niters+1, 4) error curves for one event: [vtx cm, dir deg, |dE| MeV, |dt0| ns]."""
-    tr = np.asarray(traj); truth = np.asarray(truth)
-    vtx = np.linalg.norm(tr[:, 1:4] - truth[1:4], axis=1) * 100.0
-    ddeg = np.degrees(np.arccos(np.clip(_dirs_from_traj(tr) @ np.asarray(tdir), -1, 1)))
-    dE = np.abs(tr[:, 0] - truth[0])
-    dt0 = np.abs(tr[:, 8] - truth[8])
-    return np.stack([vtx, ddeg, dE, dt0], 1)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # LUCiD/ on path
+from analysis.paper.utils.ovv_plots import open_study          # noqa: E402
+from lucid.fitting import track_errors                          # noqa: E402
 
 
 METRICS = [('vertex distance (cm)', 'vtx'), ('direction (deg)', 'dir'),
@@ -45,16 +31,15 @@ def main():
     ap.add_argument('--out', default=None, help='output dir for the PNG (default: next to the h5)')
     args = ap.parse_args()
 
-    import h5py
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     curves, ming_iters, ming_errs, final_errs, which = [], [], [], [], []
-    with h5py.File(args.h5file, 'r') as f:
+    with open_study(args.h5file) as f:
         for k in sorted(f['events']):
             ev = f['events'][k]
-            c = event_err_curves(ev['traj_win'][:], ev['truth_vec9'][:], ev['tdir'][:])
+            c = np.abs(track_errors(ev['traj_win'][:], ev['truth_vec9'][:], ev['tdir'][:]))
             curves.append(c)
             bi = int(ev.attrs['best_iter_win'])
             ming_iters.append(bi); ming_errs.append(c[bi]); final_errs.append(c[-1])

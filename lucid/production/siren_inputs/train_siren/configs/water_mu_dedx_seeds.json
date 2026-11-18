@@ -1,0 +1,10 @@
+{
+  "name": "water_mu_dedx_seeds",
+  "description": "Seed scan of the nominal recipe on the water muon dedx table, as the shipped emitter was chosen: rank_seeds.py, then lucid-siren-promote the lowest final val_loss.",
+  "baseline": {
+    "h5_path": "${SIREN_INPUTS_BASE_PATH}/training_inputs/water/lookup_tables/muon/dedx_lookup_table.h5",
+    "checkpoint_every": 10000
+  },
+  "runs": [{"seed": 0}, {"seed": 1}, {"seed": 2}, {"seed": 3}, {"seed": 4},
+           {"seed": 5}, {"seed": 6}, {"seed": 7}, {"seed": 8}, {"seed": 9}]
+}

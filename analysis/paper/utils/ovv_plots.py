@@ -2,48 +2,47 @@
 """Performance plots in the style of good_notebooks/optimization_vs_variables.ipynb (c603ed1),
 fed by the CURRENT pipeline outputs (run_study h5 files).
 
-Two modes:
-  --mode iters --h5 <run.h5>          : median / p68 / p90 of the four metrics vs GN iteration
-                                        (winning-seed trajectories; E from the trajectory, i.e.
-                                        pre-E-refit — the refit only moves the final readout).
-  --mode nrays --base <dir-prefix>    : final-fit bootstrap p68 (90% CI) vs number of rays over
-                                        all COMPLETED nrays_scan_<tag> runs found, with the
-                                        notebook's exp-like weighted fits + timing panel.
+The plot modes, called by the paper figures through ``plotting.py``:
+  mode_iters           median / p68 / p90 of the four metrics vs GN iteration (winning-seed
+                       trajectories; E from the trajectory, i.e. pre-E-refit -- the refit only
+                       moves the final readout);
+  mode_nrays_combined  muon + electron final-fit bootstrap p68 (90% CI) vs number of rays, with
+                       the notebook's weighted fits and a timing panel;
+  mode_energy, mode_sensors  the same metrics vs energy and vs number of sensors.
 
 Metrics and style mirror the notebook exactly: Pos. error (cm), Dir. error (deg),
 t0 error (ns), Mom. error (%) [dE -> dp via E_tot=KE+m_mu, p=sqrt(E_tot^2-m_mu^2)];
 serif font, vertical panel stack, navy points, cornflowerblue fits, bootstrap
 (percentile=68, n_bootstrap=1000, ci_level=90, seed=42).
 """
-import argparse
-import re
-import sys
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from lucid.fitting import bootstrap_ci
+from lucid.pdg import PDG_MASS_MEV
 
-M_MU = 105.658
-TAGS = ['5k', '10k', '25k', '50k', '100k', '150k', '250k', '500k', '1M']
+M_MU = PDG_MASS_MEV[13]
 NRAYS = {'5k': 5e3, '10k': 1e4, '25k': 2.5e4, '50k': 5e4, '100k': 1e5,
          '150k': 1.5e5, '250k': 2.5e5, '500k': 5e5, '1M': 1e6}
 
 
 def mom_err_pct(dE, true_E, mass=M_MU):
-    """Notebook compute_momentum_errors: dE -> momentum error %, KE convention."""
+    """Momentum error % from a kinetic-energy error ``dE`` at kinetic energy ``true_E`` (MeV):
+    p^2 = E_tot^2 - m^2 gives dp = E_tot dE / p, so dp/p = E_tot |dE| / p^2."""
     E_tot = true_E + mass
-    p = np.sqrt(E_tot**2 - mass**2)
-    return (E_tot / p) * (np.abs(dE) / E_tot) * 100.0
+    p2 = E_tot**2 - mass**2
+    return E_tot * np.abs(dE) / p2 * 100.0
 
 
-def bootstrap_p68(data, n_bootstrap=1000, ci_level=90, rng=None):
-    rng = rng or np.random.default_rng(42)
-    boots = np.array([np.percentile(rng.choice(data, size=len(data), replace=True), 68)
-                      for _ in range(n_bootstrap)])
-    a = (100 - ci_level) / 2
-    est = np.percentile(data, 68)
-    return est, est - np.percentile(boots, a), np.percentile(boots, 100 - a) - est
+def p68_errorbar(data, ci_level):
+    """The 68% containment of ``data`` with its bootstrap ``ci_level``% interval as error-bar
+    lengths ``(p68, p68 - lo, hi - p68)``: 1000 resamples, seeded 42 for every point."""
+    def p68(a):
+        return np.percentile(a, 68)
+    lo, hi = bootstrap_ci(data, p68, ci=ci_level, n_boot=1000, seed=42)
+    est = p68(data)
+    return est, est - lo, hi - est
 
 
 def exp_like(x, a, b, c):
@@ -63,20 +62,49 @@ def _style():
     matplotlib.rcParams['font.size'] = 12
 
 
+def find_study(run_dir):
+    """The study file of a run dir: ``<dir>/<dir name>.h5``, else the dir's only ``.h5``."""
+    d = Path(run_dir)
+    named = d / f'{d.name}.h5'
+    if named.exists():
+        return named
+    cands = sorted(d.glob('*.h5'))
+    if len(cands) != 1:
+        raise FileNotFoundError(f'{d}: expected one study .h5, found {len(cands)}')
+    return cands[0]
+
+
+def open_study(path):
+    """An open, finished study file. Raises if it is missing, still being written (locked), never
+    finished, or holds fewer events than it was asked for: a figure is never drawn from a
+    partial run."""
+    import h5py
+    f = h5py.File(path, 'r')
+    a = f.attrs
+    n_req = int(a['n_events_requested']) if 'n_events_requested' in a else None
+    complete = ('finished' in a and n_req is not None and int(a['n_events_done']) == n_req
+                and len(f['events']) == n_req
+                and not ('n_events_failed' in a and int(a['n_events_failed'])))
+    if not complete:
+        msg = (f'{path}: not a finished, complete study run (finished={"finished" in a}, '
+               f'events {len(f["events"])}/{n_req})')
+        f.close()
+        raise ValueError(msg)
+    return f
+
+
 def event_metric_curves(h5):
     """(n_events, niters+1, 4): pos cm, dir deg, |t0| ns, mom %  along winning trajectories."""
-    from analysis.paper.utils.p68_evolution import _dirs_from_traj
-    import h5py
+    from lucid.fitting import track_errors
     out = []
-    with h5py.File(h5, 'r') as f:
+    from analysis.paper.utils.studies import mass as particle_mass
+    with open_study(h5) as f:
+        mass = particle_mass(str(f.attrs['particle']))
         for k in sorted(f['events']):
             ev = f['events'][k]
-            tr = ev['traj_win'][:]; th = ev['truth_vec9'][:]; d = ev['tdir'][:]
-            pos = np.linalg.norm(tr[:, 1:4] - th[1:4], axis=1) * 100
-            ddeg = np.degrees(np.arccos(np.clip(_dirs_from_traj(tr) @ d, -1, 1)))
-            t0 = np.abs(tr[:, 8] - th[8])
-            mom = mom_err_pct(tr[:, 0] - th[0], float(th[0]))
-            out.append(np.stack([pos, ddeg, t0, mom], 1))
+            th = ev['truth_vec9'][:]
+            pos, ddeg, dE, dt0 = track_errors(ev['traj_win'][:], th, ev['tdir'][:]).T
+            out.append(np.stack([pos, ddeg, np.abs(dt0), mom_err_pct(dE, float(th[0]), mass)], 1))
     return np.stack(out)
 
 
@@ -144,11 +172,8 @@ def mode_iters(args):
                          transform=hist_ax.get_yaxis_transform())
         hist_ax.set_yticks([]); hist_ax.set_xticks([])
         hist_ax.set_ylim(ax.get_ylim())
-        try:
-            import seaborn as sns
-            sns.despine(ax=hist_ax, left=True, bottom=False, right=False, top=False)
-        except ImportError:
-            hist_ax.spines['left'].set_visible(False)
+        hist_ax.spines['left'].set_visible(False)
+        hist_ax.yaxis.set_ticks_position('right')
 
     axs[-1].set_xlabel('Iteration')
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
@@ -158,110 +183,11 @@ def mode_iters(args):
     print(f'Saved figure to: {base}.pdf (+png)  (N={C.shape[0]} events)')
 
 
-def mode_nrays(args):
-    _style()
-    import h5py
-    import matplotlib.pyplot as plt
-    from matplotlib.ticker import FormatStrFormatter
-    from scipy.optimize import curve_fit
-
-    rows = []                     # per completed config
-    for tag in TAGS:
-        if args.max_rays is not None and NRAYS[tag] > args.max_rays:
-            continue
-        d = Path(f'{args.base}{tag}')
-        h5p = d / f'{d.name}.h5'          # h5 named after the run dir (nrays_scan_<tag> / nrays_scan2_<tag>)
-        logd = Path(f'{args.base}{tag}') / 'logs'
-        if not h5p.exists():
-            cands = sorted(d.glob('*.h5')) if d.exists() else []
-            if len(cands) != 1:
-                continue
-            h5p = cands[0]                # config name differs from dir name (e.g. nrays3_el_5k)
-        try:
-            f = h5py.File(h5p, 'r')
-        except (BlockingIOError, OSError):
-            print(f'{tag}: h5 locked (job still running) - skipped')
-            continue
-        with f:
-            _ks = sorted(f['events'])
-            if args.max_events is not None:
-                _ks = _ks[:args.max_events]
-            fe = np.stack([f['events'][k]['fit_err'][:] for k in _ks])
-            tE = np.array([float(f['events'][k]['truth_vec9'][0]) for k in _ks])
-            secs = np.array([float(f['events'][k].attrs['seconds']) for k in _ks])
-        rows.append(dict(tag=tag, x=NRAYS[tag], pos=fe[:, 0], dir=fe[:, 1],
-                         t0=np.abs(fe[:, 3]), mom=mom_err_pct(fe[:, 2], tE.mean()),
-                         t_mean=float(np.mean(secs[1:])), t_std=float(np.std(secs[1:]))))  # drop ev0 (JIT compile)
-        print(f'{tag}: n={len(fe)} events loaded')
-    if not rows:
-        print('no completed configs found'); return
-
-    metrics = [('pos', 'Pos. error (cm)'), ('dir', 'Dir. error (°)'),
-               ('t0', 't$_0$ error (ns)'), ('mom', 'Mom. error (%)')]
-    rng = np.random.default_rng(42)
-    x = np.array([r['x'] for r in rows]) / 1000.0
-
-    fig, axes = plt.subplots(5, 1, figsize=(6, 12.5), sharex=True)
-    plt.subplots_adjust(hspace=0.05)
-    for ax, (key, lab) in zip(axes[:4], metrics):
-        y, lo, hi = [], [], []
-        for r in rows:
-            e, el, eh = bootstrap_p68(r[key], rng=rng)
-            y.append(e); lo.append(el); hi.append(eh)
-        y = np.array(y); lo = np.array(lo); hi = np.array(hi)
-        ax.errorbar(x, y, yerr=[lo, hi], fmt='o', capsize=4, color='navy', label=f'{lab} p68')
-        sigma = np.clip(0.5 * (lo + hi), 1e-12, None)
-        try:
-            popt, _ = curve_fit(power_like, x, y, sigma=sigma, absolute_sigma=True,
-                                p0=[(np.nanmax(y) - np.nanmin(y)) * np.sqrt(x.min()), -0.5,
-                                    np.nanmin(y)],
-                                bounds=([0, -2.0, 0], [np.inf, 0, np.inf]), maxfev=20000)
-            xf = np.linspace(x.min(), x.max(), 200)
-            ax.plot(xf, power_like(xf, *popt), '-', color='cornflowerblue', lw=2)
-            a, b, c = popt
-            ax.text(0.5, 0.9, f'$y = {a:.1f}\\,x^{{{b:.2f}}} + {c:.2f}$',
-                    transform=ax.transAxes, fontsize=10, color='cornflowerblue',
-                    ha='left', va='top')
-        except RuntimeError:
-            print(f'fit failed for {key}')
-        ax.set_ylabel(lab); ax.grid(True, alpha=0.3)
-        ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
-
-    ax_t = axes[-1]
-    ax_t.errorbar(x, [r['t_mean'] for r in rows], yerr=[r['t_std'] for r in rows],
-                  fmt='o-', capsize=4, color='tab:red', label='Total')
-    ax_t.set_ylabel('Time per event (s)'); ax_t.grid(True, alpha=0.3)
-    ax_t.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
-    ax_t.legend(frameon=False, loc='lower right')
-    ax_t.set_ylim(0); ax_t.set_xlim(0)
-    axes[-1].set_xlabel('Number of Rays ($\\times10^3$)')
-    fig.align_ylabels(axes)
-    out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
-    base = out / 'tracking_performance_vs_nrays'
-    for ext in ('pdf', 'png'):
-        plt.savefig(f'{base}.{ext}', bbox_inches='tight', dpi=150)
-    print(f'Saved figure to: {base}.pdf (+png)')
-
-
-def _load_nrays_rows(base, max_rays, max_events, mass):
+def _load_nrays_rows(base, tags, max_events, mass):
     """Load per-config resolution + timing rows for one nrays base prefix."""
-    import h5py
     rows = []
-    for tag in TAGS:
-        if max_rays is not None and NRAYS[tag] > max_rays:
-            continue
-        d = Path(f'{base}{tag}')
-        h5p = d / f'{d.name}.h5'
-        if not h5p.exists():
-            cands = sorted(d.glob('*.h5')) if d.exists() else []
-            if len(cands) != 1:
-                continue
-            h5p = cands[0]
-        try:
-            f = h5py.File(h5p, 'r')
-        except (BlockingIOError, OSError):
-            print(f'{tag}: h5 locked - skipped'); continue
-        with f:
+    for tag in tags:
+        with open_study(find_study(f'{base}{tag}')) as f:
             _ks = sorted(f['events'])
             if max_events is not None:
                 _ks = _ks[:max_events]
@@ -281,17 +207,13 @@ def mode_nrays_combined(args):
     _style()
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FormatStrFormatter
-    from matplotlib.lines import Line2D
     from scipy.optimize import curve_fit
 
-    mu_rows = _load_nrays_rows(args.base, args.max_rays, args.max_events, args.mass)
-    el_rows = _load_nrays_rows(args.base_el, args.max_rays, args.max_events, args.mass_el)
-    if not mu_rows or not el_rows:
-        print('missing muon or electron configs'); return
+    mu_rows = _load_nrays_rows(args.base, args.tags, args.max_events, args.mass)
+    el_rows = _load_nrays_rows(args.base_el, args.tags, args.max_events, args.mass_el)
 
     metrics = [('pos', 'Pos. error (cm)'), ('dir', 'Dir. error (°)'),
                ('t0', 't$_0$ error (ns)'), ('mom', 'Mom. error (%)')]
-    rng = np.random.default_rng(42)
     fig, axes = plt.subplots(5, 1, figsize=(6, 12.5), sharex=True)
     plt.subplots_adjust(hspace=0.05)
 
@@ -299,7 +221,7 @@ def mode_nrays_combined(args):
         x = np.array([r['x'] for r in rows]) / 1000.0
         y, lo, hi = [], [], []
         for r in rows:
-            e, el_, eh = bootstrap_p68(r[key], rng=rng)
+            e, el_, eh = p68_errorbar(r[key], 90)
             y.append(e); lo.append(el_); hi.append(eh)
         y = np.array(y); lo = np.array(lo); hi = np.array(hi)
         ax.errorbar(x, y, yerr=[lo, hi], fmt='o', capsize=4, color=pt_c)
@@ -378,7 +300,6 @@ def mode_energy(args):
     """Notebook cell 5: tracking_performance_vs_energy — x = E (MeV), ci_level=68,
     exp fits for pos/dir, CONSTANT fits for t0/mom, the notebook's ylims, no timing panel."""
     _style()
-    import h5py
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FormatStrFormatter
     from scipy.optimize import curve_fit
@@ -387,29 +308,16 @@ def mode_energy(args):
         return np.full_like(np.asarray(x, dtype=float), c)
 
     rows = []
-    for E in range(300, 2001, 100):
-        if args.max_energy is not None and E > args.max_energy:
-            continue
-        d = Path(f'{args.base}{E}')
-        h5p = d / f'{d.name}.h5'
-        if not h5p.exists():
-            continue
-        try:
-            f = h5py.File(h5p, 'r')
-        except (BlockingIOError, OSError):
-            print(f'{E}: h5 locked - skipped'); continue
-        with f:
+    for E in args.energies:
+        with open_study(find_study(f'{args.base}{E}')) as f:
             fe = np.stack([f['events'][k]['fit_err'][:] for k in sorted(f['events'])])
         rows.append(dict(x=E, pos=fe[:, 0], dir=fe[:, 1], t0=np.abs(fe[:, 3]),
                          mom=mom_err_pct(fe[:, 2], float(E))))
         print(f'{E}: n={len(fe)}')
-    if not rows:
-        print('no completed configs found'); return
 
     metrics = [('pos', 'Pos. error (cm)', 'exp'), ('dir', 'Dir. error (°)', 'exp'),
                ('t0', 't$_0$ error (ns)', 'const'), ('mom', 'Mom. error (%)', 'const')]
     ylims = {'pos': (10, 35), 'dir': (0., 2.9), 't0': (0, 1.6), 'mom': (0, 4.4)}
-    rng = np.random.default_rng(42)
     x = np.array([r['x'] for r in rows], dtype=float)
 
     fig, axes = plt.subplots(4, 1, figsize=(6, 10), sharex=True)
@@ -417,7 +325,7 @@ def mode_energy(args):
     for ax, (key, lab, ftype) in zip(axes, metrics):
         y, lo, hi = [], [], []
         for r in rows:
-            e, el, eh = bootstrap_p68(r[key], ci_level=68, rng=rng)
+            e, el, eh = p68_errorbar(r[key], 68)
             y.append(e); lo.append(el); hi.append(eh)
         y = np.array(y); lo = np.array(lo); hi = np.array(hi)
         ax.errorbar(x, y, yerr=[lo, hi], fmt='o', capsize=4, color='navy', label=f'{lab} p68')
@@ -461,37 +369,23 @@ def mode_sensors(args):
     """Notebook cell 6: detector_perf_vs_num_sensors — x = PLACED sensors (x10^3),
     ci_level=68, no timing panel, the notebook's exact ylims."""
     _style()
-    import h5py
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FormatStrFormatter
     from scipy.optimize import curve_fit
 
     rows = []
-    for N in range(2000, 20001, 2000):
-        if args.max_sensors is not None and N > args.max_sensors:
-            continue
-        d = Path(f'{args.base}{N}')
-        h5p = d / f'{d.name}.h5'
-        if not h5p.exists():
-            continue
-        try:
-            f = h5py.File(h5p, 'r')
-        except (BlockingIOError, OSError):
-            print(f'{N}: h5 locked - skipped'); continue
-        with f:
+    for N in args.sensors:
+        with open_study(find_study(f'{args.base}{N}')) as f:
             fe = np.stack([f['events'][k]['fit_err'][:] for k in sorted(f['events'])])
             tE = np.array([float(f['events'][k]['truth_vec9'][0]) for k in sorted(f['events'])])
             placed = int(f.attrs['n_sensors'])
         rows.append(dict(x=placed, pos=fe[:, 0], dir=fe[:, 1], t0=np.abs(fe[:, 3]),
                          mom=mom_err_pct(fe[:, 2], tE.mean())))
         print(f'{N}: placed={placed}, n={len(fe)}')
-    if not rows:
-        print('no completed configs found'); return
 
     metrics = [('pos', 'Pos. error (cm)'), ('dir', 'Dir. error (°)'),
                ('t0', 't$_0$ error (ns)'), ('mom', 'Mom. error (%)')]
     ylims = {'pos': (10, 40), 'dir': (0.4, 1.8), 't0': (0, 1.2), 'mom': (0, 4.5)}
-    rng = np.random.default_rng(42)
     x = np.array([r['x'] for r in rows]) / 1000.0
 
     fig, axes = plt.subplots(4, 1, figsize=(6, 10), sharex=True)
@@ -499,7 +393,7 @@ def mode_sensors(args):
     for ax, (key, lab) in zip(axes, metrics):
         y, lo, hi = [], [], []
         for r in rows:
-            e, el, eh = bootstrap_p68(r[key], ci_level=68, rng=rng)
+            e, el, eh = p68_errorbar(r[key], 68)
             y.append(e); lo.append(el); hi.append(eh)
         y = np.array(y); lo = np.array(lo); hi = np.array(hi)
         ax.errorbar(x, y, yerr=[lo, hi], fmt='o', capsize=4, color='navy', label=f'{lab} p68')
@@ -528,41 +422,3 @@ def mode_sensors(args):
     for ext in ('pdf', 'png'):
         plt.savefig(f'{base}.{ext}', bbox_inches='tight', dpi=150)
     print(f'Saved figure to: {base}.pdf (+png)')
-
-
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--mode', required=True, choices=['iters', 'nrays', 'nrays_combined', 'sensors', 'energy'])
-    ap.add_argument('--h5', help='run_study h5 (iters mode)')
-    ap.add_argument('--base', help='nrays_scan dir prefix, e.g. .../nrays_scan_ (nrays mode)')
-    ap.add_argument('--out', required=True)
-    ap.add_argument('--max-rays', type=float, default=None,
-                    help='exclude configs above this ray count (nrays mode)')
-    ap.add_argument('--max-sensors', type=int, default=None,
-                    help='exclude geometries above this nominal sensor count (sensors mode)')
-    ap.add_argument('--mass', type=float, default=105.658,
-                    help='particle mass in MeV for momentum conversion (electron: 0.511)')
-    ap.add_argument('--max-energy', type=int, default=None,
-                    help='exclude energies above this (energy mode)')
-    ap.add_argument('--max-events', type=int, default=None,
-                    help='use only the first N events of each h5')
-    ap.add_argument('--base-el', help='electron nrays dir prefix (nrays_combined mode)')
-    ap.add_argument('--mass-el', type=float, default=0.511,
-                    help='electron mass in MeV for momentum conversion (nrays_combined mode)')
-    args = ap.parse_args()
-    if args.mode == 'iters':
-        mode_iters(args)
-    elif args.mode == 'sensors':
-        mode_sensors(args)
-    elif args.mode == 'energy':
-        mode_energy(args)
-    elif args.mode == 'nrays_combined':
-        mode_nrays_combined(args)
-    else:
-        mode_nrays(args)
-    return 0
-
-
-if __name__ == '__main__':
-    sys.exit(main())

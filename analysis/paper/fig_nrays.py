@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Figure: tracking resolution vs number of rays (muon + electron, 1 GeV, TTS=2.0).
+"""Figures: tracking resolution vs number of rays, and the optimizer convergence at the largest.
 
-Position / direction / t0 / momentum resolution and per-event timing as a function
-of the ray budget, for muons (navy) and electrons (red).
+* ``tracking_performance_vs_nrays_combined``: position / direction / t0 / momentum resolution
+  and per-event timing as a function of the ray budget, for muons (navy) and electrons (red),
+  1 GeV, TTS=2.1.
+* ``<particle>_convergence``: per-event p68/p90 vs iteration plus the final-iteration
+  histograms, from the trajectories stored per event at the largest ray tag plotted
+  (250k for the published sweep).
 
 Reproduce end-to-end (small, local, no cluster):
     python fig_nrays.py                         # generate a few events locally, then plot
@@ -18,7 +22,7 @@ Notes
   script runs on a laptop in minutes and demonstrates the pipeline; the published
   figure uses the S3DF backend with 500 events and all seven ray tags.
 * ``--root-base`` points at the directory holding ``<mu-|e->/<E>MeV_<N>events.root``
-  PhotonSim inputs (default: the S3DF ROOT area). Local reproduction needs those
+  PhotonSim inputs (default: ``paths.S3DF_ROOT_FILES``). Local reproduction needs those
   inputs present; generating them from scratch is ``utils/generate_data.py``.
 """
 import argparse
@@ -26,7 +30,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # LUCiD/
-from analysis.paper.utils import paths, studies, run, plotting   # noqa: E402
+from analysis.paper.utils import ovv_plots, paths, provenance, studies, run, plotting   # noqa: E402
 
 FIGURE = 'nrays'
 PARTICLES = ('muon', 'electron')
@@ -48,12 +52,18 @@ def generate_data(backend, events, root_base, tags):
                 run.run_local(cfg, per_cfg_dir, events=list(range(n)))
 
 
-def plot_results(backend, out):
+def plot_results(backend, out, tags):
+    tags = tags or (FULL_TAGS if backend == 's3df' else LOCAL_TAGS)
     ddir = paths.data_dir(FIGURE, backend)
     pdf = plotting.nrays_combined(
         mu_base=ddir / 'nrays_mu_', el_base=ddir / 'nrays_el_',
-        mass_mu=studies.mass('muon'), mass_el=studies.mass('electron'), out=out)
+        mass_mu=studies.mass('muon'), mass_el=studies.mass('electron'), out=out, tags=tags)
     print(f'wrote {pdf}')
+    largest = max(tags, key=studies.NRAYS_TAGS.get)
+    for particle, pfx in (('muon', 'mu'), ('electron', 'el')):
+        h5 = ovv_plots.find_study(ddir / f'nrays_{pfx}_{largest}')
+        pdf = plotting.convergence(h5, out, label=particle)
+        print(f'wrote {pdf}')
 
 
 def main():
@@ -73,7 +83,9 @@ def main():
     if a.generate_data or both:
         generate_data(a.backend, a.events, a.root_base, tags)
     if a.plot_results or both:
-        plot_results(a.backend, Path(a.out) if a.out else paths.figure_dir())
+        out = Path(a.out) if a.out else paths.figure_dir()
+        plot_results(a.backend, out, tags)
+        provenance.write_run_record(out, __file__, a)
 
 
 if __name__ == '__main__':

@@ -32,6 +32,7 @@ rates + a specular/diffuse direction mixture); ``scalar_reflection`` is the lega
 that reproduces the pre-mixture angle-independent behaviour byte-for-byte.
 """
 
+from functools import partial
 from typing import NamedTuple
 
 import jax
@@ -130,9 +131,6 @@ def scalar_mix_reflection(direction, normal, hit_sensor, refl_params, lam, key):
 # DIRECTION mix (fractions fw, fs) is a DISCRETE branch carried by a DiCE score lr.
 # ---------------------------------------------------------------------------
 
-N_WATER = 1.33
-
-
 def n_glass(lam):
     """SK PMT-glass dispersion n_g(λ), λ in nm."""
     return 1.472 + 3670.0 / (lam * lam)
@@ -162,11 +160,11 @@ def fresnel_rc(ci, n_i, n_c):
     return jnp.clip(0.5 * (jnp.abs(rs) ** 2 + jnp.abs(rp) ** 2).real, 0.0, 1.0)
 
 
-def pmt_reflectance(cth_inc, lam, n_r, n_k):
-    """Effective 4-level PMT reflectance: water→glass(λ)→cathode(n_r+i·n_k),
+def pmt_reflectance(cth_inc, lam, n_r, n_k, n_medium):
+    """Effective 4-level PMT reflectance: medium(n_medium)→glass(λ)→cathode(n_r+i·n_k),
     two incoherent Fresnel interfaces summed over multi-bounce."""
     ng = n_glass(lam)
-    R1, ctg = fresnel_rr(cth_inc, N_WATER, ng)              # water→glass (real)
+    R1, ctg = fresnel_rr(cth_inc, n_medium, ng)             # medium→glass (real)
     R2 = fresnel_rc(ctg, ng, jnp.asarray(n_r) + 1j * jnp.asarray(n_k))  # glass→cathode (complex)
     return jnp.clip(R1 + (1.0 - R1) ** 2 * R2 / (1.0 - R1 * R2 + 1e-9), 0.0, 0.999)
 
@@ -191,8 +189,10 @@ class AngularReflection(NamedTuple):
     fs: jnp.ndarray
 
 
-def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key):
+def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key, *, n_medium):
     """Schlick blacksheet (wall) + multilayer-Fresnel cathode (sensor) reflection.
+
+    ``n_medium`` is the detector medium's refractive index, the first interface of the cathode.
 
     Magnitude is angle/λ-dependent and pathwise-exact (cth_inc uses sg(normal));
     the reflected direction is a specular/diffuse mixture whose discrete branch is
@@ -202,7 +202,7 @@ def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key):
     cth_inc = jnp.clip(jnp.abs(jnp.sum(direction * normal_refl)), 0.0, 1.0)
 
     Rw = refl_params.R0w + (1.0 - refl_params.R0w) * (1.0 - cth_inc) ** jnp.clip(refl_params.pw, 0.5, 12.0)
-    Rs = pmt_reflectance(cth_inc, lam, refl_params.nr, refl_params.nk)
+    Rs = pmt_reflectance(cth_inc, lam, refl_params.nr, refl_params.nk, n_medium)
     refl_prob = jnp.clip(jnp.where(hit_sensor, Rs, Rw), 0.0, 0.999)
 
     # Direction: specular/diffuse mixture, fraction f_eff per surface. is_spec is a
@@ -250,16 +250,23 @@ REFLECTION_MODELS = {
     'angular': (angular_reflection, _build_angular_params),
 }
 
-# Reflection models that require a per-photon wavelength (→ wavelength_mode=True).
-WAVELENGTH_REFLECTION_MODELS = frozenset({'angular'})
+# Reflection models whose physics depends on the medium's refractive index.
+MEDIUM_REFLECTION_MODELS = frozenset({'angular'})
 
 
-def get_reflection_model(name):
-    """Return ``(reflection_fn, build_refl_params)`` for a registered model name."""
+def get_reflection_model(name, *, n_medium):
+    """Return ``(reflection_fn, build_refl_params)`` for a registered model name.
+
+    ``n_medium`` is the detector medium's refractive index; models in
+    ``MEDIUM_REFLECTION_MODELS`` get it bound, the others do not read it.
+    """
     if name not in REFLECTION_MODELS:
         raise ValueError(
             f"Unknown reflection model {name!r}; available: {sorted(REFLECTION_MODELS)}")
-    return REFLECTION_MODELS[name]
+    fn, build = REFLECTION_MODELS[name]
+    if name in MEDIUM_REFLECTION_MODELS:
+        fn = partial(fn, n_medium=float(n_medium))
+    return fn, build
 
 
 def sensor_normal_reflectance(reflection_fn, refl_params, lam):

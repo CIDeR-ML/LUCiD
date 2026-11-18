@@ -60,7 +60,6 @@ class PredictionComparisonCallback:
         distance_slices: Iterable[float],
         xaxis_slices: Iterable[float],
         every: int,
-        resume: bool = False,
     ):
         self.h5_path = Path(h5_path)
         self.dataset = dataset
@@ -72,41 +71,19 @@ class PredictionComparisonCallback:
         self.xaxis_slices_req = [float(x) for x in xaxis_slices]
 
         self.plot_dir = Path(output_dir) / "prediction_plots"
-        if not resume and self.plot_dir.is_dir():
+        if self.plot_dir.is_dir():
             shutil.rmtree(self.plot_dir, ignore_errors=True)
         self.plot_dir.mkdir(parents=True, exist_ok=True)
 
-        self.table_type = getattr(dataset, "table_type", None)
-        if self.table_type not in ("photon", "dedx"):
-            raise ValueError(
-                f"dataset.table_type must be 'photon' or 'dedx' "
-                f"(got {self.table_type!r})"
-            )
+        self.table_type = dataset.table_type
 
         # Used to draw a horizontal "zero-suppression floor" on each panel —
         # below this y-value, the trainer can't distinguish samples from zero
         # (everything ≤ zero_threshold maps to log10(zero_threshold) after
-        # the offset+log transform). Fallback for older datasets without it.
-        self.zero_threshold = float(getattr(dataset, "zero_threshold", 1e-2))
-
-        # Sanity-assert the h5 file matches the dataset table_type. Guards
-        # against `--h5-path foo_photon.h5 --data-type dedx` foot-guns.
-        with h5py.File(self.h5_path, "r") as f:
-            wanted_key = (
-                "data/dedx_table_average" if self.table_type == "dedx"
-                else "data/photon_table_average"
-            )
-            if wanted_key not in f:
-                raise ValueError(
-                    f"{self.h5_path} does not contain {wanted_key} — does it "
-                    f"match --data-type {self.table_type!r}?"
-                )
+        # the offset+log transform).
+        self.zero_threshold = dataset.zero_threshold
 
         self._load_truth_and_grids()
-
-        # Cache normalisation bounds for cheap np ops in __call__.
-        self.input_min = np.asarray(dataset.normalized_bounds["input_min"])
-        self.input_max = np.asarray(dataset.normalized_bounds["input_max"])
 
         # Warm-up JIT compile so the first callback firing doesn't stall.
         self._warmup_done = False
@@ -218,15 +195,9 @@ class PredictionComparisonCallback:
 
     # ---- inference helpers -------------------------------------------------
 
-    def _normalize_inputs(self, x_phys: np.ndarray) -> np.ndarray:
-        x01 = (x_phys - self.input_min) / (self.input_max - self.input_min)
-        return (2.0 * x01 - 1.0).astype(np.float32)
-
     def _predict(self, state, inputs_phys: np.ndarray) -> np.ndarray:
-        normed = self._normalize_inputs(inputs_phys)
+        normed = self.dataset.normalize(inputs_phys)
         out = state.apply_fn(state.params, jnp.asarray(normed))
-        if isinstance(out, (tuple, list)):
-            out = out[0]
         out = np.asarray(out)
         if out.ndim == 2 and out.shape[1] == 1:
             out = out[:, 0]

@@ -5,174 +5,6 @@ from jax.scipy.special import gammaln, erf
 
 
 @jit
-def WC_loss(
-        sensor_points: jnp.ndarray,
-        true_charge: jnp.ndarray,
-        true_time: jnp.ndarray,
-        simulated_charge: jnp.ndarray,
-        simulated_time: jnp.ndarray,
-        eps: float = 1e-8,
-        threshold: float = 1e-8,
-        lambda_poisson: float = 1.0,
-        lambda_time: float = 1.0,
-) -> float:
-    """
-    Optimized Loss
-    Compute a loss function with two components:
-    1. Poisson loss: Poisson negative log-likelihood for charge distributions
-    2. Time loss: L1 (mean absolute error) on time differences
-
-    Parameters
-    ----------
-    sensor_points : jnp.ndarray
-        Array of shape (N, 3) with sensor coordinates.
-    true_charge : jnp.ndarray
-        Array of shape (N,) of true charges.
-    true_time : jnp.ndarray
-        Array of shape (N,) of true times.
-    simulated_charge : jnp.ndarray
-        Array of shape (N,) of simulated charges.
-    simulated_time : jnp.ndarray
-        Array of shape (N,) of simulated times.
-    eps : float, optional
-        Small constant to prevent division by zero, by default 1e-8
-    threshold : float, optional
-        Threshold for considering a sensor active, by default 1e-8
-    lambda_poisson : float, optional
-        Scaling factor for Poisson loss, by default 1.0.
-    lambda_time : float, optional
-        Scaling factor for time loss, by default 1.0.
-
-    Returns
-    -------
-    float
-        Total loss.
-    """
-    # ============= Poisson Negative Log Likelihood =============
-    poisson_loss = poisson_nll(true_charge, simulated_charge, eps)
-
-    # ============= Time Loss with Charge Weighted Mean Subtraction =============
-    # Mean centering with LOW threshold (include all active sensors)
-    true_active = true_charge > threshold
-    sim_active = simulated_charge > threshold
-
-    true_weights = jnp.where(true_active, true_charge, 0.0)
-    sim_weights = jnp.where(sim_active, simulated_charge, 0.0)
-
-    true_t0 = jax.lax.stop_gradient(jnp.sum(true_time * true_weights) / (jnp.sum(true_weights) + 1e-8))
-    sim_t0 = jnp.sum(simulated_time * sim_weights) / (jnp.sum(sim_weights) + 1e-8)
-
-    # Compute aligned times and loss
-    both_active = jax.lax.stop_gradient(true_active & sim_active)
-    diff = jnp.where(both_active,
-                     jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)),
-                     0.0)
-
-    time_norm = jnp.where(both_active, jnp.abs(true_time - true_t0), 0.0)
-
-    time_loss = jnp.sum(diff) / (jnp.sum(time_norm) + eps)
-
-    L_charge = poisson_loss * lambda_poisson
-    L_time = time_loss * lambda_time
-
-    return L_charge + L_time
-
-
-@jit
-def compute_simplified_loss(
-        sensor_points: jnp.ndarray,
-        true_charge: jnp.ndarray,
-        true_time: jnp.ndarray,
-        simulated_charge: jnp.ndarray,
-        simulated_time: jnp.ndarray,
-        eps: float = 1e-8,
-        threshold: float = 1e-8,
-        lambda_centroid: float = 1.0,
-        lambda_time: float = 1.0,
-        lambda_intensity: float = 0.5
-) -> float:
-    """
-    Compute a simplified loss function with three components:
-    1. Centroid loss: Distance between charge-weighted centroids
-    2. Intensity loss: Difference in total charge
-    3. Time loss: Simple time spread (standard deviation) comparison
-
-    Parameters
-    ----------
-    sensor_points : jnp.ndarray
-        Array of shape (N, 3) with sensor coordinates.
-    true_charge : jnp.ndarray
-        Array of shape (N,) of true charges.
-    true_time : jnp.ndarray
-        Array of shape (N,) of true times.
-    simulated_charge : jnp.ndarray
-        Array of shape (N,) of simulated charges.
-    simulated_time : jnp.ndarray
-        Array of shape (N,) of simulated times.
-    eps : float, optional
-        Small constant to prevent division by zero, by default 1e-8
-    threshold : float, optional
-        Threshold for considering a sensor active, by default 1e-8
-    lambda_centroid : float, optional
-        Scaling factor for centroid loss, by default 1.0.
-    lambda_time : float, optional
-        Scaling factor for time loss, by default 1.0.
-    lambda_intensity : float, optional
-        Scaling factor for intensity loss, by default 0.5.
-
-    Returns
-    -------
-    float
-        Total loss.
-    """
-    # Compute active masks for non-zero charges
-    true_active_mask = true_charge > threshold
-    sim_active_mask = simulated_charge > threshold
-
-    # Calculate total charges
-    total_true_charge = jnp.sum(true_charge)
-    total_sim_charge = jnp.sum(simulated_charge)
-
-    # --------------------------------------
-    # 1. Intensity Loss
-    # --------------------------------------
-    # Log ratio of total charges (same as original)
-    L_intensity = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps))) * lambda_intensity
-
-    # --------------------------------------
-    # 2. Centroid Loss
-    # --------------------------------------
-    # Calculate charge-weighted centroids
-    true_centroid = jnp.sum(true_charge[:, None] * sensor_points, axis=0) / (total_true_charge + eps)
-    sim_centroid = jnp.sum(simulated_charge[:, None] * sensor_points, axis=0) / (total_sim_charge + eps)
-
-    # Euclidean distance between centroids
-    L_centroid = jnp.linalg.norm(true_centroid - sim_centroid) * lambda_centroid
-
-    # --------------------------------------
-    # 3. Simple Time Spread Loss
-    # --------------------------------------
-    # Calculate mean times only for active locations
-    true_mean_time = jax.lax.stop_gradient(jnp.sum(true_time * true_charge) / (total_true_charge + eps))
-    sim_mean_time = jax.lax.stop_gradient(jnp.sum(simulated_time * simulated_charge) / (total_sim_charge + eps))
-
-    # Subtract means from times to account for arbitrary time offsets
-    true_time_centered = true_time - true_mean_time
-    sim_time_centered = simulated_time - sim_mean_time
-
-    # Simple time spread comparison (standard deviation)
-    true_time_var = jnp.sum(true_charge * jnp.square(true_time_centered)) / (total_true_charge + eps)
-    sim_time_var = jnp.sum(simulated_charge * jnp.square(sim_time_centered)) / (total_sim_charge + eps)
-    L_time_spread = jnp.abs(jnp.sqrt(true_time_var) - jnp.sqrt(sim_time_var))
-
-    # Time loss is just the spread comparison
-    L_time = L_time_spread * lambda_time
-
-    # Total loss
-    return L_centroid + L_intensity + L_time
-
-
-@jit
 def WC_smooth_loss(
         sensor_points: jnp.ndarray,
         true_charge: jnp.ndarray,
@@ -186,7 +18,7 @@ def WC_smooth_loss(
         lambda_time: float = 1.0,
 ) -> float:
     """
-    Smoothed version of WC_loss using Gaussian distance weights.
+    Charge and time loss with Gaussian distance weights.
 
     Applies spatial Gaussian smoothing to both true and simulated charges
     before computing Poisson loss, which helps with gradient flow.
@@ -235,7 +67,7 @@ def WC_smooth_loss(
     # ============= Poisson Loss on Smoothed Charges =============
     poisson_loss = poisson_nll(true_charge_smooth, simulated_charge_smooth, eps)
 
-    # ============= Time Loss (same as original WC_loss) =============
+    # ============= Time Loss =============
     true_active = true_charge > threshold
     sim_active = simulated_charge > threshold
 
@@ -261,9 +93,8 @@ def WC_smooth_loss(
     return L_charge + L_time
 
 
-
 # ===================================================================
-# Optimization loss functions (formerly in lucid/optimization/losses.py)
+# Optimization loss functions
 # ===================================================================
 
 @jit
@@ -318,21 +149,20 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8,
     return jnp.where(normalize, total / (jnp.sum(true) + eps), total)
 
 @jit
-def grid_origin_time_loss(
-    origin,
-    detector_positions,
-    true_times,
-    true_q,
-    t0,
-    photosensor_radius=0.25,
-    c_medium=(0.299792 / 1.33),
-    w_neg=100.0,
-):
+def grid_origin_time_loss(origin, detector_positions, true_times, true_q, t0, *,
+                          sensor_radius, light_speed, early_penalty):
+    """First-arrival residual loss of a vertex hypothesis, for the first-light seed grid.
+
+    The expected arrival at each hit sensor is the straight-line flight from ``origin`` to the
+    sensor face (``sensor_radius`` short of its centre) at ``light_speed`` (m/ns), after ``t0``.
+    Arrivals earlier than that are impossible and cost ``early_penalty`` per ns; the late
+    residuals enter as the log of their mean.
+    """
     eps = 1e-9
 
     # --- Residuals
     distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
-    expected_times = (distances - photosensor_radius) / c_medium
+    expected_times = (distances - sensor_radius) / light_speed
     r = true_times - expected_times - t0
 
     # --- Active sensors
@@ -362,47 +192,7 @@ def grid_origin_time_loss(
     nll_pos = (n_pos * jnp.log(mean_pos)) / (n + eps)
 
     # Mask all positive-related terms if no positives
-    total_loss = w_neg * neg_pen + has_pos * (nll_pos)
-
-    # Replace NaNs by large number to avoid contamination
-    total_loss = jnp.nan_to_num(total_loss, nan=1e6, posinf=1e6, neginf=1e6)
-    return total_loss
-
-def softplus(x):
-    return jnp.log1p(jnp.exp(-jnp.abs(x))) + jnp.maximum(x, 0.)
-
-def smooth_pinball(r, tau=0.1, sigma=0.5):
-    """
-    Smooth version of pinball/quantile loss.
-    Minimizer sets approx quantile_tau(r) ~= 0.
-    """
-    # Approx max(r,0) and max(-r,0)
-    pos = softplus(r / sigma) * sigma
-    neg = softplus(-r / sigma) * sigma
-    return tau * pos + (1.0 - tau) * neg
-
-@jit
-def origin_time_loss(origin, detector_positions, true_times, true_q, t0,
-                     photosensor_radius=0.25, c_medium=(0.299792/1.33), tau=0.23):
-    d = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
-    expected = (d - photosensor_radius) / c_medium
-
-    r = true_times - expected - t0
-
-    w = jnp.where(true_q > 0., 1., 0.)
-    wsum = jnp.sum(w) + 1e-8
-
-    main = jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.25)) / wsum
-
-    return main
-
-@jit
-def cone_time_loss(observed_counts, simulated_time, observed_times, t0, tau=0.12):
-    r = observed_times - simulated_time - t0
-    w = jnp.where(observed_counts > 0., observed_counts, 0.)
-    wsum = jnp.sum(w) + 1e-8
-    main = jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.25)) / wsum
-    return main
+    return early_penalty * neg_pen + has_pos * (nll_pos)
 
 
 # ===================================================================
@@ -424,6 +214,14 @@ def segment_logsumexp(data, indices, num_segments):
 
 def first_arrival_nll(log_w, flat_times, flat_indices,
                       t_obs_per_sensor, tau, num_detectors):
+    """Per-sensor first-arrival NLL of a logistic-smeared photon mixture.
+
+    Each predicted photon arrives at ``flat_times`` smeared by a logistic kernel of scale ``tau``;
+    the observed time is the first of ``N_s`` arrivals, with ``N_s`` the sensor's expected count,
+    so the loss is ``-log[N_s f(t) (1 - F(t))^(N_s - 1)]``. An alternative to
+    :func:`first_arrival_window_nll` (the reconstruction's time term), kept for comparing time
+    likelihoods. Empty sensors contribute 0.
+    """
     t_obs_per_photon = t_obs_per_sensor[flat_indices]
     x = (t_obs_per_photon - flat_times) / tau
 
@@ -482,8 +280,7 @@ def _log1mexp(a):
 
 
 def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
-                             mu_total, obs_counts, num_detectors,
-                             sigma=2.5, delta=1.0):
+                             mu_total, obs_counts, num_detectors, *, sigma, delta):
     """Windowed first-arrival ORDER-STATISTIC time NLL — the reconstruction time term.
 
     Mean-field-correct first arrival (the recon recipe). The
@@ -492,7 +289,9 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     ``t`` (a MEAN, hence engine-exact), the analytic survival ``S(t) = (μ − R(t))/μ``, and the
     count-conditioned NLL over the window ``[t_obs ± δ/2]``::
 
-        tnll = −n·log S(t_lo) − log( S(t_lo)ⁿ − S(t_hi)ⁿ )
+        tnll = −log( S(t_lo)ⁿ − S(t_hi)ⁿ )   (the probability that the first of n arrivals lies in the window)
+
+    computed as ``−n·log S(t_lo) − log1mexp(n·(log S(t_hi) − log S(t_lo)))`` for stability.
 
     AMP_DETACH is baked in: the photon weights ``ww`` and the per-PMT total ``μ`` are
     ``stop_gradient``'d, so this term's gradient flows ONLY through the predicted times
@@ -503,9 +302,10 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     ----------
     log_w, flat_times, flat_indices : per-photon log-weight, predicted arrival time, sensor idx
         (the ``per_photon`` hit-mode outputs).
-    t_obs_per_sensor : (num_detectors,) observed first-arrival time, ALREADY t0-shifted.
+    t_obs_per_sensor : (num_detectors,) observed first-arrival time, on the clock of
+        ``flat_times`` (the track forward starts the predicted ones at the track's t0).
     mu_total : (num_detectors,) predicted per-PMT total ``μ`` — the survival denominator
-        ``S=(μ−R)/μ``. Pass the UNSCALED engine total (NOT a ``tot_n_scale``-scaled charge):
+        ``S=(μ−R)/μ``. Pass the UNSCALED engine total (not an energy-rescaled charge):
         scaling the survival denominator corrupts ``S`` and collapses far-capture (the recon
         recipe keeps it unscaled). It is ``stop_gradient``'d here anyway.
     obs_counts : (num_detectors,) observed per-PMT count ``n``.
@@ -529,43 +329,9 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     n = jnp.maximum(obs_counts, 0.)
     # No clamp here: the only saturation cap on `a` is the -1e-7 inside `_log1mexp`. That cap is
     # active on many PMTs, so a reimplementation must use -1e-7 (a -1e-9 cap differs by 4.6 nats
-    # per saturated PMT). `tests/test_first_arrival_a_cap.py` pins where the cap lives.
+    # per saturated PMT). `tests/fitting/test_first_arrival_a_cap.py` pins where the cap lives.
     a = n * (jnp.log(Shi) - jnp.log(Slo))
     return jnp.where(obs_counts > 0, -n * jnp.log(Slo) - _log1mexp(a), 0.)
-
-
-# =============================================================================
-# TAU_VTX PARAMETRIZATION
-# =============================================================================
-# Coefficients from a weighted least-squares fit of tau_vtx = a*n_rays + b*E + c on a tau
-# hyperparameter scan over (n_rays, energy). The scan driver
-# (`s3df_jobs/submit_tau_hyperparameter_tuning_job.py`) is no longer in the tree; recover it with
-# `git log --diff-filter=D -- s3df_jobs/`. The three constants are a fitted TRIPLE: regenerate and
-# update them together, never one alone.
-
-TAU_VTX_PARAM_A = 1.092557e-06  # coefficient for Nrays
-TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)
-TAU_VTX_PARAM_C = -0.0442       # intercept
-
-
-def get_optimal_tau_vtx(nrays, energy_mev):
-    """
-    Get optimal tau_vtx based on learned parametrization.
-
-    tau_vtx = a * Nrays + b * Energy + c
-
-    This parametrization was derived from scanning tau_vtx across
-    different (Nrays, Energy) combinations and fitting to minimize
-    position reconstruction error.
-
-    Args:
-        nrays: Number of photon rays (can be JAX array or scalar)
-        energy_mev: Energy in MeV (can be JAX array or scalar)
-
-    Returns:
-        Optimal tau_vtx value (typically in range 0.1-0.8)
-    """
-    return TAU_VTX_PARAM_A * nrays + TAU_VTX_PARAM_B * energy_mev + TAU_VTX_PARAM_C
 
 
 # =============================================================================
@@ -573,7 +339,3 @@ def get_optimal_tau_vtx(nrays, energy_mev):
 # =============================================================================
 # poisson_nll is an alias for counts_loss (same formula)
 poisson_nll = counts_loss
-
-# origin_time_loss already accepts tau parameter, so it can be used as configurable
-# This alias makes the API clearer when using dynamic tau_vtx
-origin_time_loss_configurable = origin_time_loss

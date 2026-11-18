@@ -1,0 +1,14 @@
+CC0 1.0 Universal — Public Domain Dedication (summary and reference)
+
+The viridis/magma/inferno/plasma colormaps were dedicated to the public domain
+under CC0 1.0 by their authors (Nathaniel Smith, Stefan van der Walt and Eric
+Firing). `viewer/colormaps.js` transcribes seven hex stops from each, which is
+in any case well short of a substantial reproduction of matplotlib's tables.
+No attribution is required; the authors are credited in THIRD_PARTY.md because
+crediting them is right, not because a licence compels it.
+
+The full text is at https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+To the extent possible under law, the authors have waived all copyright and
+related or neighbouring rights to these colormaps. The work is distributed
+without any warranty.

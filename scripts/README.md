@@ -1,42 +1,18 @@
-# scripts/
+# Scripts
 
-Runnable tools beyond the console entry points (`lucid-run-job`, `lucid-optimize`,
-`lucid-train-siren`, `lucid-build-*-table`) and the hello-world spine in
-[`../examples/`](../examples/). Run from the repo root (they use `config/…` / `data/…` paths).
+Command-line tools that are not console entry points (those are listed in the
+[CLI reference](../docs/reference/cli.md)). Run them from the repository root, since they read
+`config/` and `data/`. Each takes `--help`.
 
-## Portable user/dev tools
+| script | what it does |
+|--------|--------------|
+| `download_data.py` | installs the example data (`lucid-data-v1`: SIREN weights, Geant4 events, PMT overlap tables), checking every file's sha256. `--paper` installs the paper figures' inputs instead; `--from-dir` installs from a local copy; `--verify-only` checks what is installed |
+| `benchmark_forward.py` | warm wall time of the track fit's forward, loss and gradient and of the calibration forward and Jacobian, over photon counts `--n` and scatter iterations `--k`; `--what track\|calibration\|both` |
+| `check_gradients.py` | compares the autodiff gradient of the calibration loss with central finite differences, per optical parameter |
+| `find_optimal_k.py` | sweeps the scatter-iteration count K for a `--detector` and reports where the per-sensor charge converges |
+| `geofile_to_npz.py` | converts a WCSim-style detector geofile (`.txt`) to a PMT-array `.npz` ([schema](../docs/reference/pmt-npz-schema.md)); single-type cylindrical detectors only |
+| `inspect_dataset.py` | prints a text summary of a dataset batch (`sensor`, `hits`, `step`, `labl`) |
+| `visualize_detector.py` | draws the sensors of any `*_geom_config.json` in 3D, and unrolled in 2D for a cylinder; needs the `[viz]` extra |
 
-| Script | What | Typical use |
-|--------|------|-------------|
-| `download_data.sh` | Fetch the example SIREN emitter + PhotonSim tables from CERNBox (wires up wbls/ice symlinks) | run once after install |
-| `benchmark_forward.py` | Forward + `value_and_grad` wall-time vs (N photons, K), track & calibration | perf sizing / claims |
-| `generate_example_events.py` | Write simple per-event HDF5 (Q/T + truth) from a PhotonSim ROOT (not the full four-file dataset) | tutorials / tests / quick studies |
-| `geofile_to_npz.py` | Convert a WCSim-style detector geofile (`.txt`) → a PMT-array `.npz` (schema `docs/reference/pmt-npz-schema.md`) | add/reproduce a measured detector |
-| `visualize_detector.py` | Render any `*_geom_config.json` (3D scatter for all geometries; 2D unrolled for cylinders) | sanity-check a geometry |
-| `inspect_dataset.py` | Text summary of a dataset batch (sensor/hits/step/labl) | inspect produced data |
-| `check_gradients.py` | AD vs finite-difference gradient check (pathwise params); reports the score-estimated params | verify differentiability |
-| `train_siren_pipeline.py` | Single-node SIREN training pipeline: build tables → train (photon + dE/dx) → validate (optional PhotonSim generation) | train the emitter end-to-end |
-| `reconstruct_dataset.py` | Reconstruct a whole PhotonSim ROOT (two-start seed → Fisher-GN) and report vtx/dir/E/t0 resolution | recon study at scale |
-| `calibrate_campaign.py` | Calibrate optical params from a source set over N random starts; recovery vs the Cramér-Rao bound | calibration study |
-| `find_optimal_k.py` | Minimum scatter-iteration count `K` for a target charge fraction | geometry tuning |
-| `compare_method_ab.py` | Compare two propagator methods (expected-value vs Bernoulli sampling) | method validation |
-| `run_string_siren_tracks.py`, `run_string_cascades.py` | Batch neutrino-telescope (IceCube-string) track / cascade sims | telescope studies |
-
-Reconstruction / calibration at the single-event or single-config level: see
-[`../examples/`](../examples/) (`hello_reconstruct`, `seed_reconstruct`, `hello_calibrate`,
-`hello_telescope`) and `lucid-optimize`.
-
-## Research / campaign (internal)
-
-- `campaign/` — the calibration research campaign (CRB, per-PMT QE, reflection, spectral,
-  timing, shot-noise studies). SK-hardcoded, env-var-driven; the portable subset is
-  `calibrate_campaign.py` above.
-- `campaign_recon/` — the reconstruction research campaign + diagnostics; the portable subset is
-  `reconstruct_dataset.py` above.
-
-`campaign_recon/` is git-ignored (personal research scratch); `campaign/` is tracked
-(its `grid_out/` results directory is not). Cluster
-deployment lives in `../lucid/production/jobs/` (portable SLURM/HTCondor/NERSC). The SLAC-specific
-`../s3df_jobs/` is gone: its three scan-config generators produced the same nrays / energy
-(400-1800 MeV) / sensor-count scans that `analysis/paper/utils/studies.py` now generates, and its
-`submit_job.py` was an earlier draft of `analysis/paper/utils/submit_job.py`.
+`python scripts/X.py` imports the installed `lucid`, not necessarily the checkout the script is
+in. To run the scripts of a second checkout, use `PYTHONPATH=<that checkout> python scripts/X.py`.

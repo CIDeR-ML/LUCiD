@@ -7,7 +7,7 @@ Submodules are imported on demand:
     from lucid.geometry import generate_detector
 
 No eager imports live here so that lightweight tools (e.g.
-``lucid.production.run_job``'s ``--skip-lucid`` path on a bare Python
+``lucid.production.dataprod.run_job``'s ``--skip-lucid`` path on a bare Python
 environment) can import submodules without pulling in JAX / numpy / h5py.
 The convenience top-level names below still resolve — lazily, via PEP 562
 ``__getattr__`` — on first access, so ``lucid.DetectorParams`` and

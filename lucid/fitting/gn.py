@@ -21,17 +21,10 @@ calibration's Jacobian stream *must* be independent of its residual's (sharing t
 two), while reconstruction deliberately shares keys between its gradient and its metric. Only the
 problem can hold both policies, so only the problem holds keys.
 
-Step application belongs to the problem
----------------------------------------
-``jax_enable_x64`` is never enabled in this repo, so calibration accumulates its iterate in
-**float32** and reconstruction in **float64** numpy. A shared ``theta += scale*du`` would have to
-pick one and would silently change the other, and this is not a rounding nit: on the calibration
-problem a perturbation of order 1e-7 at step 0 grows by orders of magnitude within a few steps.
-So ``Problem.accumulate`` owns it.
+The loop applies the step and carries the iterate in float32 for both problems.
 """
-import numpy as np
 
-__all__ = ['gauss_newton']
+__all__ = ['gauss_newton', 'gauss_newton_tx']
 
 
 def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
@@ -43,8 +36,7 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
     Parameters
     ----------
     problem
-        Supplies ``grad_metric_loss(theta, step, refresh) -> (g, H, loss)`` and
-        ``accumulate(theta, dtheta) -> theta``. On a non-refresh step it may return a metric
+        Supplies ``grad_metric_loss(theta, step, refresh) -> (g, H, loss)``. On a non-refresh step it may return a metric
         cached from the last refresh. For :class:`~lucid.fitting.recon.ReconModel` that means
         ``g`` is at the current iterate while ``H`` may be at an earlier one, which is intended:
         the metric is a preconditioner and cannot move the fixed point, so a stale one costs
@@ -96,22 +88,10 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
     """
     if readout not in ('final', 'polyak', 'ming'):
         raise ValueError(f"readout must be 'final', 'polyak' or 'ming', got {readout!r}")
-    # This is the damped-Gauss-Newton configuration of the shared driver `minimize`; the damped
-    # solve itself is the optax transformation in `lucid.fitting.transforms`, its only
-    # implementation.
-    #
-    # The anneal is `scale_by_driver_schedule`, which reads the driver's iteration instead of
-    # counting its own steps -- necessary because `minimize` restores optimiser state on a refused
-    # step, which would rewind a stateful schedule and repeat an iteration.
+    # This is the damped-Gauss-Newton configuration of the shared driver `minimize`, stepping with
+    # `gauss_newton_tx`.
     from lucid.fitting.minimize import minimize as _minimize
-    from lucid.fitting.transforms import (scale_by_damped_gauss_newton, scale_by_driver_schedule,
-                                          annealed_learning_rate)
-    import optax as _optax
-    tx = _optax.chain(
-        scale_by_damped_gauss_newton(lam, mu, jitter=jitter),
-        scale_by_driver_schedule(annealed_learning_rate(lr, lr_final, steps)),
-        _optax.scale(-1.0),                      # direction -> descent step
-    )
+    tx = gauss_newton_tx(lam, mu, jitter=jitter, lr=lr, lr_final=lr_final, steps=steps)
     return _minimize(
         problem, theta0, steps, tx,
         needs_metric=True, scale=scale, max_step=max_step,
@@ -120,3 +100,13 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
         fix=fix, on_step=on_step)
 
 
+def gauss_newton_tx(lam, mu, *, jitter=0.0, lr=1.0, lr_final=None, steps=1):
+    """The step :func:`gauss_newton` runs, as an optax transformation for
+    :func:`lucid.fitting.minimize.minimize`: the damped direction, the ``lr -> lr_final`` anneal
+    over ``steps`` (read from the driver's iteration), and the descent sign.
+
+    :func:`lucid.fitting.calibrate.calibrate` runs it by default.
+    """
+    from lucid.fitting.transforms import damped_gauss_newton, annealed_learning_rate
+    return damped_gauss_newton(lam, mu, learning_rate=annealed_learning_rate(lr, lr_final, steps),
+                               jitter=jitter)

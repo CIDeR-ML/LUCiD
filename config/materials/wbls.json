@@ -1,8 +1,10 @@
 {
   "material": "wbls",
+  "_comment_siren": "wbls has no emitters of its own: it runs water's (data/water/<particle>/), Cherenkov, dE/dx and t0. Its Cherenkov emission and t0 are approximated by water's.",
+  "siren": "water",
   "_comment_composition": "10% water-based liquid scintillator. Bulk optical properties are inherited from pure water (negligible difference at 10% mass fraction); only the scintillation block is the actual WbLS physics.",
   "refractive_index": 1.33,
-  "speed_of_light_vacuum_m_per_ns": 0.299792,
+  "speed_of_light_vacuum_m_per_ns": 0.299792458,
 
   "scattering": {
     "source": "SK calibration paper (arXiv:1307.0162) — reused from water; WbLS bulk scattering differs by <1% at 10% mass fraction.",
@@ -45,8 +47,7 @@
       "tau_fall": 2.70
     },
     "spectrum": {
-      "_comment": "Moyal (approximate Landau) fit to WbLS emission spectrum from arXiv:2003.10491. The surrogate samples directly from this distribution truncated to [lambda_min, lambda_max] via an inverse-CDF lookup; moyal_amp is dormant (preserved on DetectorParams for future reactivation).",
-      "moyal_amp":   1.0,
+      "_comment": "Moyal (approximate Landau) fit to WbLS emission spectrum from arXiv:2003.10491. The surrogate samples directly from this distribution truncated to [lambda_min, lambda_max] via an inverse-CDF lookup.",
       "moyal_loc":   373.26120442,
       "moyal_scale": 14.77305198,
       "lambda_min":  340.0,

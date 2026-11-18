@@ -6,7 +6,7 @@ distributed ``<E>MeV_100events.root`` files, at 500 events/energy for BOTH mu- a
 
     energies : 300..2100 MeV, step 100  (19 points)
     events   : 500 per file
-    output   : <BASE>/<mu-|e->/<E>MeV_500events.root
+    output   : <--base>/<mu-|e->/<E>MeV_500events.root  (default paths.S3DF_ROOT_FILES)
 
 One CPU SLURM job per (particle, energy) runs the baked PhotonSim binary on a generated
 macro (milano, mli:cider-ml). This mirrors the existing
@@ -14,7 +14,7 @@ macro (milano, mli:cider-ml). This mirrors the existing
 
     # write macros + sbatch scripts, do NOT queue (inspect first)
     python analysis/paper/utils/generate_data.py
-    # write and queue everything (replacing stale files in BASE)
+    # write and queue everything (replacing stale files in --base)
     python analysis/paper/utils/generate_data.py --submit --clean
 
 muon macros disable the muon-decay processes for a clean single track; electrons are stable
@@ -25,10 +25,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-BASE = '/sdf/data/neutrino/cjesus/CIDER/ROOT_files/LARGE_files/water'
-IMAGE = '/sdf/data/neutrino/cjesus/software/images/lucid.sif'
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # LUCiD/ on path
+from analysis.paper.utils import paths                          # noqa: E402
+
 PHOTONSIM_BIN = '/opt/PhotonSim/build/PhotonSim'
-BINDS = '/sdf,/fs,/sdf/scratch,/lscratch,/cvmfs'
 ACCOUNT = 'mli:cider-ml'
 PARTITION = 'milano'
 BEAM_ON = 500
@@ -84,7 +84,7 @@ def sbatch_text(particle, energy, macro, log_dir):
 #SBATCH --mem=16000
 #SBATCH --time=06:00:00
 
-apptainer exec -B {BINDS} {IMAGE} \\
+apptainer exec -B {paths.S3DF_BINDS} {paths.S3DF_IMAGE} \\
     {PHOTONSIM_BIN} {macro}
 """
 
@@ -95,7 +95,7 @@ def main():
     ap.add_argument('--particles', nargs='+', default=['muon', 'electron'],
                     choices=['muon', 'electron'])
     ap.add_argument('--energies', nargs='+', type=int, default=ENERGIES)
-    ap.add_argument('--base', default=BASE)
+    ap.add_argument('--base', default=paths.S3DF_ROOT_FILES)
     ap.add_argument('--submit', action='store_true', help='queue the jobs (else just write files)')
     ap.add_argument('--clean', action='store_true',
                     help='remove existing *events.root in each particle dir not in this sweep')

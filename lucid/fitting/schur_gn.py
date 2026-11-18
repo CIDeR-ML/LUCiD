@@ -1,73 +1,25 @@
-"""The Schur-block sqrt-residual family: what the Neyman consolidation did not absorb.
+"""The joint charge + first-arrival-time fit: the Schur-block sqrt-residual family that the Neyman
+consolidation did not absorb.
 
-Everything here shares one shape — a ``sqrt``-transformed residual with the per-PMT nuisance
-carried as a Schur block, rather than the Neyman residual with the gains profiled that
-:mod:`lucid.fitting.calibrate` now runs. That is what the name says, and the name matters: this
-file used to be called ``gauss_newton.py``, which was wrong twice over. It has not contained the
-Gauss-Newton loop since the consolidation, and worse, importing it SHADOWED
-``lucid.fitting.gauss_newton`` — the package's headline export — so
-``from lucid.fitting import gauss_newton`` returned this module and could not be called.
+``fit_charge_time`` runs a ``sqrt``-transformed residual with the per-PMT nuisances carried as
+Schur blocks, rather than the Neyman residual with the gains profiled that
+:mod:`lucid.fitting.calibrate` runs. It carries a SECOND per-PMT block (an additive t0 alongside
+the multiplicative k) that the shared calibration problem does not yet model, so its port onto
+:class:`lucid.fitting.calib.CalibrationProblem` is deferred rather than duplicated onto a residual
+that cannot express it.
 
-The calibration optimiser that used to live here is gone. It ran a sqrt-MSE residual with the
-per-PMT gains carried as a free Schur block, and both halves of that were the arm the calibration
-campaign rejected — a residual nonlinear in a re-drawn Monte-Carlo model has a permanently
-displaced fixed point, and a free per-sensor gain overfits a single noisy draw. Its replacement is
-:func:`lucid.fitting.calibrate.fit`, which runs the Neyman residual, profiles the gains in closed
-form, and steps with the loop reconstruction uses.
-
-Three things stayed behind, for one reason each:
-
-``SourceModel``          the Fisher/CRB path (:mod:`lucid.fitting.fisher`) needs its
-                         ``ad_jacobian``, and that Jacobian is of ``sqrt(k*M)`` — the CRB is a
-                         property of the observable, not of the estimator that was retired.
-``make_constrained_schur``  the CRB still marginalises the per-PMT block by Schur complement,
-                         because it asks a different question than the fit does: the fit profiles
-                         the gains at a point, the bound must integrate over them.
-``ChargeTimeModel`` /    the joint charge + first-arrival-time fit, which carries a SECOND per-PMT
-``fit_charge_time``      block (an additive t0 alongside the multiplicative k) that the shared
-                         calibration problem does not yet model. Consolidating it needs the timing
-                         residual in :mod:`lucid.fitting.calib` first, so it is deferred rather
-                         than duplicated onto a residual that cannot express it.
-
-``ridge_inverse`` remains as the damping those two use; :func:`lucid.fitting.transforms.damped_matrix` is
-the one convention for everything that has been consolidated, and differs from it in documented
-ways (an eigen-floor here, provably inert whenever the Levenberg term is positive).
-
-``sqrt_residual`` is the fourth, and it is the exception: it has **no caller anywhere in the tree**.
-The two models above build their ``sqrt`` transform inline rather than calling it. It is kept, and
-still exported, because it names the residual the consolidation replaced — a reader comparing the
-two estimators can see the retired one written down in one line instead of reconstructing it from
-a diff. That is a documentation reason, not a code one, and it is the only thing holding it here.
+``ridge_inverse`` is the damping it uses; :func:`lucid.fitting.transforms.damped_matrix` is the
+one convention for everything that has been consolidated, and differs from it in documented ways
+(an eigen-floor here, provably inert whenever the Levenberg term is positive).
 """
 
 import numpy as np
 import jax
 import jax.numpy as jnp
 
+from lucid.fitting.fisher import make_constrained_schur
+
 sg = jax.lax.stop_gradient
-
-
-def sqrt_residual(pred, truth, eps=1e-8):
-    """Variance-stabilising √-MSE residual ``√(pred+eps) − √(truth+eps)``."""
-    return jnp.sqrt(pred + eps) - jnp.sqrt(truth + eps)
-
-
-def make_constrained_schur(Hkk):
-    """Return ``Minv(X)`` applying the inverse of the per-PMT block under the gauge
-    ``mean(log k)=0`` (a rank-1 correction to the diagonal inverse ``1/Hkk``).
-
-    ``Hkk`` is the (n_sensors,) diagonal of the per-PMT Gauss-Newton block. The gauge
-    removes the per-PMT-k ↔ global-amplitude degeneracy (the sum-of-log-k direction).
-    """
-    Dinv = 1.0 / Hkk
-    sD = Dinv.sum()
-
-    def Minv(X):
-        if np.ndim(X) == 1:
-            return Dinv * X - Dinv * ((Dinv @ X) / sD)
-        return Dinv[:, None] * X - Dinv[:, None] * ((Dinv @ X)[None, :] / sD)
-
-    return Minv
 
 
 def ridge_inverse(H, ridge=0.02, mu=0.3):
@@ -87,54 +39,6 @@ def ridge_inverse(H, ridge=0.02, mu=0.3):
 def _keys(b0):
     return (jax.random.fold_in(jax.random.PRNGKey(b0), 1),
             jax.random.fold_in(jax.random.PRNGKey(b0 + 1), 1))
-
-
-class SourceModel:
-    """Wraps one source's forward ``M(theta)`` (per-sensor mean charge at k=1) into the
-    √(k·M) residual ``m`` and a finite-difference Jacobian.
-
-    ``forward(theta, ek, pk) -> (n_sensors,)`` is the mean charge for this source at the
-    log-global params ``theta`` (with the per-PMT factor set to 1); ek/pk are
-    forward-noise keys (engine + photon).
-
-    The Jacobian ``J = ∂m/∂theta`` (n_sensors, n_params) is computed by FORWARD-MODE
-    autodiff (``ad_jacobian``, ``jax.jacfwd``) — P inputs → N_sensors outputs, so
-    forward-mode is the efficient mode. AD is unbiased and (for the discrete scatter/mie/g
-    channels, whose gradient comes via the DiCE score) ~10× LOWER variance than the
-    finite-difference secant, which is noisy through the per-photon decision flips. The
-    legacy CRN-FD path (``fd_jacobian``) is retained for cross-checking; it was the default
-    only because the old ``custom_vjp`` step blocked ``jacfwd`` (now removed).
-    """
-
-    def __init__(self, forward, eps=1e-8, fd_step=1e-3):
-        self.forward = forward
-        self.eps = eps
-        self.fd_step = fd_step
-
-        def _m(theta, lk, ek, pk):
-            return jnp.sqrt(jnp.exp(lk) * forward(theta, ek, pk) + eps)
-        self._m = jax.jit(_m)
-        # Forward-mode Jacobian ∂m/∂theta (argnums=0). Now that the step is custom_vjp-free,
-        # jacfwd works; key is a traced arg so different keys reuse the same compiled program.
-        self._adjac = jax.jit(jax.jacfwd(_m, argnums=0))
-
-    def m(self, theta, lk, ek, pk):
-        return self._m(theta, lk, ek, pk)
-
-    def ad_jacobian(self, theta, lk, ek, pk):
-        """(n_sensors, n_params) forward-mode AD Jacobian ∂m/∂theta. Unbiased, low-variance."""
-        return np.asarray(self._adjac(jnp.asarray(theta), lk, ek, pk))
-
-    def fd_jacobian(self, theta, lk, ek, pk, h=None):
-        """(n_sensors, n_params) FD Jacobian ∂m/∂theta with CRN (same ek/pk). Cross-check only."""
-        h = self.fd_step if h is None else h
-        theta = jnp.asarray(theta)
-        base = self.m(theta, lk, ek, pk)
-        cols = []
-        for d in range(theta.shape[0]):
-            pert = self.m(theta.at[d].add(h), lk, ek, pk)
-            cols.append(np.array((pert - base) / h))
-        return np.stack(cols, axis=1)
 
 
 class ChargeTimeModel:

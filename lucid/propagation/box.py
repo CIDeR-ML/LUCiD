@@ -4,10 +4,12 @@ Box (rectangular prism) detector photon propagation functions with optimizations
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from functools import partial
 from jax import lax
 
-from .geometry import ray_box_intersection_vectorized
+from lucid.propagation.sensor_map import grid_face_cells
+
 
 
 @jax.jit
@@ -150,47 +152,6 @@ def intersect_box(ray_origin, ray_direction, length, width, height):
     return any_intersects, min_t, min_t_index
 
 
-@jax.jit
-def ray_box_intersection_with_face(ray_origin, ray_direction, box_min, box_max):
-    """
-    Optimized box intersection that also returns which face was hit.
-    Uses vectorized slab method for maximum performance.
-    """
-    # Vectorized slab method - compute all 6 t-values at once
-    inv_dir = jnp.where(jnp.abs(ray_direction) > 1e-8, 1.0 / ray_direction, 1e8)
-    
-    t_min = (box_min - ray_origin) * inv_dir
-    t_max = (box_max - ray_origin) * inv_dir
-    
-    # Ensure t_min <= t_max for each axis
-    t1 = jnp.minimum(t_min, t_max)
-    t2 = jnp.maximum(t_min, t_max)
-    
-    # Find intersection interval
-    t_near = jnp.max(t1)
-    t_far = jnp.min(t2)
-    
-    # Valid intersection if t_near <= t_far and t_far > 0
-    valid = (t_near <= t_far) & (t_far > 0)
-    t = jnp.where(t_near > 0, t_near, t_far)
-    
-    # Determine which face was hit by finding which axis contributed t_near
-    face_axis = jnp.argmax(t1)  # Which axis has the maximum t1 value
-    face_side = t_min[face_axis] < t_max[face_axis]  # Which side of that axis
-    
-    # Convert axis and side to face index
-    # face_axis: 0=x, 1=y, 2=z
-    # face_side: True=negative, False=positive
-    face_index = face_axis * 2 + jnp.where(face_side, 0, 1)
-    
-    # For now, let's not remap face indices to avoid confusion
-    # The original system may have been working with the raw indices
-    # face_mapping = jnp.array([2, 3, 1, 0, 5, 4])  
-    # face_index = face_mapping[face_index]
-    
-    return jnp.where(valid, t, -1), face_index
-
-
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
 def intersect_box_with_grid(ray_origin, ray_direction, length, width, height, 
                            n_x, n_y, n_z):
@@ -293,35 +254,6 @@ def calculate_box_normals(face_indices):
     return face_normals[face_indices]
 
 
-def box_bounds_check(points, length, width, height):
-    """
-    Check if points are within box bounds.
-    
-    Parameters
-    ----------
-    points : ndarray
-        Points to check [x, y, z]
-    length : float
-        Box length (x-dimension)
-    width : float
-        Box width (y-dimension)
-    height : float
-        Box height (z-dimension)
-        
-    Returns
-    -------
-    ndarray
-        Boolean array indicating which points are inside box
-    """
-    x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    
-    inside_x = (x >= -length/2) & (x <= length/2)
-    inside_y = (y >= -width/2) & (y <= width/2)
-    inside_z = (z >= -height/2) & (z <= height/2)
-    
-    return inside_x & inside_y & inside_z
-
-
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
 def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
                                 n_x, n_y, n_z):
@@ -349,7 +281,7 @@ def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
     Returns
     -------
     jnp.ndarray
-        Array of shape (n_sensors, 4, 3) containing up to 4 grid cell assignments
+        Array of shape (n_sensors, 9, 3) containing up to 9 grid cell assignments
         per sensor. -1 indicates no assignment.
     """
 
@@ -376,120 +308,41 @@ def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
         on_surface = min_distance <= sensor_radius
         
         def assign_surface():
-            def assign_front_back():
-                # Front/Back faces use x,z coordinates
-                x_idx = jnp.floor((x + length/2) / length * n_x).astype(jnp.int32)
-                z_idx = jnp.floor((z + height/2) / height * n_z).astype(jnp.int32)
-                x_idx = jnp.clip(x_idx, 0, n_x - 1)
-                z_idx = jnp.clip(z_idx, 0, n_z - 1)
-                
-                # Calculate overlap with neighboring cells
-                x_frac = ((x + length/2) / length * n_x) % 1
-                z_frac = ((z + height/2) / height * n_z) % 1
-                
-                include_x_right = x_frac >= 1 - sensor_radius / (length / n_x)
-                include_x_left = x_frac <= sensor_radius / (length / n_x)
-                include_z_up = z_frac >= 1 - sensor_radius / (height / n_z)
-                include_z_down = z_frac <= sensor_radius / (height / n_z)
-                
-                x_right = jnp.clip(x_idx + 1, 0, n_x - 1)
-                x_left = jnp.clip(x_idx - 1, 0, n_x - 1)
-                z_up = jnp.clip(z_idx + 1, 0, n_z - 1)
-                z_down = jnp.clip(z_idx - 1, 0, n_z - 1)
-                
+            def assign_face(u, extent_u, n_u, v, extent_v, n_v):
+                # The sensor's own cell on this face, plus each of the 8 neighbours its disk
+                # reaches (as cylinder.py does), the central cell first.
+                pu = (u + extent_u / 2) / extent_u * n_u
+                pv = (v + extent_v / 2) / extent_v * n_v
+                iu = jnp.clip(jnp.floor(pu).astype(jnp.int32), 0, n_u - 1)
+                iv = jnp.clip(jnp.floor(pv).astype(jnp.int32), 0, n_v - 1)
+                fu, fv = pu % 1, pv % 1
+                reach_u = sensor_radius / (extent_u / n_u)
+                reach_v = sensor_radius / (extent_v / n_v)
+                up_u, dn_u = fu >= 1 - reach_u, fu <= reach_u
+                up_v, dn_v = fv >= 1 - reach_v, fv <= reach_v
+                u_up, u_dn = jnp.clip(iu + 1, 0, n_u - 1), jnp.clip(iu - 1, 0, n_u - 1)
+                v_up, v_dn = jnp.clip(iv + 1, 0, n_v - 1), jnp.clip(iv - 1, 0, n_v - 1)
                 indices = jnp.array([
-                    [x_idx, z_idx, closest_face],
-                    [x_right, z_idx, closest_face],
-                    [x_idx, z_up, closest_face],
-                    [x_right, z_up, closest_face]
+                    [iu, iv, closest_face],
+                    [u_up, iv, closest_face], [iu, v_up, closest_face], [u_up, v_up, closest_face],
+                    [iu, v_dn, closest_face], [u_up, v_dn, closest_face],
+                    [u_dn, iv, closest_face], [u_dn, v_up, closest_face], [u_dn, v_dn, closest_face],
                 ])
-                
                 selection = jnp.array([
-                    1.0,
-                    include_x_right,
-                    include_z_up,
-                    include_x_right * include_z_up
+                    1.0, up_u, up_v, up_u * up_v, dn_v, up_u * dn_v, dn_u, dn_u * up_v, dn_u * dn_v,
                 ])
-                
                 sorted_indices = indices[jnp.argsort(-selection)]
-                return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
-            
-            def assign_left_right():
-                # Left/Right faces use y,z coordinates
-                y_idx = jnp.floor((y + width/2) / width * n_y).astype(jnp.int32)
-                z_idx = jnp.floor((z + height/2) / height * n_z).astype(jnp.int32)
-                y_idx = jnp.clip(y_idx, 0, n_y - 1)
-                z_idx = jnp.clip(z_idx, 0, n_z - 1)
-                
-                # Calculate overlap with neighboring cells
-                y_frac = ((y + width/2) / width * n_y) % 1
-                z_frac = ((z + height/2) / height * n_z) % 1
-                
-                include_y_right = y_frac >= 1 - sensor_radius / (width / n_y)
-                include_y_left = y_frac <= sensor_radius / (width / n_y)
-                include_z_up = z_frac >= 1 - sensor_radius / (height / n_z)
-                include_z_down = z_frac <= sensor_radius / (height / n_z)
-                
-                y_right = jnp.clip(y_idx + 1, 0, n_y - 1)
-                y_left = jnp.clip(y_idx - 1, 0, n_y - 1)
-                z_up = jnp.clip(z_idx + 1, 0, n_z - 1)
-                z_down = jnp.clip(z_idx - 1, 0, n_z - 1)
-                
-                indices = jnp.array([
-                    [y_idx, z_idx, closest_face],
-                    [y_right, z_idx, closest_face],
-                    [y_idx, z_up, closest_face],
-                    [y_right, z_up, closest_face]
-                ])
-                
-                selection = jnp.array([
-                    1.0,
-                    include_y_right,
-                    include_z_up,
-                    include_y_right * include_z_up
-                ])
-                
-                sorted_indices = indices[jnp.argsort(-selection)]
-                return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
-            
-            def assign_top_bottom():
-                # Top/Bottom faces use x,y coordinates
-                x_idx = jnp.floor((x + length/2) / length * n_x).astype(jnp.int32)
-                y_idx = jnp.floor((y + width/2) / width * n_y).astype(jnp.int32)
-                x_idx = jnp.clip(x_idx, 0, n_x - 1)
-                y_idx = jnp.clip(y_idx, 0, n_y - 1)
-                
-                # Calculate overlap with neighboring cells
-                x_frac = ((x + length/2) / length * n_x) % 1
-                y_frac = ((y + width/2) / width * n_y) % 1
-                
-                include_x_right = x_frac >= 1 - sensor_radius / (length / n_x)
-                include_x_left = x_frac <= sensor_radius / (length / n_x)
-                include_y_right = y_frac >= 1 - sensor_radius / (width / n_y)
-                include_y_left = y_frac <= sensor_radius / (width / n_y)
-                
-                x_right = jnp.clip(x_idx + 1, 0, n_x - 1)
-                x_left = jnp.clip(x_idx - 1, 0, n_x - 1)
-                y_right = jnp.clip(y_idx + 1, 0, n_y - 1)
-                y_left = jnp.clip(y_idx - 1, 0, n_y - 1)
-                
-                indices = jnp.array([
-                    [x_idx, y_idx, closest_face],
-                    [x_right, y_idx, closest_face],
-                    [x_idx, y_right, closest_face],
-                    [x_right, y_right, closest_face]
-                ])
-                
-                selection = jnp.array([
-                    1.0,
-                    include_x_right,
-                    include_y_right,
-                    include_x_right * include_y_right
-                ])
-                
-                sorted_indices = indices[jnp.argsort(-selection)]
-                return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
-            
+                return jnp.where(jnp.arange(9)[:, None] < jnp.sum(selection), sorted_indices, -1)
+
+            def assign_front_back():                  # Front/Back faces use x,z coordinates
+                return assign_face(x, length, n_x, z, height, n_z)
+
+            def assign_left_right():                  # Left/Right faces use y,z coordinates
+                return assign_face(y, width, n_y, z, height, n_z)
+
+            def assign_top_bottom():                  # Top/Bottom faces use x,y coordinates
+                return assign_face(x, length, n_x, y, width, n_y)
+
             return jnp.where(
                 (closest_face == 0) | (closest_face == 1),  # Front or Back
                 assign_front_back(),
@@ -501,62 +354,11 @@ def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
             )
         
         def assign_off_surface():
-            return jnp.full((4, 3), -1, dtype=jnp.int32)
+            return jnp.full((9, 3), -1, dtype=jnp.int32)
         
         return lax.cond(on_surface, assign_surface, assign_off_surface)
     
     return jax.vmap(assign_single_sensor)(sensors)
-
-
-@partial(jax.jit, static_argnums=(1, 2, 3))
-def create_sensor_box_grid_map(assignments, n_x, n_y, n_z):
-    """
-    Creates a grid map counting the number of sensors in each cell of the box sensor grid.
-    """
-    # Each face has different grid sizes
-    front_back_cells = n_x * n_z
-    left_right_cells = n_y * n_z
-    top_bottom_cells = n_x * n_y
-    
-    total_cells = 2 * (front_back_cells + left_right_cells + top_bottom_cells)
-    grid = jnp.zeros(total_cells, dtype=jnp.int32)
-    
-    def update_grid(sensor_assignments):
-        def update_cell(cell, g):
-            i, j, k = cell
-            is_valid = (i != -1) & (j != -1) & (k != -1)
-            
-            # Calculate linear index based on face
-            # Front/Back faces
-            face_offset_fb = k * front_back_cells
-            idx_fb = face_offset_fb + i * n_z + j
-            
-            # Left/Right faces
-            face_offset_lr = 2 * front_back_cells + (k - 2) * left_right_cells
-            idx_lr = face_offset_lr + i * n_z + j
-            
-            # Top/Bottom faces
-            face_offset_tb = 2 * (front_back_cells + left_right_cells) + (k - 4) * top_bottom_cells
-            idx_tb = face_offset_tb + i * n_y + j
-            
-            # Select the appropriate index based on face
-            idx = jnp.where(
-                k <= 1,
-                idx_fb,
-                jnp.where(
-                    k <= 3,
-                    idx_lr,
-                    idx_tb
-                )
-            )
-            
-            return g.at[idx].add(is_valid)
-        
-        return jax.lax.fori_loop(0, sensor_assignments.shape[0], 
-                                lambda i, g: update_cell(sensor_assignments[i], g), grid)
-    
-    all_updates = jax.vmap(update_grid)(assignments)
-    return all_updates.sum(axis=0)
 
 
 @partial(jax.jit, static_argnums=(0, 1, 2, 3, 4, 5))
@@ -604,120 +406,12 @@ def calculate_box_grid_centers(length, width, height, n_x, n_y, n_z):
     return jnp.concatenate(centers, axis=0)
 
 
-def create_inverted_box_sensor_map(assignments_geometric, assignments_distance, 
-                                    n_x, n_y, n_z, max_candidates_per_ray):
-    """Create inverted sensor map for box geometry with proper grid indexing."""
-    front_back_cells = n_x * n_z
-    left_right_cells = n_y * n_z
-    top_bottom_cells = n_x * n_y
-    total_cells = 2 * (front_back_cells + left_right_cells + top_bottom_cells)
-    
-    inverted_map = jnp.full((total_cells, max_candidates_per_ray), -1, dtype=jnp.int32)
-    
-    def update_cell(inv_map, i):
-        # Update cell i with sensors that geometrically intersect with it
-        def add_geometric(carry, j):
-            curr_map, curr_count = carry
-            
-            # Calculate which face and grid position this cell represents
-            # Use JAX-compatible conditionals
-            
-            # Front/Back face calculations
-            is_front_back = i < 2 * front_back_cells
-            face_idx_fb = jnp.where(i < front_back_cells, 0, 1)
-            local_idx_fb = i % front_back_cells
-            cell_i_fb = local_idx_fb // n_z
-            cell_j_fb = local_idx_fb % n_z
-            
-            # Left/Right face calculations
-            is_left_right = (i >= 2 * front_back_cells) & (i < 2 * front_back_cells + 2 * left_right_cells)
-            offset_lr = i - 2 * front_back_cells
-            face_idx_lr = jnp.where(offset_lr < left_right_cells, 2, 3)
-            local_idx_lr = offset_lr % left_right_cells
-            cell_i_lr = local_idx_lr // n_z
-            cell_j_lr = local_idx_lr % n_z
-            
-            # Top/Bottom face calculations
-            offset_tb = i - 2 * (front_back_cells + left_right_cells)
-            face_idx_tb = jnp.where(offset_tb < top_bottom_cells, 4, 5)
-            local_idx_tb = offset_tb % top_bottom_cells
-            cell_i_tb = local_idx_tb // n_y
-            cell_j_tb = local_idx_tb % n_y
-            
-            # Select appropriate values based on which face type
-            cell_i = jnp.where(is_front_back, cell_i_fb,
-                              jnp.where(is_left_right, cell_i_lr, cell_i_tb))
-            cell_j = jnp.where(is_front_back, cell_j_fb,
-                              jnp.where(is_left_right, cell_j_lr, cell_j_tb))
-            cell_k = jnp.where(is_front_back, face_idx_fb,
-                              jnp.where(is_left_right, face_idx_lr, face_idx_tb))
-            
-            # Check if sensor j intersects with this cell
-            sensor_assignments = assignments_geometric[j]
-            matches = (sensor_assignments[:, 0] == cell_i) & \
-                     (sensor_assignments[:, 1] == cell_j) & \
-                     (sensor_assignments[:, 2] == cell_k)
-            
-            cell_matches = jnp.any(matches)
-            should_add = cell_matches & (curr_count < max_candidates_per_ray)
-            
-            new_map = jnp.where(
-                should_add,
-                curr_map.at[i, curr_count].set(j),
-                curr_map
-            )
-            
-            return (new_map, curr_count + should_add), None
-        
-        # Add geometric intersections
-        (new_map, geom_count), _ = jax.lax.scan(
-            add_geometric,
-            (inv_map, 0),
-            jnp.arange(len(assignments_geometric))
-        )
-        
-        # Get closest sensors for this cell
-        closest = assignments_distance[i]
-        
-        # Add closest sensors if there's room
-        def add_closest(carry, j):
-            curr_map, curr_count = carry
-            sensor_idx = closest[j]
-            
-            # Check for duplicates
-            def check_duplicate(k, is_dup):
-                return is_dup | (curr_map[i, k] == sensor_idx)
-            
-            is_duplicate = jax.lax.fori_loop(
-                0, curr_count,
-                check_duplicate,
-                False
-            )
-            
-            # Add if not duplicate and have space
-            should_add = (~is_duplicate) & (curr_count < max_candidates_per_ray)
-            
-            new_map = jnp.where(
-                should_add,
-                curr_map.at[i, curr_count].set(sensor_idx),
-                curr_map
-            )
-            
-            return (new_map, curr_count + should_add), None
-        
-        # Fill remaining slots with closest sensors
-        (final_map, _), _ = jax.lax.scan(
-            add_closest,
-            (new_map, geom_count),
-            jnp.arange(len(closest))
-        )
-        
-        return final_map, None
-    
-    final_map, _ = jax.lax.scan(
-        update_cell,
-        inverted_map,
-        jnp.arange(total_cells)
-    )
-    
-    return final_map
+def box_grid_cells(n_x, n_y, n_z):
+    """Grid coordinates (i, j, face) of every box cell, by linear index: (total_cells, 3) int32.
+
+    Faces 0-1 are (n_x, n_z), faces 2-3 (n_y, n_z) and faces 4-5 (n_x, n_y), in that order: the
+    convention of :func:`assign_sensors_to_box_grid`.
+    """
+    return np.concatenate([grid_face_cells(n_x, n_z, 0), grid_face_cells(n_x, n_z, 1),
+                           grid_face_cells(n_y, n_z, 2), grid_face_cells(n_y, n_z, 3),
+                           grid_face_cells(n_x, n_y, 4), grid_face_cells(n_x, n_y, 5)])

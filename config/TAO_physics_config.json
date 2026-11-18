@@ -1,8 +1,11 @@
 {
-  "scatter_length": 50.0,
-  "absorption_length": 50.0,
+  "_comment_scalar_mode": "Read only with wavelength_mode=False; wavelength mode evaluates config/materials/water.json (the geometry's material). mie_scatter_length 1e9 is no Mie channel.",
+  "scalar_mode": {"scatter_length": 50.0, "absorption_length": 50.0, "mie_scatter_length": 1.0e9},
+  "g": 0.0,
   "wall_reflection_rate": 0.2,
   "sensor_reflection_rate": 0.2,
+  "wall_fspec": 0.55,
+  "sensor_fspec": 0.9,
   "qe": 0.2,
   "qe_corrections": 1.0
 }

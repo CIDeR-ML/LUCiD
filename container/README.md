@@ -1,33 +1,44 @@
-# Container build
+# Container
 
-Single `Dockerfile` producing the unified GENIE → PhotonSim → LUCiD
-image. The published image at `ghcr.io/cider-ml/lucid:latest` is the
-canonical runtime; rebuild only when editing the Dockerfile itself.
+`Dockerfile` builds the image that runs the dataset production chain (GENIE, PhotonSim, LUCiD).
+The published image is `ghcr.io/cider-ml/lucid:latest`; rebuild only to change the Dockerfile.
+Using the image is described in the [container guide](../docs/guides/production/container.md)
+and, for clusters, in [clusters](../docs/guides/production/clusters.md).
 
-Layered on top of `nuisancemc/tutorial:nuint2024`, which ships
-ROOT 6.30 (with Pythia6), GENIE 3.04, Pythia6, and xsec splines for
-tunes `AR23_20i_00_000`, `G18_10a_02_11b`, and `G21_11a_00_000`. The
-Dockerfile adds conda GEANT4 11.3 + PhotonSim + LUCiD.
+```bash
+docker pull ghcr.io/cider-ml/lucid:latest
+apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest      # Apptainer, e.g. on S3DF
+```
 
-## Pull (default path)
+## Contents
 
-- Docker: `docker pull ghcr.io/cider-ml/lucid:latest` — see
-  [../docs/guides/production/container.md](../docs/guides/production/container.md).
-- Apptainer/S3DF:
-  `apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest` —
-  see [../docs/guides/production/deploy-s3df.md](../docs/guides/production/deploy-s3df.md).
+- Base image `nuisancemc/tutorial:nuint2024`: ROOT 6.30 with Pythia6, GENIE 3.04, and cross-section
+  splines for the tunes `AR23_20i_00_000`, `G18_10a_02_11b` and `G21_11a_00_000`.
+- Miniforge Python 3.11 at `/opt/conda` with Geant4 11.3 and LUCiD's Python dependencies,
+  including `jax=0.4.38` with a CPU-only `jaxlib`.
+- LUCiD installed editable at `/opt/LUCiD` with `pip install --no-deps`. pip therefore does not
+  apply `pyproject.toml`'s `jax>=0.5.3,<0.6`, and the image runs jax 0.4.38.
+- PhotonSim built at `/opt/PhotonSim/build`.
+- PMT overlap tables pre-computed for the `*_WAND` detectors. Production jobs do not use them.
+- `/opt/VERSIONS`: the LUCiD and PhotonSim commits and release tags, whether the LUCiD build
+  context had uncommitted changes (`lucid_dirty`), the build date and the Geant4 version. Every
+  dataset batch written in the image records them as `config/git_commit`, `git_dirty`,
+  `lucid_ref`, `photonsim_commit`, `photonsim_ref` and `geant4_version`.
 
-## Rebuild (only for Dockerfile edits)
+## Rebuild
 
-From the parent directory containing both `LUCiD/` and `PhotonSim/`:
+From the directory that contains both `LUCiD/` and `PhotonSim/`:
 
 ```bash
 docker build --platform linux/amd64 --provenance=false --sbom=false \
+    --build-arg LUCID_SHA=$(git -C LUCiD rev-parse HEAD) --build-arg LUCID_DIRTY=false \
+    --build-arg LUCID_REF=$(git -C LUCiD describe --tags --exact-match 2>/dev/null || echo none) \
+    --build-arg PHOTONSIM_SHA=$(git -C PhotonSim rev-parse HEAD) \
+    --build-arg PHOTONSIM_REF=$(git -C PhotonSim describe --tags --exact-match 2>/dev/null || echo none) \
     -f LUCiD/container/Dockerfile -t lucid:latest .
 ```
 
-`--provenance=false --sbom=false` suppresses BuildKit attestation manifests
-(ghcr.io has trouble with them for this package). Cold build is ~10 min
-on Apple Silicon. Editing LUCiD source retriggers only the last layer
-(~30 s). For a quicker dev loop without rebuilding, bind-mount the
-checkout — see docs/guides/production/container.md §6.
+Without these the image, and every batch it writes, records them as `unknown`. Set
+`LUCID_DIRTY=true` when the checkout has uncommitted changes. A change to LUCiD's source rebuilds
+only the last layers. To run a modified checkout without rebuilding, bind-mount it over
+`/opt/LUCiD` as the [container guide](../docs/guides/production/container.md) describes.

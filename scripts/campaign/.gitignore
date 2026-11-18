@@ -1,6 +1,0 @@
-*_out/
-grid_out/
-out*/
-*.log
-__pycache__/
-*.png

@@ -1,41 +1,8 @@
-"""Pretty, dependency-light console output for fits and Fisher/CRB summaries.
+"""Console tables for fit results: aligned unicode text that copy-pastes cleanly.
 
-One house style for the whole toolkit so ``fit``, ``fit_track``, ``crb`` and the scripts all
-print the same way. No hard dependency beyond ``tqdm`` (already required): progress bars degrade
-to a plain iterator when disabled or off-TTY, and tables are aligned unicode text that copy-paste
-cleanly. Everything here is opt-in — pass ``verbose=True`` to a fitter; the default is silent, so
-notebooks and tests are unaffected.
+``print(track_table(theta, truth=truth, dir_of=vec9_dir))`` summarises a track fit.
 """
-import sys
 import numpy as np
-
-try:
-    from tqdm.auto import tqdm
-except Exception:  # pragma: no cover - tqdm is a declared dependency
-    tqdm = None
-
-
-def progress(iterable, *, desc='', total=None, verbose=False):
-    """Wrap ``iterable`` in a tqdm bar when ``verbose`` (and tqdm is available), else pass through.
-
-    Use the returned object's ``.set_postfix_str(...)`` inside the loop for a live metric; it is a
-    no-op on the plain fallback so call sites never branch.
-    """
-    if verbose and tqdm is not None:
-        return tqdm(iterable, desc=desc, total=total, leave=True,
-                    bar_format='  {desc} {percentage:3.0f}%|{bar:24}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}')
-
-    class _Plain:
-        def __init__(self, it):
-            self._it = iter(it)
-
-        def __iter__(self):
-            return self._it
-
-        def set_postfix_str(self, *_a, **_k):
-            pass
-
-    return _Plain(iterable)
 
 
 def rule(text='', width=64, char='━'):
@@ -87,59 +54,7 @@ def _looks_numeric(s):
         return False
 
 
-def emit(text, *, verbose=True, stream=None):
-    """Print ``text`` only when ``verbose``. Central switch so call sites stay one-liners."""
-    if verbose:
-        print(text, file=stream or sys.stdout, flush=True)
-
-
 # ---- domain summaries -------------------------------------------------------
-
-def crb_table(result, names, *, as_percent=True):
-    """Format a CRB summary: per-parameter fractional 1σ and the strongest degeneracy."""
-    sigma = np.asarray(result['sigma'])
-    cov = np.asarray(result['cov'])
-    d = np.sqrt(np.clip(np.diag(cov), 0, None))
-    corr = cov / np.outer(d, d)
-    scale, unit = (100.0, '%') if as_percent else (1.0, '')
-    rows = [[names[i], f'{sigma[i] * scale:.2f}{unit}'] for i in range(len(names))]
-    ev = np.linalg.eigvalsh(np.asarray(result['fisher']))
-    cond = ev.max() / max(ev.min(), 1e-300)
-    iu = np.triu_indices(len(names), 1)
-    k = int(np.argmax(np.abs(corr[iu]))) if len(iu[0]) else 0
-    out = [rule('Cramér–Rao bound (fractional 1σ at truth)'),
-           table(['parameter', '1σ'], rows)]
-    if len(iu[0]):
-        out.append(f'  Fisher condition number {cond:.1e}   strongest degeneracy: '
-                   f'{names[iu[0][k]]} ↔ {names[iu[1][k]]} = {corr[iu][k]:+.2f}')
-    return '\n'.join(out)
-
-
-def calib_table(fit_theta, names, *, truth=None, sigma=None):
-    """Format a calibration result: fit value, optional truth/error, optional CRB σ."""
-    fit_theta = np.asarray(fit_theta)
-    headers = ['parameter', 'fit']
-    if truth is not None:
-        headers += ['truth', 'error']
-    if sigma is not None:
-        headers += ['CRB σ']
-    truth = None if truth is None else np.asarray(truth)
-    sigma = None if sigma is None else np.asarray(sigma)
-    rows = []
-    for i, nm in enumerate(names):
-        row = [nm, f'{fit_theta[i]:.4g}']
-        if truth is not None:
-            frac = (fit_theta[i] - truth[i]) / truth[i] * 100 if truth[i] else np.nan
-            row += [f'{truth[i]:.4g}', f'{frac:+.1f}%']
-        if sigma is not None:
-            row += [f'{sigma[i] * 100:.1f}%']
-        rows.append(row)
-    out = [rule('calibration fit'), table(headers, rows)]
-    if truth is not None and sigma is not None:
-        within = np.abs(fit_theta - truth) <= sigma * np.abs(truth) * 1.0
-        out.append(f'  {int(within.sum())}/{len(names)} parameters within 1σ CRB'
-                   + ('  ✓' if within.all() else ''))
-    return '\n'.join(out)
 
 
 def track_table(theta, *, truth=None, dir_of=None):

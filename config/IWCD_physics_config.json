@@ -1,6 +1,7 @@
 {
-  "scatter_length": 50.0,
-  "absorption_length": 50.0,
+  "_comment_scalar_mode": "Read only with wavelength_mode=False; wavelength mode evaluates config/materials/water.json (the geometry's material). mie_scatter_length 1e9 is no Mie channel.",
+  "scalar_mode": {"scatter_length": 50.0, "absorption_length": 50.0, "mie_scatter_length": 1.0e9},
+  "g": 0.0,
   "_comment_reflection": "wall: SK black PET liner, R~0.05, ~55% specular [Abe et al., NIM A737 (2014) 253]. sensor: PMT glass + bialkali photocathode from water, R~0.25, ~90% specular [Motta & Schonert, NIM A539 (2005) 217].",
   "wall_reflection_rate": 0.05,
   "wall_fspec": 0.55,

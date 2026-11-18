@@ -13,22 +13,22 @@ photons with ``d_i = (edep_i / Δs_i)`` in keV/mm (Birks/Chou). Per photon:
   with the same ``u`` used for the origin so position and time within
   the step stay consistent.
 
-Pure NumPy, no JAX dependence. Fully vectorized via ``np.repeat`` — no
-Python loop over segments. The output dict matches the per-photon key
-names that :func:`lucid.sources.root_reader._read_event_raw` produces
+NumPy sampling (the Moyal table is the track-mode surrogate's), fully
+vectorized via ``np.repeat`` — no Python loop over segments. The output dict matches the per-photon key
+names that :func:`lucid.sources.root_reader.read_event_raw` produces
 for Cherenkov photons, plus an ``photon_emission_process`` column
-tagged as :data:`lucid.sources.writer.EMISSION_PROCESS_SCINTILLATION`.
+tagged as :data:`lucid.dataset.schema.EMISSION_PROCESS_SCINTILLATION`.
 
 See ``.claude/plans/scintillation-data-mode.md`` for the wider design.
 """
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Mapping
 
 import numpy as np
 
-from lucid.sources.writer import EMISSION_PROCESS_SCINTILLATION
+from lucid.dataset.schema import EMISSION_PROCESS_SCINTILLATION
+from lucid.sources.siren_rays import _build_moyal_inverse_cdf
 
 __all__ = [
     "expand_segments_to_photons",
@@ -41,9 +41,7 @@ def scintillation_medium_params(detector_params, medium) -> dict:
     from a simulator's ``DetectorParams`` + ``MediumProperties``.
 
     The scintillation scalars live on the nested ``DetectorParams.scintillation``
-    sub-tuple; the spectrum truncation window comes from the medium. Mirrors the
-    inline assembly in ``event_generation.py`` so the data-mode loaders and the
-    production path stay in sync.
+    sub-tuple; the spectrum shape and truncation window come from the medium.
     """
     sc = detector_params.scintillation
     return {
@@ -52,8 +50,8 @@ def scintillation_medium_params(detector_params, medium) -> dict:
         'C':           float(sc.C),
         'tau_rise':    float(sc.tau_rise),
         'tau_fall':    float(sc.tau_fall),
-        'moyal_loc':   float(sc.moyal_loc),
-        'moyal_scale': float(sc.moyal_scale),
+        'moyal_loc':   float(medium.moyal_loc),
+        'moyal_scale': float(medium.moyal_scale),
         'lambda_min':  float(medium.scintillation_lambda_min),
         'lambda_max':  float(medium.scintillation_lambda_max),
     }
@@ -69,32 +67,6 @@ _EPS_DELTA_S_MM = 1e-9       # segments shorter than this contribute zero photon
 # per-wavelength stratification offers no variance reduction when each ray
 # already carries an independent Poisson + QE Bernoulli stochasticity.
 # ---------------------------------------------------------------------------
-
-
-def _moyal_pdf_np(x: np.ndarray, loc: float, scale: float) -> np.ndarray:
-    """Moyal PDF — NumPy port of :func:`siren_rays._moyal_pdf`."""
-    z = (x - loc) / scale
-    return (1.0 / (scale * np.sqrt(2.0 * np.pi))) * np.exp(
-        -0.5 * (z + np.exp(-z)))
-
-
-@lru_cache(maxsize=8)
-def _build_moyal_inverse_cdf_np(lambda_min: float, lambda_max: float,
-                                 moyal_loc: float, moyal_scale: float,
-                                 n_knots: int = 512):
-    """Precompute the inverse CDF of the Moyal PDF truncated to ``[λmin, λmax]``.
-
-    Cached on (window, params, n_knots) — repeated calls within an event /
-    across events of the same dataset reuse the same arrays. Mirrors
-    :func:`siren_rays._build_moyal_inverse_cdf`.
-    """
-    lambda_grid = np.linspace(lambda_min, lambda_max, n_knots, dtype=np.float64)
-    pdf = _moyal_pdf_np(lambda_grid, moyal_loc, moyal_scale)
-    bw = lambda_grid[1:] - lambda_grid[:-1]
-    cdf = np.concatenate([np.zeros(1, dtype=np.float64),
-                          np.cumsum(0.5 * (pdf[:-1] + pdf[1:]) * bw)])
-    cdf /= cdf[-1]
-    return cdf, lambda_grid
 
 
 def _sample_isotropic_np(rng: np.random.Generator, n: int) -> np.ndarray:
@@ -124,12 +96,11 @@ def _sample_hypoexp_np(rng: np.random.Generator, n: int,
 def _sample_moyal_np(rng: np.random.Generator, n: int,
                       moyal_loc: float, moyal_scale: float,
                       lambda_min: float, lambda_max: float) -> np.ndarray:
-    """Inverse-CDF Moyal wavelength sample on ``[lambda_min, lambda_max]``."""
-    cdf, lambda_grid = _build_moyal_inverse_cdf_np(
-        float(lambda_min), float(lambda_max),
-        float(moyal_loc), float(moyal_scale))
+    """Inverse-CDF Moyal wavelength sample on ``[lambda_min, lambda_max]``, on the track-mode
+    surrogate's table (:func:`siren_rays._build_moyal_inverse_cdf`)."""
+    cdf, lambda_grid = _build_moyal_inverse_cdf(lambda_min, lambda_max, moyal_loc, moyal_scale)
     u = rng.uniform(0.0, 1.0, size=n)
-    return np.interp(u, cdf, lambda_grid).astype(np.float32)
+    return np.interp(u, np.asarray(cdf), np.asarray(lambda_grid)).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +134,7 @@ def expand_segments_to_photons(segments: Mapping,
     ----------
     segments : Mapping
         Per-event raw segment table — same shape as the ``segments_raw``
-        block of :func:`lucid.sources.root_reader._read_event_raw`. Required
+        block of :func:`lucid.sources.root_reader.read_event_raw`. Required
         keys (1-D ndarray of length ``n_segments`` unless noted):
 
         - ``start_x_mm``, ``start_y_mm``, ``start_z_mm`` : float, mm
@@ -193,7 +164,7 @@ def expand_segments_to_photons(segments: Mapping,
     -------
     dict
         Per-photon arrays plus the new emission-process tag column.
-        Keys match what :func:`root_reader._read_event_raw` returns for
+        Keys match what :func:`root_reader.read_event_raw` returns for
         Cherenkov photons (so callers can splice the two streams together):
 
         - ``photon_origins``           : (N_total, 3) float32, meters

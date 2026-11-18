@@ -5,9 +5,7 @@
 log-pdfs make the discrete Mie/Rayleigh choice differentiable: its gradient arrives through the
 DiCE score ``log p_mie + hg_logpdf`` versus ``log(1 - p_mie) + rayleigh_logpdf``, not pathwise.
 
-``compute_rayleigh_scatter_direction`` has no caller in the package: the loop takes its Rayleigh
-direction from :func:`lucid.simulation.optics.compute_scatter_direction`, which builds the same
-sample from ``solve_rayleigh_inverse_cdf``. Only that function is unused; the Mie channel is live.
+The Rayleigh direction itself is sampled by :func:`lucid.simulation.optics.compute_scatter_direction`.
 """
 import jax
 import jax.numpy as jnp
@@ -17,40 +15,6 @@ from lucid.utils import normalize
 # lucid.simulation.optics runs lucid/simulation/__init__ -> simulator -> photon_step,
 # and photon_step imports back from this module. A module-top import here breaks
 # `import lucid.wavelength.scattering` when it is the first import in a process.
-
-
-def compute_rayleigh_scatter_direction(incident_dir, rng_key):
-    """Rayleigh phase function scattering: P(cos_theta) ~ (1 + cos^2 theta).
-
-    This is functionally identical to ``lucid.simulation.optics.compute_scatter_direction``
-    but kept here for completeness alongside the Mie sampler.
-
-    Parameters
-    ----------
-    incident_dir : jnp.ndarray
-        (3,) current photon direction (unit vector).
-    rng_key : jax.random.PRNGKey
-
-    Returns
-    -------
-    jnp.ndarray
-        (3,) scattered direction (unit vector).
-    """
-    from lucid.simulation.optics import create_local_frame, solve_rayleigh_inverse_cdf
-    k1, k2 = jax.random.split(rng_key)
-    u1 = jax.random.uniform(k1)
-    u2 = jax.random.uniform(k2)
-
-    cos_theta = solve_rayleigh_inverse_cdf(u1)
-    sin_theta = jnp.sqrt(1 - cos_theta ** 2)
-    phi = 2 * jnp.pi * u2
-    local_dir = normalize(jnp.array([
-        sin_theta * jnp.cos(phi),
-        sin_theta * jnp.sin(phi),
-        cos_theta,
-    ]))
-    frame = create_local_frame(incident_dir)
-    return normalize(frame.T @ local_dir)
 
 
 def hg_sample_cos_theta(u, g):

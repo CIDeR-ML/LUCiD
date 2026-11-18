@@ -8,10 +8,10 @@ tools/visualization/visualize_photons.py -- the interactive/ipywidgets machinery
 dropped and it saves a static figure.
 
     python fig_photon_event_display.py                       # shipped 1 GeV muon, event 0
-    python fig_photon_event_display.py --event 3 --azim -72 --elev 8
+    python fig_photon_event_display.py --event 3
 
-Reads photons with LUCiD's shipped loader, so a bare clone reproduces it from the
-bundled data/water/muon/1000MeV_100events.root.
+Reads photons with LUCiD's shipped loader, so a clone reproduces it from
+data/water/muon/1000MeV_5events.root (scripts/download_data.py).
 """
 import argparse
 import sys
@@ -27,9 +27,12 @@ plt.rcParams['font.size'] = 10
 
 REPO_ROOT = Path(__file__).resolve().parents[2]        # LUCiD/
 sys.path.insert(0, str(REPO_ROOT))
-from analysis.paper.utils import paths                  # noqa: E402
+from analysis.paper.utils import paths, provenance      # noqa: E402
 
-DEFAULT_ROOT = REPO_ROOT / 'data' / 'water' / 'muon' / '1000MeV_100events.root'
+DEFAULT_ROOT = REPO_ROOT / 'data' / 'water' / 'muon' / '1000MeV_5events.root'
+MAX_PHOTONS = 15000        # photons drawn (a random subset of the event's)
+N_ARROWS = 500             # photon-direction arrows drawn
+ELEV, AZIM = 8.0, -72.0    # camera (degrees)
 
 
 def _box(ax, bounds):
@@ -51,10 +54,10 @@ def _bounds(pos, pad=1.2):
     return list(zip(c - r, c + r))
 
 
-def make_display(root, event, out, max_photons, n_arrows, elev, azim):
-    from lucid.sources.event_io import read_photon_data_from_photonsim
+def make_display(root, event, out):
+    from lucid.sources.root_reader import read_photon_data_from_photonsim
     r = read_photon_data_from_photonsim(str(root), event)
-    pos = np.asarray(r['photon_origins'], float)           # (N,3), cm
+    pos = 100.0 * np.asarray(r['photon_origins'], float)   # (N,3), cm: the axes are in cm
     t = np.asarray(r['photon_times'], float)               # ns
     dirs = np.asarray(r['photon_directions'], float)
     E = float(r['energy'])
@@ -66,8 +69,8 @@ def make_display(root, event, out, max_photons, n_arrows, elev, azim):
 
     pos_all = pos                                          # for bounds (reordered, full)
     rng = np.random.default_rng(0)
-    if n > max_photons:
-        sel = rng.choice(n, max_photons, replace=False)
+    if n > MAX_PHOTONS:
+        sel = rng.choice(n, MAX_PHOTONS, replace=False)
         pos, t, dirs = pos[sel], t[sel], dirs[sel]
 
     fig = plt.figure(figsize=(6.5, 4), facecolor='white')
@@ -82,8 +85,8 @@ def make_display(root, event, out, max_photons, n_arrows, elev, azim):
     sc = ax.scatter(pos[:, 0], pos[:, 1], pos[:, 2], c=t, s=1, alpha=1.0,
                     cmap='plasma', depthshade=False)
     # a sparse set of photon-direction arrows along the track
-    if n_arrows:
-        ai = rng.choice(len(pos), min(n_arrows, len(pos)), replace=False)
+    if N_ARROWS:
+        ai = rng.choice(len(pos), min(N_ARROWS, len(pos)), replace=False)
         span = min(b[1] - b[0] for b in bounds)
         s = span * 0.22
         ax.quiver(pos[ai, 0], pos[ai, 1], pos[ai, 2],
@@ -98,7 +101,7 @@ def make_display(root, event, out, max_photons, n_arrows, elev, azim):
     except TypeError:                                      # older matplotlib: no zoom kwarg
         ax.set_box_aspect(aspect)
     ax.set_axis_off()
-    ax.view_init(elev=elev, azim=azim)
+    ax.view_init(elev=ELEV, azim=AZIM)
 
     cbar = fig.colorbar(sc, ax=ax, shrink=0.28, aspect=10, pad=0.04)
     cbar.set_label('Time [ns]', fontsize=8)
@@ -119,14 +122,11 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--root', default=str(DEFAULT_ROOT))
     ap.add_argument('--event', type=int, default=0)
-    ap.add_argument('--max-photons', type=int, default=15000)
-    ap.add_argument('--arrows', type=int, default=500)
-    ap.add_argument('--elev', type=float, default=8.0)
-    ap.add_argument('--azim', type=float, default=-72.0)
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
-    make_display(a.root, a.event, Path(a.out) if a.out else paths.figure_dir(),
-                 a.max_photons, a.arrows, a.elev, a.azim)
+    out = Path(a.out) if a.out else paths.figure_dir()
+    make_display(a.root, a.event, out)
+    provenance.write_run_record(out, __file__, a)
 
 
 if __name__ == '__main__':

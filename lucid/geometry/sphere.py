@@ -2,11 +2,16 @@
 Spherical detector geometry implementation.
 """
 
-import numpy as np
-import plotly.graph_objects as go
+from typing import NamedTuple
+
 from .base import Detector
 from .utils import fibonacci_sphere_points_numpy
 from .registry import register_detector
+
+
+class SphereGrid(NamedTuple):
+    """The propagation grid, frozen: n_divisions polar cells by 2 * n_divisions azimuthal."""
+    n_divisions: int
 
 
 @register_detector('sphere')
@@ -28,27 +33,29 @@ class Sphere(Detector):
         """
         super().__init__(n_sensors, sensor_radius)
         self.r = radius
-        self._n_divisions = None
         self.place_photosensors()
 
-    def configure_grid(self, n_divisions=None, max_candidates_per_ray=4):
-        """Set grid parameters for propagation methods.
+    @classmethod
+    def from_config(cls, geometry, config_dir):
+        """Algorithmic layout from ``radius / n_sensors / sensor_radius``."""
+        return cls(geometry['radius'], geometry['n_sensors'], geometry['sensor_radius'])
+
+    def make_grid(self, n_divisions=None, max_candidates_per_ray=4):
+        """The propagation grid for this layout, as a :class:`SphereGrid`.
 
         If not provided, defaults are derived from sensor count to
         ensure no cell exceeds ``max_candidates_per_ray`` sensors.
         """
         import math
         if n_divisions is not None:
-            self._n_divisions = n_divisions
-        else:
-            n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
-            # total cells = 2 × n_div². Target: n_placed / max_candidates_per_ray × safety.
-            # Polar grid has non-uniform cell sizes — equatorial cells are much
-            # larger than polar cells, causing sensor crowding at the equator.
-            # Safety factor 6.0 ensures no cell exceeds max_candidates_per_ray.
-            target_cells = n_placed / max_candidates_per_ray * 8.0
-            self._n_divisions = max(10, int(math.sqrt(target_cells / 2)))
-
+            return SphereGrid(n_divisions)
+        n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
+        # total cells = 2 × n_div². Target: n_placed / max_candidates_per_ray × safety.
+        # Polar grid has non-uniform cell sizes — equatorial cells are much
+        # larger than polar cells, causing sensor crowding at the equator.
+        # Safety factor 6.0 ensures no cell exceeds max_candidates_per_ray.
+        target_cells = n_placed / max_candidates_per_ray * 8.0
+        return SphereGrid(max(10, int(math.sqrt(target_cells / 2))))
 
     def place_photosensors(self):
         """Position the photo sensor centers on the sphere surface using Fibonacci spiral."""
@@ -60,61 +67,22 @@ class Sphere(Detector):
         # For sphere, all sensors are on surface (case 0)
         self.ID_to_case = {i: 0 for i in range(len(self.all_points))}
 
-    def visualize_geometry_wireframe(self, show_sensors=True):
-        """Visualize the sphere as a wireframe with detectors"""
-        fig = go.Figure()
-
-        # Create sphere wireframe
-        u = np.linspace(0, 2 * np.pi, 50)
-        v = np.linspace(0, np.pi, 50)
-        x_sphere = self.r * np.outer(np.cos(u), np.sin(v)) + self.C[0]
-        y_sphere = self.r * np.outer(np.sin(u), np.sin(v)) + self.C[1]
-        z_sphere = self.r * np.outer(np.ones(np.size(u)), np.cos(v)) + self.C[2]
-
-        # Add wireframe
-        fig.add_trace(go.Surface(
-            x=x_sphere, y=y_sphere, z=z_sphere,
-            opacity=0.1,
-            showscale=False,
-            colorscale=[[0, 'lightblue'], [1, 'lightblue']],
-            name='Sphere Surface'
-        ))
-
-        if show_sensors:
-            fig.add_trace(go.Scatter3d(
-                x=self.all_points[:, 0], 
-                y=self.all_points[:, 1], 
-                z=self.all_points[:, 2],
-                mode='markers',
-                marker=dict(size=4, color='red', opacity=0.8),
-                name=f'Sensors ({self.n_sensors})'
-            ))
-
-        fig.update_layout(
-            scene=dict(
-                xaxis_title='X',
-                yaxis_title='Y',
-                zaxis_title='Z',
-                aspectmode='cube'
-            ),
-            title=f'Spherical Detector Geometry (R={self.r})',
-            height=800
-        )
-
-        fig.show()
+    @property
+    def volume(self):
+        """The instrumented volume (:mod:`lucid.geometry.volume`)."""
+        from lucid.geometry.volume import SphereVolume
+        return SphereVolume(self.r)
 
     def bounds_check(self, positions):
         """Test whether positions are inside the sphere."""
-        import jax.numpy as jnp
-        return jnp.linalg.norm(positions, axis=1) <= self.r
+        return self.volume.contains(positions)
 
     # ── Propagation methods (Phase 9) ──────────────────────────────────
 
-    def intersect_ray(self, origins, directions):
+    def intersect_ray(self, origins, directions, grid):
         """Batch ray-sphere intersection with grid indexing."""
         from lucid.propagation.sphere import batch_intersect_sphere_with_grid
-        n_div = self._n_divisions
-        results = batch_intersect_sphere_with_grid(origins, directions, self.r, n_div)
+        results = batch_intersect_sphere_with_grid(origins, directions, self.r, grid.n_divisions)
         intersects, t, theta_idx, phi_idx, intersection_point = results
         grid_info = (theta_idx, phi_idx)
         surface_info = None  # sphere has uniform surface
@@ -125,55 +93,45 @@ class Sphere(Detector):
         from lucid.propagation.sphere import calculate_sphere_normals
         return calculate_sphere_normals(intersection_point)
 
-    def point_to_grid_cell(self, grid_info):
+    def point_to_grid_cell(self, grid_info, grid):
         """Map sphere intersection to linear grid cell index."""
         import jax.numpy as jnp
         theta_idx, phi_idx = grid_info
-        n_div = self._n_divisions
+        n_div = grid.n_divisions
         n_theta = n_div
         n_phi = 2 * n_div
         idx = theta_idx * n_phi + phi_idx
         total = n_theta * n_phi
         return jnp.clip(idx, 0, total - 1)
 
-    def assign_sensor_to_cells(self, sensors, sensor_radius):
+    def assign_sensor_to_cells(self, sensors, sensor_radius, grid):
         """Map sensors to overlapping sphere grid cells."""
         from lucid.propagation.sphere import assign_sensors_to_sphere_grid
-        n_div = self._n_divisions
-        return assign_sensors_to_sphere_grid(sensors, sensor_radius, self.r, n_div)
+        return assign_sensors_to_sphere_grid(sensors, sensor_radius, self.r, grid.n_divisions)
 
-    def grid_cell_centers(self):
+    def grid_cell_centers(self, grid):
         """Compute centers of all sphere grid cells."""
         from lucid.propagation.sphere import calculate_sphere_grid_centers
-        n_div = self._n_divisions
-        return calculate_sphere_grid_centers(self.r, n_div)
+        return calculate_sphere_grid_centers(self.r, grid.n_divisions)
 
-    def total_grid_cells(self):
-        n_div = self._n_divisions
+    def total_grid_cells(self, grid):
+        n_div = grid.n_divisions
         return n_div * (2 * n_div)
 
-    def cell_index_to_coords(self, linear_idx):
-        """Decode linear index to (theta_idx, phi_idx) for sphere."""
-        n_div = self._n_divisions
-        n_phi = 2 * n_div
-        theta_idx = linear_idx // n_phi
-        phi_idx = linear_idx % n_phi
-        return theta_idx, phi_idx
-
-    def point_to_grid_cell_from_coords(self, coords):
+    def point_to_grid_cell_from_coords(self, coords, grid):
         """Convert grid coordinates to linear index.
 
         For sphere: coords = [theta_idx, phi_idx].
         """
         theta_idx, phi_idx = int(coords[0]), int(coords[1])
-        n_phi = 2 * self._n_divisions
+        n_phi = 2 * grid.n_divisions
         return theta_idx * n_phi + phi_idx
 
     def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, num_sensors):
+                                   max_candidates_per_ray, grid):
         """Build cell→sensor lookup table for sphere."""
-        from lucid.propagation.sphere import create_inverted_sphere_sensor_map
-        n_div = self._n_divisions
-        return create_inverted_sphere_sensor_map(
+        from lucid.propagation.sphere import sphere_grid_cells
+        from lucid.propagation.sensor_map import build_inverted_sensor_map
+        return build_inverted_sensor_map(
             assignments_geometric, assignments_distance,
-            n_div, max_candidates_per_ray, num_sensors)
+            sphere_grid_cells(grid.n_divisions), max_candidates_per_ray)

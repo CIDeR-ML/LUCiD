@@ -1,259 +1,186 @@
 # Produce a dataset from the container
 
-Everything needed to generate WAND events lives in one image: LUCiD, PhotonSim,
-Geant4 and the configs. You need the image and a writable output directory —
-nothing else, no checkout, no build. Works with Apptainer (HPC) or Docker.
-
-This page is about producing data by hand. Driving a batch farm is a separate
-concern; see [deploy-lxplus.md](deploy-lxplus.md) and friends. For a host-native
-install without a container, see [local.md](local.md).
+The image `ghcr.io/cider-ml/lucid` holds LUCiD, PhotonSim, GEANT4, ROOT, GENIE with its cross
+sections, and the dataset configs. With it, a job needs only a writable output directory. It
+runs under Apptainer or Docker. For batch farms, see [on a cluster](clusters.md).
 
 ## 1. Get the image
 
-Pick a release tag, not `latest`, so your data is traceable to a known build.
-
-**Download the prebuilt `.sif`** — the quickest route, and the one to use if
-you do not have ~30 GB of scratch. It is a plain HTTPS download from the CERNBox
-public share, no account or token needed:
+Use a release tag rather than `latest`, so the data can be traced to a build:
 
 ```bash
-curl -fSL --retry 3 -C - -o lucid_v0.1.0.sif \
-  https://cernbox.cern.ch/remote.php/dav/public-files/vOhH8P78hnSQKNZ/containers/lucid_v0.1.0.sif
+TAG='<release-tag>'     # e.g. v0.1.0
 ```
 
-`-C -` resumes a partial download, so an interrupted 3.4 GB transfer can be
-restarted with the same command. This is the same share
-`scripts/download_data.sh` uses for the example ROOT and SIREN files.
-
-Check what you got against the published checksum:
+Apptainer:
 
 ```bash
-curl -fsSL -O https://cernbox.cern.ch/remote.php/dav/public-files/vOhH8P78hnSQKNZ/containers/MD5SUMS.txt
-md5sum -c MD5SUMS.txt
+apptainer build lucid_$TAG.sif docker://ghcr.io/cider-ml/lucid:$TAG
 ```
 
-**Or build the `.sif` yourself** from the published image:
+The build unpacks about 27 GB before squashing to about 3.5 GB: point `APPTAINER_TMPDIR` at
+30 GB of scratch and allow a few tens of minutes.
+
+Docker or podman (about 4 GB; keep 10 GB free):
 
 ```bash
-apptainer build lucid_v0.1.0.sif docker://ghcr.io/cider-ml/lucid:v0.1.0
+docker pull --platform linux/amd64 ghcr.io/cider-ml/lucid:$TAG
 ```
 
-Budget ~30 GB of scratch and a few tens of minutes: the layers unpack to ~27 GB
-before being squashed back to ~3.5 GB. `APPTAINER_TMPDIR` must point somewhere
-with that much room.
+The image is `linux/amd64` only. On Apple Silicon, install Rosetta 2
+(`softwareupdate --install-rosetta --agree-to-license`) and enable "Use Rosetta for x86/amd64
+emulation" in Docker Desktop (Settings, General); expect 70 to 80% of native speed.
 
-**Docker/podman** skip the build entirely — pull and go (~4 GB, ~10 GB free
-needed):
-
-```bash
-docker pull --platform linux/amd64 ghcr.io/cider-ml/lucid:v0.1.0
-```
-
-The image is `linux/amd64`; conda-forge ships no `geant4` for `linux-aarch64`.
-On Apple Silicon install Rosetta 2
-(`softwareupdate --install-rosetta --agree-to-license`) and enable *Use Rosetta
-for x86/amd64 emulation* in Docker Desktop → Settings → General. Expect 70–80%
-of native speed — fine for test runs.
-
-The image can tell you what it is:
-
-```bash
-apptainer exec lucid_v0.1.0.sif cat /opt/VERSIONS
-```
+`apptainer exec lucid_$TAG.sif cat /opt/VERSIONS` prints what the image contains.
 
 ## 2. Run one job
 
 ```bash
 mkdir -p out
-apptainer exec -B "$PWD/out:/out" lucid_v0.1.0.sif \
-    lucid-run-job \
-      --config /opt/LUCiD/lucid/production/configs/GeV/01_pbomb.json \
-      --detector SK_WAND \
-      --output-dir /out \
-      --job-id 1 \
-      --n-events 20 \
-      --master-seed 12345
+apptainer exec -B "$PWD/out:/out" lucid_$TAG.sif \
+    lucid-run-job --config /opt/LUCiD/lucid/production/dataprod/configs/GeV/01_pbomb.json \
+      --detector SK_WAND --output-dir /out --job-id 1 --n-events 20 --master-seed 12345
 ```
 
-The Docker equivalent — same arguments, different mount syntax:
+or with Docker:
 
 ```bash
-docker run --rm --platform linux/amd64 -v "$PWD/out:/out" \
-    ghcr.io/cider-ml/lucid:v0.1.0 \
-    lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/01_pbomb.json \
-                  --detector SK_WAND --output-dir /out --job-id 1 --n-events 20
+docker run --rm --platform linux/amd64 -v "$PWD/out:/out" ghcr.io/cider-ml/lucid:$TAG \
+    lucid-run-job --config /opt/LUCiD/lucid/production/dataprod/configs/GeV/01_pbomb.json \
+      --detector SK_WAND --output-dir /out --job-id 1 --n-events 20 --master-seed 12345
 ```
 
-It prints three stages — Geant4 macro, PhotonSim, LUCiD writer — and ends with a
-line starting `OK`. Anything else means it failed; the exit code is non-zero.
+It reports three stages (GEANT4 macro, PhotonSim, LUCiD writer) and ends with a line starting
+`OK`; anything else is a failure, with a non-zero exit code.
 
-Two arguments are not optional in practice:
+- `--detector` (`SK_WAND` or `HK_WAND`) chooses the geometry and the readout for a `GeV` config
+  (section 4).
+- `--master-seed` is drawn from the clock by default. Either way the batch records every seed
+  it ran with, its configs and arguments, and the image's LUCiD and PhotonSim versions, so it can
+  be rerun from its own metadata ([dataset schema](../../reference/dataset-schema.md)).
 
-- `--detector` has no useful default. It selects the geometry **and** the
-  digitizer and trigger, so getting it wrong silently produces a different
-  detector's data. Use `SK_WAND` or `HK_WAND`.
-- `--master-seed` defaults to random. Set it if you want to be able to
-  reproduce the job.
+All flags: [command-line tools](../../reference/cli.md#lucid-run-job).
 
 ## 3. The configs
 
-| config | contents | energies (kinetic) | split |
-|---|---|---|---|
-| `GeV/01_pbomb.json` | 1–5 particles from {e-, e+, mu-, mu+, pi+, pi-, pi0, gamma} at one vertex | 1–2000 e, 200–2000 mu/pi, 1–2130 gamma | train + test |
-| `GeV/02_mu.json` | single mu, charge sampled per event from {mu-, mu+} | 200–2000 | test |
-| `GeV/03_pi.json` | single charged pi, charge sampled per event from {pi+, pi-} | 200–2000 | test |
-| `GeV/04_e.json` | single e, charge sampled per event from {e-, e+} | 1–2000 | test |
-| `GeV/06_pi0.json` | single pi0 | 200–2000 | test |
-| `GeV/07_gamma.json` | single gamma | 1–2130 | test |
+| config | events | kinetic energy (MeV) |
+|---|---|---|
+| `GeV/01_pbomb.json` | 1 to 5 particles from {e-, e+, mu-, mu+, pi+, pi-, pi0, gamma} at one vertex | e 1 to 2000, mu and pi 200 to 2000, gamma 1 to 2130 |
+| `GeV/02_mu.json` | one mu, charge drawn per event | 200 to 2000 |
+| `GeV/03_pi.json` | one charged pi, charge drawn per event | 200 to 2000 |
+| `GeV/04_e.json` | one e, charge drawn per event | 1 to 2000 |
+| `GeV/06_pi0.json` | one pi0 | 200 to 2000 |
+| `GeV/07_gamma.json` | one gamma | 1 to 2130 |
+| `GeV/08_2mu.json` | two mu at one vertex, each charge drawn independently | 200 to 2000 each |
+| `GeV/09_mu_pip.json` | mu- and pi+ at one vertex | 200 to 2000 each |
+| `GeV/10_e_pip.json` | e- and pi+ at one vertex | e 100 to 2000, pi 200 to 2000 |
+| `GeV/11_e_pi0.json` | e- and pi0 at one vertex | e 100 to 2000, pi0 200 to 2000 |
+| `GeV/12_mu_pi0.json` | mu- and pi0 at one vertex | 200 to 2000 each |
 
-01 is the training set — it mixes species and multiplicities the way a real
-interaction does. 02–07 are one-species evaluation sets, one per member of the
-01 pool.
-
-Both lepton and pion charges are in the pool, and the single-species sets sample
-the charge per event rather than fixing it. Cherenkov light carries no charge
-information, so a set of one charge only measures half of what reconstruction is
-asked to do — and the charges are not interchangeable at the end of the range:
-mu- captures on oxygen while mu+ always yields its decay electron, and pi- is
-captured by a nucleus while pi+ decays to mu+ nu. The charge-sampled sets are
-what state how often each signature appears.
-
-Sampling is expressed through the bomb source with `min_particles =
-max_particles = 1`, not through a two-entry `particles` list: `generate_macro.py`
-emits one `/gun/addPrimary` per list entry, so a list of {e-, e+} would put
-*both* charges in every event. `03_pi.json` replaces the former
-`03_pi_plus.json` / `05_pi_minus.json` pair.
-
-Blocks other than `GeV` exist (`Solar`, `SN`, `Test`); those declare their own
-detector and are not part of WAND.
+`01` is the training set; `02` to `07` are one-species test sets and `08` to `12` two-particle
+test sets, each particle with its own energy and isotropic direction. The single-particle sets draw
+the charge per event because the two charges end differently (mu- can be captured, mu+ always
+decays; pi- is captured, pi+ decays), while their Cherenkov light does not tell them apart. In a
+config of your own, express "one particle of either charge" as a bomb with
+`min_particles = max_particles = 1`: a `particles` list with two entries puts both in every
+event. Splits and counts of all blocks: [config blocks](index.md#config-blocks).
 
 ## 4. Detectors
 
-`--detector NAME` reads `config/NAME_geom_config.json` and
-`config/NAME_physics_config.json` from inside the image.
+`--detector NAME` reads `config/NAME_geom_config.json` and `config/NAME_physics_config.json`
+inside the image.
 
 | detector | PMTs | digitizer | trigger |
-|---|---|---|---|
-| `SK_WAND` | 11096 | `ski` | 200 ns window, n_thr 25 |
-| `HK_WAND` | 19746 | `hk` | 200 ns window, n_thr 45 |
+|---|--:|---|---|
+| `SK_WAND` | 11096 | `ski` | 200 ns window, `n_thr` 25 |
+| `HK_WAND` | 19746 | `hk` | 200 ns window, `n_thr` 45 |
 
-These are frozen descriptions: they pin the optics, digitizer and trigger so a
-rerun cannot drift when the generic `SK`/`HK` configs are edited. Use them.
+These two fix the optics, digitizer and trigger for production. A `GeV` config declares no
+detector and no readout, so it takes both from `--detector`. The other detectors (`SK`, `HK`,
+`SK_like`, ...) have no readout, and `lucid-run-job` refuses them for a `GeV` config before
+PhotonSim runs. To use one, add `"digitizer": "basic"` (or `"ski"`, `"hk"`) and
+`"trigger": null` (or a trigger block) to a copy of the dataset config
+([digitizer and trigger](../../reference/digitizer-and-trigger.md)).
 
-A dataset config carries no detector of its own, so `--detector` is what decides
-it. Passing a non-`*_WAND` detector to one of these configs is refused rather
-than silently run, because the generic descriptions carry no digitizer or
-trigger and you would get `basic` digitization with no readout trigger.
+The `Solar`, `SN` and `Test` configs declare `"detector": "HK_WAND"` and their own readout; they need
+no `--detector`, and a different one stops the job.
 
 ## 5. Changing things
 
-- **More events**: `--n-events N`. Cost is roughly linear; the bomb runs
-  ~10–30 s/event depending on detector and energies.
-- **Fixed energy**: `--override-energy-MeV 500` forces monoenergetic primaries.
-- **Keep the intermediate ROOT**: `--keep-root`. It is large (~10 MB/event) and
-  deleted by default.
-- **Your own config**: copy one out of the image, edit, and bind it back in:
+- More events: `--n-events N`. The bomb takes about 10 to 30 s per event.
+- Fixed energy: `--override-energy-MeV 500`.
+- Keep the PhotonSim ROOT file (about 10 MB per event): `--keep-root`.
+- Your own config: copy one out, edit it, and bind it in:
 
   ```bash
-  apptainer exec lucid_v0.1.0.sif \
-      cat /opt/LUCiD/lucid/production/configs/GeV/02_mu.json > mine.json
-  # edit mine.json
-  apptainer exec -B "$PWD:/w" lucid_v0.1.0.sif \
-      lucid-run-job --config /w/mine.json --detector SK_WAND \
-        --output-dir /w/out --job-id 1 --n-events 20
+  apptainer exec lucid_$TAG.sif \
+      cat /opt/LUCiD/lucid/production/dataprod/configs/GeV/02_mu.json > mine.json
+  apptainer exec -B "$PWD:/w" lucid_$TAG.sif \
+      lucid-run-job --config /w/mine.json --detector SK_WAND --output-dir /w/out --job-id 1 --n-events 20
   ```
 
-  The fields worth touching are `particles` (type and energy range),
-  `nominal_train`/`nominal_test`, and `selection`. Leave `digitizer` and
-  `trigger` out — they come from the detector.
+  The fields to edit are `particles` or `bomb.candidates` (species and energy range),
+  `nominal_train` and `nominal_test`, and `selection`.
+- A GENIE config (`"primary_source": "genie"`; none ships) runs `gevgen` and `gntpc` first. The
+  image's cross sections are named by
+  `GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz`
+  (`-e` for Docker); point it at another spline file for another tune.
 
-- **Shared overlap cache**: the first job on a fresh install computes a lookup
-  table. Release images ship it warm. If you need to relocate it, the order is
-  `$LUCID_OVERLAP_CACHE_DIR` → install dir if writable →
-  `$XDG_CACHE_HOME/lucid/spatial_overlap_integrals`.
+Production jobs use the hard sensor assignment and do not read the soft-overlap tables. For
+interactive use, overlap tables are read from `spatial_overlap_integrals/` in the install, then
+from `~/.cache/lucid/spatial_overlap_integrals/`, and a new table is written to the first
+writable one. `lucid-run-job` also honours `$XDG_CACHE_HOME` (moves the second location) and
+`$LUCID_OVERLAP_CACHE_DIR` (replaces both).
 
 ## 6. Dev loop — run your own checkout
 
-To exercise local edits without rebuilding, bind your clone over `/opt/LUCiD`:
+Bind a clone over `/opt/LUCiD` to run your edits without rebuilding the image:
 
 ```bash
-apptainer exec -B "$PWD/LUCiD:/opt/LUCiD" -B "$PWD/out:/out" lucid_v0.1.0.sif \
-    lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/02_mu.json \
+apptainer exec -B "$PWD/LUCiD:/opt/LUCiD" -B "$PWD/out:/out" lucid_$TAG.sif \
+    lucid-run-job --config /opt/LUCiD/lucid/production/dataprod/configs/GeV/02_mu.json \
       --detector SK_WAND --output-dir /out --job-id 1 --test
 ```
 
-For a PhotonSim source edit, bind it too and rebuild in place; the baked
-`/opt/PhotonSim/build` stays intact so incremental compiles take under a minute:
+For PhotonSim edits, bind its clone over `/opt/PhotonSim` and rebuild inside the image
+(incremental builds take under a minute):
 
 ```bash
-apptainer exec -B "$PWD/PhotonSim:/opt/PhotonSim" -B "$PWD/out:/out" \
-    lucid_v0.1.0.sif bash -c \
-    "cmake --build /opt/PhotonSim/build -j && lucid-run-job ..."
+apptainer exec -B "$PWD/PhotonSim:/opt/PhotonSim" -B "$PWD/out:/out" lucid_$TAG.sif \
+    bash -c "cmake --build /opt/PhotonSim/build -j && lucid-run-job ..."
 ```
 
-Note that a bind-mounted checkout is writable, so the overlap cache lands there
-rather than in the user cache — see §5.
+A clone with no `build/` yet needs the first configure described in
+[the cluster dev loop](cluster-abstraction.md#dev-loop-run-your-own-checkouts-in-the-batch-jobs).
 
 ## 7. Where the output goes
 
-`--output-dir` is written directly, as four HDF5 files:
-
-```
-<output-dir>/
-  sensor/wc_sensor_0000.h5    digitized PMT hits (charge, time)
-  hits/wc_hits_0000.h5        per-digit truth decomposition
-  step/wc_step_0000.h5        Geant4 steps + per-step photon counts
-  labl/wc_labl_0000.h5        event/interaction/track labels
-```
-
-The `0000` is `file_index = job-id - 1`, so parallel jobs writing to one
-directory each need a distinct `--job-id`.
-
-Every file records what produced it:
+`--output-dir` is the dataset root. A job writes one batch, `sensor/`, `hits/`, `step/` and
+`labl/wc_<kind>_NNNN.h5`, with `NNNN = job-id − 1`, so parallel jobs into one directory need
+distinct `--job-id`. Each file records what made it:
 
 ```bash
 python3 -c "
-import h5py; a=h5py.File('out/sensor/wc_sensor_0000.h5')['config'].attrs
-print({k: a[k] for k in ('git_commit','digitizer_model','n_sensors','trigger_n_thr')})"
+import h5py; a = h5py.File('out/sensor/wc_sensor_0000.h5')['config'].attrs
+print({k: a[k] for k in ('git_commit', 'digitizer_model', 'n_sensors', 'trigger', 'complete')})"
 ```
 
-Note that events failing the trigger are dropped, so the stored event count can
-be lower than `--n-events`. `labl`'s `config/source_event_idx` maps each stored
-event back to its generated index — use it to join datasets, never shard
-position, since two detectors drop different events.
+Events the trigger rejects are dropped, so a batch can hold fewer than `--n-events`. Join
+datasets on `config/source_event_idx`, not on position: two detectors drop different events.
 
-For what is inside each file, see
-[dataset-schema.md](../../reference/dataset-schema.md).
+## Building the image
 
-## Building the image yourself
-
-Only needed if you are changing the `Dockerfile`. Clone LUCiD and PhotonSim as
-siblings and build from the parent directory:
-
-```bash
-mkdir lucid-work && cd lucid-work
-git clone https://github.com/CIDeR-ML/LUCiD.git
-git clone https://github.com/cesarjesusvalls/PhotonSim.git
-docker build --platform linux/amd64 --provenance=false --sbom=false \
-    -f LUCiD/container/Dockerfile -t lucid:dev .
-```
-
-`--provenance=false --sbom=false` suppresses BuildKit attestation manifests;
-ghcr.io stalls on them for this package. Expect ~10 min cold; rebuilds reuse
-layers, and editing LUCiD source retriggers only the last one.
+Only needed to change the `Dockerfile`; see
+[`container/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/container/README.md).
 
 ## Troubleshooting
 
-- **`exec /bin/bash: exec format error`** — Apple Silicon without Rosetta
-  enabled in Docker Desktop. See §1.
-- **`Error: detector needs to be specified`** — the GeV configs declare no
-  detector; pass `--detector SK_WAND` or `HK_WAND`.
-- **`is not a frozen *_WAND description`** — you passed `--detector SK` or
-  `HK`. Those carry no digitizer or trigger, so the run would silently produce
-  undigitized, untriggered data. Use the `*_WAND` names.
-- **`Read-only file system: .../spatial_overlap_integrals`** — an image
-  predating v0.1.0. Either upgrade, or point `LUCID_OVERLAP_CACHE_DIR` at a
-  writable directory.
-- **BuildKit silence during source builds** — long compile steps buffer output;
-  use `--progress=plain`.
-- **"No space left on device"** — `docker system prune -af` reclaims old layers.
+- `exec /bin/bash: exec format error`: Apple Silicon without Rosetta enabled (section 1).
+- `declares no 'detector'; pass --detector`, or `detector needs to be specified` from the
+  fan-out: pass `--detector SK_WAND` or `HK_WAND`.
+- `no 'digitizer' block` or `no 'trigger' block`: the detector has no readout and the config
+  states none (section 4).
+- `declares detector 'HK', but --detector is ...`: a `Solar`, `SN` or `Test` config with another
+  detector; drop `--detector`.
+- Silent long Docker build steps: use `--progress=plain`.
+- `No space left on device`: `docker system prune -af`.

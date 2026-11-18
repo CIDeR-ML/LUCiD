@@ -1,8 +1,9 @@
-"""
-LUCiD geometry module - detector geometries and utilities.
+"""Detector geometries: the four registered types and the config loader.
 
-This module provides detector geometry classes (Cylinder, Sphere, Box) and utility functions
-for sensor pattern generation and visualization.
+``cylinder``, ``sphere``, ``box`` (``Cylinder``, ``Sphere``, ``Box``, exported here) and
+``string`` (``lucid.geometry.string.StringTelescope``) register with
+``@register_detector``; ``generate_detector(config)`` builds the type a geometry JSON's
+``detector_type`` names. Also the sensor-pattern helpers.
 """
 
 # Import utility functions
@@ -22,15 +23,12 @@ from .box import Box
 # Import detector functions
 from .detector import (
     load_detector_config,
-    load_detector_geom,
     generate_detector,
-    get_material_from_config
 )
 
 # Registry
-from .registry import get_detector_class, register_detector, list_detector_types
+from .registry import get_detector_class, register_detector
 
-# Export all public functions and classes for backward compatibility
 __all__ = [
     # Utility functions
     'generate_concentric_hexagons',
@@ -46,12 +44,9 @@ __all__ = [
 
     # Detector functions
     'load_detector_config',
-    'load_detector_geom',
     'generate_detector',
-    'get_material_from_config',
 
     # Registry
     'get_detector_class',
     'register_detector',
-    'list_detector_types',
 ]

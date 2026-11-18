@@ -5,8 +5,6 @@ Base functionality shared across all detector geometries for photon propagation.
 import jax
 import jax.numpy as jnp
 from functools import partial
-from jax import lax
-from ..overlap import create_overlap_prob
 
 
 def process_intersection_normals(ray_origins, ray_directions, intersection_point,
@@ -157,7 +155,7 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sen
 
 def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radius,
                                         ray_origins, ray_directions, geometry_bounds_check,
-                                        overlap_prob, t_geometry=None):
+                                        overlap_prob, t_geometry):
     """
     Base function to compute sensor intersections for any geometry.
     
@@ -178,10 +176,9 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     overlap_prob : callable
         Function that calculates overlap probability
         
-    t_geometry : array (N,) or None
-        Distance along each (unit) ray to where it leaves the detector. None, the default, leaves
-        the deposit on the unbounded ray line; an array bounds it to the travelled leg (see
-        `deposit_leg_bound` in shared.create_propagator).
+    t_geometry : array (N,)
+        Distance along each (unit) ray to where it leaves the detector: the deposit is bounded to
+        the leg [0, t_geometry] the photon travels.
 
     Returns
     -------
@@ -273,34 +270,24 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # re-deposit on the tube it just bounced off.
     _ahead = t_closest[:, 0] > 0.0
 
-    # OPTIONAL LEG BOUND (`t_geometry` not None), off by default.
-    #
-    # `distance` is the perpendicular distance from the photon's ray LINE, and that line does not
-    # stop at the wall. For a ray at incidence theta it continues outside the detector and passes
-    # within a sensor radius of sensors displaced ALONG the wall from where the photon landed.
-    # Writing the landing point E and a candidate centre C = E + a*t + b*s, the code sees
+    # THE LEG BOUND. `distance` is the perpendicular distance from the photon's ray LINE, and that
+    # line does not stop at the wall. For a ray at incidence theta it continues outside the detector
+    # and passes within a sensor radius of sensors displaced ALONG the wall from where the photon
+    # landed. Writing the landing point E and a candidate centre C = E + a*t + b*s, the line sees
     # perp^2 = a^2 cos^2(theta) + b^2 while the photon's closest approach on the path it travelled
-    # is sqrt(a^2 + b^2): the cos(theta) foreshortening makes a downstream sensor look nearer to the
-    # line than it ever was to the photon, over-counting hits by (1 - cos theta)/2 per ray.
+    # is sqrt(a^2 + b^2): weighted by the line, a downstream sensor looks nearer than it ever was to
+    # the photon, over-counting hits by (1 - cos theta)/2 per ray (+11% charge in SK_like).
     #
-    # Bounding the deposit to the travelled leg [0, t_geometry] replaces `distance` with the closest
-    # approach over that segment. Only the FRONT end is clamped: `_ahead` already zeroes
-    # candidates behind the photon, so the back-end term of the segment distance is redundant.
-    #
-    # The branch is on a Python `None`, not a traced predicate, so with the bound off the graph is
-    # exactly `overlap_prob(distance)`. A `jnp.where` would change the graph even when unused, and
-    # a different graph can reduce differently in XLA (see the safe norm above). Off must be
-    # bit-exact, not close.
-    if t_geometry is None:
-        d_eff = distance
-    else:
-        _past = jnp.maximum(t_closest[:, 0] - t_geometry, 0.0)
-        d_eff = jnp.sqrt(distance ** 2 + _past ** 2 + 1e-12)
+    # So the deposit uses the closest approach over the travelled leg [0, t_geometry]. Only the
+    # FRONT end is clamped: `_ahead` already zeroes candidates behind the photon, so the back-end
+    # term of the segment distance is redundant.
+    _past = jnp.maximum(t_closest[:, 0] - t_geometry, 0.0)
+    d_eff = jnp.sqrt(distance ** 2 + _past ** 2 + 1e-12)
 
     weights = jnp.where(valid & _ahead, overlap_prob(d_eff), 0.0)
     # Check if point is inside sensor (keep as boolean)
     # Not gated by `_ahead`: the geometry flag uses the same distance `d_eff` as the weight above (so
-    # with the leg bound on, charge and geometry agree), but not the same gate. A behind candidate
+    # charge and geometry agree), but not the same gate. A behind candidate
     # can still be flagged, carrying no charge, when the photon's origin lies inside its sphere (the
     # forward ray exits with t > 0). This does not arise after a sensor reflection (photon_step
     # nudges the next origin 1e-4 outside the sphere) or for bulk emission, only for origins inside
@@ -329,28 +316,6 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
 
     # In principle we should not be using anything if intersects_and_inside is false, reflecting instead out of the detector surface.
     return weights, times, sensor_idx, normals, intersects_and_inside, points
-
-
-@partial(jax.jit, static_argnums=(1,))
-def calculate_linear_index_base(indices, grid_dims, index_map):
-    """
-    Calculate linear index for grid cells.
-    
-    Parameters
-    ----------
-    indices : tuple
-        Grid indices for each dimension
-    grid_dims : tuple
-        Dimensions of the grid
-    index_map : callable
-        Function that maps grid indices to linear index
-        
-    Returns
-    -------
-    int
-        Linear index
-    """
-    return index_map(indices, grid_dims)
 
 
 @partial(jax.jit, static_argnums=(2,))

@@ -21,12 +21,9 @@ Run:
 `--detector NAME` resolves config/<NAME>_geom_config.json + config/<NAME>_physics_config.json.
 """
 import argparse
-import sys
 import os
 import time
 import numpy as np
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
 def analyze_k_convergence(log_w, K, NPHOT, target_frac=0.99, target_percentile=95):
@@ -206,16 +203,14 @@ def main():
     import jax.numpy as jnp
     from lucid.geometry import generate_detector
     from lucid.simulation import setup_event_simulator
-    from lucid.detector_params import DetectorParams, ParticleParams
+    from lucid.detector_params import ParticleParams
 
     det = generate_detector(args.config)
     NUM_SENSORS = len(det.all_points)
 
     # Load detector params and curves from the physics config
     from lucid.detector_params import load_physics_config
-    from lucid.wavelength.medium import load_qe_curve as _load_qe_curve
-    dp, medium_path, qe_curve_path = load_physics_config(args.physics_config, NUM_SENSORS)
-    qe_curve_fn = _load_qe_curve(qe_curve_path) if qe_curve_path else None
+    dp, physics_medium, qe_curve_fn = load_physics_config(args.physics_config, NUM_SENSORS)
 
     grid_kw = dict(n_cap=150, n_angular=250, n_height=150)
     key = jax.random.PRNGKey(args.seed)
@@ -231,14 +226,9 @@ def main():
     if args.source == "data":
         if args.root_file is None:
             raise ValueError("--root-file is required for --source data")
-        from lucid.sources.event_io import read_photon_data_from_photonsim
+        from lucid.sources.root_reader import read_photon_data_from_photonsim
         photon_data_base = read_photon_data_from_photonsim(args.root_file, args.entry)
         photon_data_base['N'] = int(photon_data_base['photon_origins'].shape[0])
-        photon_data_base['rotation_axis'] = jnp.array([0.0, 0.0, 1.0])
-        photon_data_base['rotation_angle'] = jnp.array(0.0)
-        photon_data_base['apply_rotation'] = False
-        photon_data_base['apply_translation'] = False
-        photon_data_base['translation_vector'] = jnp.array([0.0, 0.0, 0.0])
 
     def run_one(dp_run, wl_override=None):
         """Run a single sim and return (result, nphot_actual, total_charge, elapsed)."""
@@ -246,11 +236,10 @@ def main():
 
         if args.source == "track":
             sim = setup_event_simulator(
-                args.config, args.nphot, temperature=args.temperature, K=args.k_max,
-                is_data=False, is_calibration=False,
+                args.config, args.nphot, source='particle', temperature=args.temperature,
+                K=args.k_max,
                 physics_config=args.physics_config,
-                default_detector_params=dp_run, hit_mode='per_photon',
-                wavelength_mode=wl_mode, **grid_kw)
+                default_detector_params=dp_run, wavelength_mode=wl_mode, **grid_kw)
             track = ParticleParams(
                 energy=jnp.array(args.energy),
                 position=jnp.array([0.0, 0.0, 0.0]),
@@ -266,11 +255,10 @@ def main():
             else:
                 src = isotropic_source(position=[0.0, 0.0, 0.0], intensity=100_000_000)
             sim = setup_event_simulator(
-                args.config, args.nphot, temperature=args.temperature, K=args.k_max,
-                is_data=False, is_calibration=True,
+                args.config, args.nphot, source='light_source', hits='photon_list',
+                temperature=args.temperature, K=args.k_max,
                 physics_config=args.physics_config,
-                default_detector_params=dp_run, hit_mode='per_photon',
-                wavelength_mode=wl_mode, **grid_kw)
+                default_detector_params=dp_run, wavelength_mode=wl_mode, **grid_kw)
             out = sim(src, key)
             n = args.nphot
 
@@ -279,16 +267,12 @@ def main():
             if wl_override is not None:
                 pd['wavelengths'] = jnp.full(pd['N'], float(wl_override))
             sim = setup_event_simulator(
-                args.config, pd['N'], temperature=args.temperature, K=args.k_max,
-                is_data=True, charge_resolution=None,
+                args.config, pd['N'], source='photons', detection='expected', hits='photon_list',
+                temperature=args.temperature, K=args.k_max,
+                charge_resolution=None,
                 physics_config=args.physics_config,
-                default_detector_params=dp_run, hit_mode='per_photon',
-                wavelength_mode=wl_mode, **grid_kw)
-            part = ParticleParams(
-                energy=jnp.array(pd.get('energy', 1000.0)),
-                position=jnp.zeros(3),
-                theta=jnp.array(0.0), phi=jnp.array(0.0), t0=jnp.array(0.0))
-            out = sim(part, key, pd)
+                default_detector_params=dp_run, wavelength_mode=wl_mode, **grid_kw)
+            out = sim(key, pd)
             n = pd['N']
 
         res = analyze_k_convergence(out[0], args.k_max, n,
@@ -307,9 +291,9 @@ def main():
         return
 
     # Sweep mode: loop over wavelengths, monochromatic scatter/absorption from medium
-    from lucid.wavelength import make_medium
-    medium = make_medium("water", wavelength_grid=jnp.linspace(300, 700, 401),
-                        medium_model_path=medium_path)
+    from lucid.wavelength.medium import load_medium, medium_on_grid
+    medium = medium_on_grid(physics_medium if physics_medium is not None else load_medium("water"),
+                            jnp.linspace(300, 700, 401))
     wavelengths = [float(w.strip()) for w in args.wavelength_list.split(",")]
 
     qe_info = "QE from curve" if qe_curve_fn is not None else f"QE={float(dp.response.qe):.4f} scalar"

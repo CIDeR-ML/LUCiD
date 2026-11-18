@@ -1,7 +1,8 @@
 {
   "material": "water",
+  "siren": "water",
   "refractive_index": 1.33,
-  "speed_of_light_vacuum_m_per_ns": 0.299792,
+  "speed_of_light_vacuum_m_per_ns": 0.299792458,
 
   "scattering": {
     "source": "SK calibration paper (arXiv:1307.0162), Eqs. 16-17, Table 3",

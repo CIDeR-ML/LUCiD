@@ -1,168 +1,143 @@
 # Calibration
 
-How LUCiD calibrates detector optics — per-PMT quantum efficiency `k` plus the global optical
-parameters (absorption `L_abs`, Rayleigh `L_R`, Mie `L_M`, wall/sensor reflectivity, QE
-spectrum, `n_real`) — by gradient descent through the differentiable forward. See also:
-`lucid.fitting` (`build_calibration_problem` / `fit` / `crb`), `examples/hello_calibrate.py`
-(runnable end-to-end), and [wavelength physics](../concepts/wavelength.md).
+Calibration fits the detector's optical parameters (scattering and absorption lengths,
+reflectivities, QE) and one efficiency per PMT to the charge seen from known light sources,
+by gradient-based fitting through the forward model. It uses lasers and flashers, not a particle
+emitter.
 
-!!! note "Runnable entry points"
-    `examples/hello_calibrate.py` and the `calibration_optimization` tutorial fit **scalar**
-    optics (`wavelength_mode=False`). The spectral λ-deviation machinery described below is
-    code-complete (`lucid.wavelength.optical_model`), but a wavelength-mode calibration
-    notebook does not exist yet.
+Runnable: `examples/hello_calibrate.py` (seven parameters and 10764 per-PMT gains, about 4
+minutes on a GPU) and `examples/hello_calibrate_own_optimiser.py` (one problem, four solvers).
+Both fit scalar optics (`wavelength_mode=False`).
 
 ## Minimal calibration
 
-Build the problem, take the Cramér-Rao bound at truth, fit — the condensed shape of
-`examples/hello_calibrate.py`. Calibration uses lasers + a flasher (no SIREN emitter), so it
-needs no downloaded emitter weights:
+The core of `examples/hello_calibrate.py`:
 
 ```python
-import jax, jax.numpy as jnp, numpy as np
-from lucid.geometry import generate_detector
-from lucid.simulation import setup_event_simulator
-from lucid.sources import laser_source, isotropic_source
-from lucid.detector_params import DetectorParams
-from lucid.fitting import build_calibration_problem, fit, crb
-
-GEOM = 'config/SK_like_geom_config.json'
-det = generate_detector(GEOM); NS = len(det.all_points)
-top, bot, R = det.H/2 - .1, -det.H/2 + .1, det.r
-
-# truth optics; per-PMT qe_corrections is the k map (all-ones here)
-dp = DetectorParams.from_flat(scatter_length=70., mie_scatter_length=3000., g=0.9,
-                              absorption_length=60., wall_reflection_rate=.2,
-                              sensor_reflection_rate=.2, qe=0.07, qe_corrections=jnp.ones(NS))
-
-# source diversity is the lever: wall lasers (several positions) + an isotropic flasher
-sources = [laser_source(position=[0, 0, top], direction=[0, 0, -1], intensity=1e6),
-           laser_source(position=[0, 0, bot], direction=[0, 0,  1], intensity=1e6),
-           laser_source(position=[R-.1, 0, 0], direction=[-1, 0, 0], intensity=1e6),
-           isotropic_source(position=[0, 0, 0], intensity=1e6)]
-sim = setup_event_simulator(GEOM, 1_000_000, temperature=None, K=8, is_calibration=True,
-                            hit_mode='aggregated', wavelength_mode=False)
-
-# globals to recover; the ~10^4 per-PMT k are profiled in closed form each step (k = sum Q / sum M)
-FIELDS = ['g', 'scatter_length', 'mie_scatter_length', 'absorption_length',
-          'wall_reflection_rate', 'sensor_reflection_rate', 'qe']
-prob  = build_calibration_problem(sim, sources, dp, FIELDS, key=jax.random.PRNGKey(1))
-sigma = crb(prob['source_models'], prob['theta_true'], NS)['sigma']       # Cramer-Rao bound, per field
-start = prob['theta0'] + np.random.default_rng(0).uniform(-.15, .15, prob['theta0'].shape)
-res   = fit(prob['source_models'], prob['truth_charge'], start, NS,
-            steps=100, refresh=15, jacobian_draws=2)
-# res['theta'] = fitted globals; compare to np.exp(prob['theta0']) (truth) and sigma (the bound).
-# theta0/theta_true are in log space; res['k'] holds the recovered per-PMT map.
+--8<-- "examples/hello_calibrate.py:calibrate"
 ```
 
-## What is measured
+The pieces, all in `lucid.fitting`:
 
-`DetectorParams` is a JAX pytree with normalize/denormalize + bounds, so every optical property
-is directly optimizable. Two tiers:
+- `FieldParams(dp, fields)`: which `DetectorParams` fields to fit, in log space; the rest of
+  `dp` stays fixed. `params.theta_from_physical()` is `dp` as a fit vector, `params.to_real(theta)`
+  the reverse.
+- `CalibrationForward(sim, sources, params)`: the model, the predicted charge of every source.
+  `sim` is a `source='light_source'` simulator.
+- `closure_data(model, theta, gains, n_draws=8)`: pseudo-data from the model at known
+  parameters and gains. With real data, use the observed charge, shape `(n_sources, n_sensors)`.
+- `CalibrationProblem(model, data)`: the model, the data and the estimator.
+- `calibrate(problem, theta0)`: the fit. It returns a dict with the fitted parameters
+  (`'real'`) and the per-PMT gains (`'gains'`).
+- `crb(model, theta)`: the Cramér-Rao bound, from the model alone.
 
-- **Global optical params** (scalars or λ-curves): `L_abs`, `L_R`, `L_M`, `wall_refl`,
-  `sensor_refl`, `qe` spectral multipliers, `n_real`, SPE width, etc.
-- **per-PMT `k`** (the QE map — one multiplier per sensor, ~10⁴ of them).
+Run the closure test first on a new detector: you set the truth, so a poor recovery is a
+property of the setup (sources, photon count, parameterisation) and not of the data. Average the
+pseudo-data over several draws (`n_draws=8`, the default): the estimator weights each sensor by
+its observed charge, and one noisy draw at about 1.6 photoelectrons per sensor biases the fit.
 
-The shorthand above maps to the physics-config / `DetectorParams.from_flat` field names:
+`calibrate` defaults: 600 steps, a Jacobian rebuild every 20 (`refresh`), a 0.5 clip on each
+log-space step (`max_step`), and the mean of the last 50 iterates as the result (`polyak`).
+`CalibrationProblem` averages 8 Jacobian draws (`jacobian_draws`). The example lowers these for
+speed. The paper's working point (`CALIB` in `analysis/paper/utils/calibration.py`) runs 1200
+steps: the diffuse wall and sensor reflectances need about that many, while the other
+parameters settle by about 300.
 
-| shorthand | config key |
-|-----------|-----------|
-| `L_abs` | `absorption_length` |
-| `L_R` (Rayleigh) | `scatter_length` |
-| `L_M` (Mie) | `mie_scatter_length` (with asymmetry `g`) |
-| `wall_refl` | `wall_reflection_rate` |
-| `sensor_refl` | `sensor_reflection_rate` |
-| `qe` | `qe` |
-| per-PMT `k` | `qe_corrections` |
+To hold parameters fixed, fit fewer fields, or keep the layout and pass
+`calibrate(problem, theta0, fix=[...])`.
 
-With `reflection_model='angular'`, reflection gains fittable levers beyond the two scalar
-rates: the reflectance *magnitude* is angle- and λ-dependent (Schlick blacksheet wall +
-multilayer-Fresnel cathode), and the reflected *direction* is a specular/diffuse mixture with
-per-surface fractions `wall_fspec`/`sensor_fspec` (the discrete specular-vs-diffuse branch is
-carried by a DiCE score). The angular model reads the `DetectorParams.reflection` fields
-(`wall_R0`/`wall_p`/`wall_fspec`, `cathode_nr`/`cathode_nk`/`sensor_fspec`) and **requires
-`wavelength_mode=True`** for the λ-dependent magnitude; the `*_fspec` fields default to the SK-lit
-specular fractions (wall 0.55, sensor 0.90). The **default** model is
-`reflection_model='scalar_mix'`, which keeps the scalar rate *magnitudes* but adds the
-specular/diffuse `*_fspec` direction split — so those fractions become fittable **without**
-`wavelength_mode`, which is the cheaper lever for a scalar calibration.
+## Choosing a solver
 
-## Recipe (per-sensor QE + all globals)
+The snippets are from `examples/hello_calibrate_own_optimiser.py`, which runs all four from one
+start and prints them against the bound.
 
-1. **Source diversity is the lever.** Mix wall lasers (several wavelengths and positions) with
-   an isotropic volume source. Diversity breaks the key degeneracies — `L_M↔k`, `L_abs↔qe`,
-   wall↔sensor reflectivity — and makes the scattering lengths measurable with a plain charge
-   loss.
-2. **Globals: a Neyman χ² residual**, `(k·M − Q)/√max(Q, q_floor)`. Its weight depends on the
-   data alone, so the residual stays linear in the Monte-Carlo forward, which is redrawn every
-   step; see *A residual that is not linear in the model* below. Optimizer: the damped
-   Gauss-Newton shared with reconstruction (Marquardt `lam`, Levenberg `mu`), with optional Polyak
-   tail-averaging of the iterates (`polyak=`).
-3. **per-PMT `k`: profiled, `k = ΣQ/ΣM`**, solved in closed form at every step and gauged to
-   `mean(log k)=0` (`gauge='linear'` for `mean(k)=1`). The gains never enter the optimizer. The
-   profiled gain is nonlinear in the forward, so it carries a bias that grows with the forward's
-   Monte-Carlo noise; averaging forward draws (`n_forward_draws`) reduces it
-   (`tests/test_fitting_estimator_unbiased.py` measures it).
-4. **A smooth, position-correlated QE trend is the dangerous case.** It mimics the optical
-   fields, and if ignored it drags the reflectivities away.
+The default, damped Gauss-Newton with the per-PMT gains profiled (`tx=gauss_newton_tx(lam, mu)`
+changes the damping):
 
-## Observable complementarity
+```python
+--8<-- "examples/hello_calibrate_own_optimiser.py:gn"
+```
 
-- **Charge** — constrains most parameters, especially anything coupling to total light or the
-  spatial charge shape. Per-PMT `k` is pure charge.
-- **Timing (first-arrival)** — geometric and largely orthogonal to absorption; it is the lever
-  for the scattering/reflection *geometry*: low-occupancy single-PE timing constrains the wall
-  reflectivity far better than charge alone. It cannot measure `L_M` at typical detector
-  scales (Mie scattering is optically thin — nearly invisible to both charge and per-event
-  timing).
-- **Charge variance** — breaks the per-PMT QE↔gain degeneracy and measures the SPE width.
+Any optax rule, on the same driver (step clip, Polyak readout and `fix` still apply):
 
-## Wavelength consistency (shared with reconstruction)
+```python
+--8<-- "examples/hello_calibrate_own_optimiser.py:adam"
+```
 
-In wavelength mode (`wavelength_mode=True` — the spectral path noted at the top of this
-page), calibration applies `qe_fn(λ)` per photon. The same
-band-consistency principle from [reconstruction](reconstruction.md) applies: a broadband
-Cherenkov `qe(λ)` fit must sample the **bare 1/λ² spectrum over the physical emission band**
-and apply differentiable `qe(λ)` — i.e. keep `setup_event_simulator`'s default
-`wavelength_sampling='cherenkov'` (λ ~ 1/λ², per-photon weight `qe_fn(λ)`). The alternative
-`wavelength_sampling='cherenkov_qe'` importance-samples λ ~ QE(λ)/λ² and collapses the weight to
-a scalar ⟨QE⟩, baking the assumed QE into the λ distribution — so it **cannot be used to *fit*
-QE**. Broadband sources measure only the spectrum integral
-(amplitudes + `k`); **monochromatic lasers anchor `qe(λᵢ)`**. The bundled SK QE curve
-spans ≈294–648 nm; the medium grid is [300, 700] nm.
+Your own loop: `problem.grad_metric_loss(theta, step)` returns the gradient `Jᵀr` (gains
+profiled), the metric `JᵀJ` and the loss; `step` selects the random draw:
 
-## Uncertainty: quote the CRB, not the sim toy-MC
+```python
+--8<-- "examples/hello_calibrate_own_optimiser.py:own"
+```
 
-Fit uncertainty comes from the inverse Poisson Fisher information at the fitted point
-(`lucid.fitting.crb`; autodiff JVPs, log-params give fractional errors). One caveat: the
-expected-value (implicit-capture) engine is quieter than real Poisson shot noise, so noise-free
-closure fits look better than reality — validate shot noise with sampled per-photon quanta, or
-simply quote the CRB. Per-PMT `k` improves as 1/√N with photon statistics; smooth λ-curves
-become systematics-limited rather than photon-limited.
+scipy, on one fixed draw so the objective is deterministic:
+
+```python
+--8<-- "examples/hello_calibrate_own_optimiser.py:scipy"
+```
+
+First-order rules such as Adam move slowly along stiff directions (Mie, `g`, the
+reflectivities), which is why Gauss-Newton is the default.
+
+## What can be fitted
+
+Any leaf of `DetectorParams` ([parameters](../reference/detector-params.md)) can be named in
+`FieldParams`. The usual ones are `scatter_length` (Rayleigh), `mie_scatter_length` with `g`,
+`absorption_length`, `wall_reflection_rate`, `sensor_reflection_rate` and `qe`. The per-PMT
+gains are `qe_corrections`, profiled rather than fitted (below). The refractive index is not a
+parameter.
+
+The reflection model is a simulator argument. The default `'scalar_mix'` adds the
+specular/diffuse fractions `wall_fspec` and `sensor_fspec` as fittable parameters without
+needing wavelength mode. `'angular'` makes the reflectance depend on angle and wavelength
+(Schlick wall `wall_R0`, `wall_p`; Fresnel cathode `cathode_nr`, `cathode_nk`), evaluated at
+`reflection_wavelength` (default 400 nm).
+
+## The estimator
+
+- **Sources.** Mix lasers at several positions (and wavelengths) with an isotropic flasher. One
+  source alone leaves pairs such as Mie length and gains, absorption and QE, or wall and sensor
+  reflectivity degenerate.
+- **Residual.** The Neyman χ² residual `(k·M − Q)/√max(Q, q_floor)`, with `M` the predicted and
+  `Q` the observed charge. Its weight depends on the data only, so it is linear in the
+  Monte-Carlo forward, which is redrawn every step. A residual nonlinear in the forward would
+  converge to a biased point.
+- **Gains.** The per-PMT gains `k = ΣQ/ΣM` are solved in closed form at every step and fixed to
+  `mean(log k) = 0` (`gauge='linear'` gives `mean(k) = 1`). They never enter the optimiser. The
+  profiled gain has a bias that grows with the forward's noise; `CalibrationProblem(...,
+  n_forward_draws=N)` averages draws to reduce it.
+- **Correlated QE trends.** A smooth, position-dependent QE pattern mimics the optical
+  parameters and can pull the reflectivities off.
+
+Charge constrains most parameters. First-arrival timing is nearly independent of absorption and
+constrains reflection and scattering geometry, but at detector scale it does not measure the
+Mie length. `lucid.fitting.calibrate_timing` recovers per-PMT `t0` and the global TTS from
+per-PMT first-arrival means and variances over many flashes.
+
+## Per-wavelength optics
+
+`CalibrationParams(n_wavelengths=W)` fits a separate scattering length, absorption length and
+QE at each of `W` laser wavelengths, with the gains and the four reflection parameters shared.
+This is the paper's estimand (five SK laser lines). Mie is held fixed in it.
+
+Fitting the wavelength deviation curves instead (`FieldParams(dp, ['abs_dev', ...])` with
+`wavelength_mode=True` and monochromatic sources, `laser_source(..., wavelength=405)`) is
+implemented but has not been validated end to end. A QE fit must keep
+`wavelength_sampling='cherenkov'` ([optics](../concepts/optics.md#how-wavelengths-are-sampled)).
+
+## Uncertainty
+
+`crb(model, theta)['sigma']` is the fractional Cramér-Rao bound per parameter, from the
+autodiff Fisher information of the Poisson likelihood; it needs no data and marginalises the
+per-PMT gains. The expected-value forward has less variance than real shot noise, so the bound
+is inflated by √12 by default (`honesty=`; `cov_raw` is the uninflated covariance). For the same
+reason, a closure fit on expected-value pseudo-data looks better than a real one; to test against
+shot noise, generate the data with `transport='sampled', detection='sampled'`.
 
 ## If the calibration misbehaves
 
-- **A degenerate fit** (parameters trade off, huge CRB on some direction) — add **source
-  diversity**. A single source leaves `L_M↔k`, `L_abs↔qe`, and wall↔sensor reflectivity
-  degenerate; mixing wall lasers (several positions/wavelengths) with an isotropic flasher breaks
-  them and makes the scattering lengths measurable.
-- **per-PMT `k` runs away** (a global QE↔mean-`k` offset drifts) — the fitter cannot do this:
-  the gains are *profiled*, solved in closed form as `k = ΣQ/ΣM` each step and gauged to
-  `mean(log k)=0` (`gauge='linear'` for `mean(k)=1` instead). They never enter the optimizer,
-  so there is no per-PMT iterate to run away. The `crb` bound still carries them as a
-  free Schur block, because a bound must integrate over a nuisance where a fit may profile it.
-- **CRB disagrees with a sim toy-MC** — expected: the expected-value (implicit-capture) engine is
-  quieter than real Poisson shot noise (the `crb` bound carries a ×√12 honesty factor). Validate
-  with sampled per-photon quanta (`use_expected_value=False`), or just quote the CRB.
-- **A residual that is not linear in the model** — the forward is a Monte-Carlo estimate redrawn
-  every step, so any residual nonlinear in it has `E[f(M)] ≠ f(E[M])` and a permanently displaced
-  fixed point; no amount of iteration recovers. The fitter therefore runs the **Neyman** χ²,
-  `(k·M − Q)/√Q`, the member of the family whose weight depends on the data alone.
-
-## Frontier
-
-The biggest untapped lever is the **timing observable** for the reflectivities and blue-end
-absorption — charge-only calibration ignores the arrival-time information that reflected and
-late photons carry. Free per-λ deviation curves on the optical properties extend the same
-machinery to beyond-nominal spectral calibration.
+- Parameters trade off, or the bound is huge in some direction: add source diversity.
+- The fit settles at a biased point on closure data: average more draws (`n_draws`), raise the
+  photon count, or average forward draws (`n_forward_draws`).
+- The diffuse reflectances have not converged: run more steps (the paper uses 1200).

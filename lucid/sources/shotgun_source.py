@@ -1,19 +1,17 @@
 """Shotgun source: user-specified per-photon origin/direction/wavelength.
 
 ShotgunSource conforms to the calibration-source callable contract
-``source(n_photons, key) -> (directions, origins, intensities)`` with an optional
+``source(n_photons, key, n_medium) -> (directions, origins, intensities)`` with an optional
 ``wavelength`` attribute (scalar nm, per-photon array, or None for Cherenkov
 sampling). This lets it plug into ``setup_event_simulator`` with
-``is_calibration=True`` using the existing propagation path.
+``source='light_source'`` using the existing propagation path.
 """
 
 from typing import NamedTuple, Optional, Union
 
-import jax
 import jax.numpy as jnp
 
 from lucid.utils import normalize
-from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
 
 
 class ShotgunSource(NamedTuple):
@@ -33,7 +31,7 @@ class ShotgunSource(NamedTuple):
 
     Contract
     --------
-    ``source(n_photons, key)`` returns ``(directions, origins, intensities)``,
+    ``source(n_photons, key, n_medium)`` returns ``(directions, origins, intensities)``,
     matching ``IsotropicSource`` / ``LaserSource``. Wavelengths are read from
     ``source.wavelength`` by ``setup_event_simulator`` for optical lookups.
     """
@@ -42,7 +40,7 @@ class ShotgunSource(NamedTuple):
     intensities: jnp.ndarray
     wavelength: Optional[jnp.ndarray] = None
 
-    def __call__(self, n_photons, key, n_water=1.33):
+    def __call__(self, n_photons, key, n_medium):
         return self.directions, self.origins, self.intensities
 
 

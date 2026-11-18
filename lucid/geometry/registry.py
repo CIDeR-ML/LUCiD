@@ -60,6 +60,3 @@ def get_detector_class(name):
     return _REGISTRY[key]
 
 
-def list_detector_types():
-    """Return sorted list of registered detector type names."""
-    return sorted(_REGISTRY.keys())

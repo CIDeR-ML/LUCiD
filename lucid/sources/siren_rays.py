@@ -8,7 +8,7 @@ Two factories — same two-pass importance-sampling structure, different
 domain axes and different absolute-scale normalization:
 
 * :func:`make_cherenkov_surrogate_fn` — Cherenkov path. 2nd axis is the
-  opening angle; absolute scale comes from ``ctx.n_photons_fn(E)``. Returns
+  opening angle; absolute scale comes from ``emitter.n_photons(E)``. Returns
   ``(ray_vectors, ray_origins, intensities)``.
 * :func:`make_scintillation_surrogate_fn` — scintillation path. 2nd axis is
   ``dE/dx``; absolute scale comes from the medium's light-yield parameters
@@ -20,21 +20,21 @@ domain axes and different absolute-scale normalization:
 Approach — two-pass importance sampling:
   1. Evaluate the SIREN on a ``grid_bins x grid_bins`` grid over the
      ``(angle, s/s_max)`` domain (first pass).
-  2. Seed the ``Nphot`` rays only in grid bins whose weight clears
-     ``threshold * max(grid)`` — drawn uniformly within the *area* of those
-     bins (a categorical bin pick + uniform jitter) — then evaluate the SIREN
-     a second time at the jittered seed points.
+  2. Pick each ray's grid bin with probability proportional to the grid
+     weight, jitter it within the bin, evaluate the SIREN a second time at the
+     jittered point, and weight the ray by target / proposal.
 
 Concentrating the rays in the bright part of the phase space (the Cherenkov
 pattern is sharply peaked) means a few rays describe it well — area-uniform
-sampling over the whole domain wastes most rays on near-zero weight. The seed
-region is computed on the fly from the SIREN values + a threshold knob (from
-``siren_params.json``); there is no parametrised seed-count function.
+sampling over the whole domain wastes most rays on near-zero weight — while
+the full domain, wide-angle tail included, keeps a nonzero proposal. Cutting
+the bins below a fraction of the grid maximum instead drops ~5% of the
+emission into the ring, and that shape error biases the reconstructed energy
+and vertex.
 
 Per-ray intensity is ``(w / Σw) * N_photons(E)``: SIREN supplies the *shape*
-(a PMF), a stored power law supplies the *scale*, so ``sum(intensity)`` equals
-``N_photons(E)`` exactly. No extra normalisation is needed — the discarded
-sub-threshold tail is simply folded into the kept rays.
+(a PMF), the fitted N_photons(E) supplies the *scale*, so ``sum(intensity)`` equals
+``N_photons(E)`` exactly.
 
 The dimensionless ``s/s_max`` coordinate is converted to a physical distance
 ``s = (s/s_max)·s_max(E)`` along the track.
@@ -45,7 +45,8 @@ import jax.numpy as jnp
 from jax import random, jit
 from functools import partial
 
-from lucid.utils import normalize, generate_orthonormal_basis
+from lucid.siren.emitter import density
+from lucid.utils import normalize, create_local_frame
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -81,69 +82,7 @@ def generate_random_cone_vectors(R, theta, num_vectors, key):
     y = jnp.sin(phi) * sin_theta
     z = cos_theta * jnp.ones_like(x)
 
-    basis = generate_orthonormal_basis(R)
-    vectors = jnp.column_stack((x, y, z))
-    rotated_vectors = jnp.einsum('ij,kj->ki', basis, vectors)
-
-    return rotated_vectors
-
-
-@jax.jit
-def denormalize_log_predictions(predictions, log_max, log_min):
-    log_predictions = predictions * (log_max - log_min) + log_min
-    return 10 ** log_predictions - 1e-10
-
-
-@jax.jit
-def normalize_inputs_jit(inputs, energy_min, energy_max, angle_min, angle_max,
-                         distance_min, distance_max):
-    """
-    Normalize inputs to the range [-1, 1] in all dimensions.
-
-    Args:
-        inputs: Array of shape (..., 3) containing [energy, angle, distance] values.
-                The 3rd column is the dimensionless s/s_max coordinate.
-        energy_min, energy_max: The minimum and maximum energy values.
-        angle_min, angle_max: The minimum and maximum angle values.
-        distance_min, distance_max: The minimum and maximum s/s_max values.
-
-    Returns:
-        Array of shape (..., 3) with normalized values in the range [-1, 1].
-    """
-    energy = inputs[:, 0]
-    angle = inputs[:, 1]
-    distance = inputs[:, 2]
-
-    normalized_energy = 2.0 * (energy - energy_min) / (energy_max - energy_min) - 1.0
-    normalized_angle = 2.0 * (angle - angle_min) / (angle_max - angle_min) - 1.0
-    normalized_distance = 2.0 * (distance - distance_min) / (distance_max - distance_min) - 1.0
-
-    return jnp.stack([normalized_energy, normalized_angle, normalized_distance], axis=1)
-
-
-def _siren_weights(ctx, model_params, energy, axis2, s_over_smax):
-    """Evaluate the SIREN at the given (axis2, s/s_max) points for ``energy``.
-
-    ``axis2`` is the opening angle (radians) for Cherenkov contexts or dE/dx
-    (keV/mm) for dE/dx contexts; the SIREN doesn't care which — both are just
-    the 2nd input axis of the surrogate.
-
-    Returns denormalised, non-negative weights. Shared by the grid pass, the
-    seed pass, and the LHS diagnostic helper.
-    """
-    grid = jnp.stack([
-        jnp.full_like(axis2, energy),   # energy (MeV)
-        axis2,                          # opening angle (Cherenkov) or dE/dx (dedx)
-        s_over_smax,                    # s / s_max  ∈ [0, 1]
-    ], axis=1)
-    normalized = normalize_inputs_jit(
-        grid, ctx.energy_min, ctx.energy_max,
-        ctx.axis2_min, ctx.axis2_max,
-        ctx.smax_dist_min, ctx.smax_dist_max,
-    )
-    raw, _ = ctx.model.apply(model_params, normalized)
-    w = denormalize_log_predictions(jnp.squeeze(raw), ctx.log_max, ctx.log_min)
-    return jnp.maximum(w, 0.0)
+    return jnp.column_stack((x, y, z)) @ create_local_frame(R)
 
 
 def latin_hypercube_2d(key, nphot, x_lo, x_hi, y_lo, y_hi):
@@ -166,50 +105,48 @@ def latin_hypercube_2d(key, nphot, x_lo, x_hi, y_lo, y_hi):
     return x, y
 
 
-def evaluate_siren_lhs(ctx, model_params, energy, nphot, key):
-    """Draw ``nphot`` area-uniform LHS points over the whole (axis2, s/s_max)
-    domain and evaluate the SIREN once.
+def draw_bins(grid_w, u):
+    """Each draw's grid bin, and the mass it was drawn with: ``u`` uniform in ``[0, total)`` picks
+    the bin whose interval of the cumulative grid weight holds it.
 
-    Returns ``(weights, axis2, s_over_smax)`` with raw (pre-PMF) weights. Used
-    by the ``validate.py`` integral diagnostic, which sums the raw weights over
-    an area-uniform draw as a Monte-Carlo estimate of the phase-space integral.
+    The mass is that interval's width, not ``grid_w`` itself: in float32 the cumulative sum rounds
+    (a parallel scan on the GPU is not even monotone), so a bin whose weight is rounding noise can
+    own an interval far wider than its weight, and dividing by its weight gives one ray almost all
+    the light. ``cummax`` makes the cumulative sum monotone and ``side='right'`` never picks an
+    interval of zero width, so a drawn bin's mass is positive and the importance weight
+    ``target / mass`` is exact for the draw that ran. ``total`` is ``cummax(cumsum(grid_w))[-1]``;
+    a draw rounded up onto it gets mass 0, which the caller weights 0.
+
+    Returns ``(bin_idx, mass)``.
     """
-    axis2, s_over_smax = latin_hypercube_2d(
-        key, nphot,
-        ctx.axis2_min, ctx.axis2_max,
-        ctx.smax_dist_min, ctx.smax_dist_max,
-    )
-    w = _siren_weights(ctx, model_params, energy, axis2, s_over_smax)
-    return w, axis2, s_over_smax
+    cw = jax.lax.cummax(jnp.cumsum(grid_w))
+    idx = jnp.clip(jnp.searchsorted(cw, u, side='right'), 0, grid_w.shape[0] - 1)
+    return idx, cw[idx] - jnp.where(idx > 0, cw[jnp.maximum(idx - 1, 0)], 0.0)
 
 
-def make_cherenkov_surrogate_fn(ctx):
-    """Build the jitted Cherenkov ray generator for a Cherenkov SIREN context.
-
-    ``ctx`` is a :class:`lucid.siren.core.SirenContext` (SIREN model, domain
-    ranges, log-normalisation range, the ``s_max(E)`` / ``N_photons(E)``
-    closures, and the ``grid_bins`` / ``threshold`` ray-sampling knobs).
-    Constructed from :func:`build_cherenkov_context`. The simulator builds
-    this once at setup.
+def make_cherenkov_surrogate_fn(emitter):
+    """Build the jitted Cherenkov ray generator for a Cherenkov
+    :class:`~lucid.siren.emitter.Emitter` (its net, domain, decoding, the
+    ``s_max(E)`` / ``N_photons(E)`` curves and the ``grid_bins`` grid). The
+    simulator builds this once at setup.
 
     Returns ``cherenkov_get_rays(track_origin, track_direction, energy, Nphot,
     model_params, key)`` -> ``(ray_vectors, ray_origins, intensities)`` using
     the two-pass importance sampling described in the module docstring.
     """
-    g = ctx.grid_bins
+    g = emitter.grid_bins
     # Bin-center grid over (angle, s/s_max) — constant, closed over.
-    a_edges = jnp.linspace(ctx.axis2_min, ctx.axis2_max, g + 1)
-    s_edges = jnp.linspace(ctx.smax_dist_min, ctx.smax_dist_max, g + 1)
+    a_edges = jnp.linspace(emitter.lo[1], emitter.hi[1], g + 1)
+    s_edges = jnp.linspace(emitter.lo[2], emitter.hi[2], g + 1)
     a_centers = 0.5 * (a_edges[:-1] + a_edges[1:])
     s_centers = 0.5 * (s_edges[:-1] + s_edges[1:])
     a_bin_w = (float(a_centers[1] - a_centers[0]) if g > 1
-               else float(ctx.axis2_max - ctx.axis2_min))
+               else float(emitter.hi[1] - emitter.lo[1]))
     s_bin_w = (float(s_centers[1] - s_centers[0]) if g > 1
-               else float(ctx.smax_dist_max - ctx.smax_dist_min))
+               else float(emitter.hi[2] - emitter.lo[2]))
     AA, SS = jnp.meshgrid(a_centers, s_centers, indexing='ij')
     grid_angle = AA.ravel()      # (g*g,) bin-center angles
     grid_s = SS.ravel()          # (g*g,) bin-center s/s_max
-    threshold = ctx.threshold
 
     @partial(jax.jit, static_argnums=(3,))
     def cherenkov_get_rays(track_origin, track_direction,
@@ -217,34 +154,14 @@ def make_cherenkov_surrogate_fn(ctx):
         pick_key, jit_key, cone_key = random.split(key, 3)
 
         # --- pass 1: SIREN on the bin-center grid ---
-        grid_w = _siren_weights(ctx, model_params, energy, grid_angle, grid_s)
+        grid_w = density(emitter, model_params, energy, grid_angle, grid_s)
 
-        if ctx.seed_mode == 'importance':
-            # --- seed bins ∝ grid density (importance sampling). The uniform-over-
-            # kept-bins mode below cuts every bin under threshold*max — collectively
-            # ~5% of the emission (the wide-angle tail; the ring peak sets the max)
-            # — and renormalisation pours it into the ring. Sampling the seed bin
-            # from the grid density keeps the FULL domain (threshold unused) at no
-            # variance cost: the per-ray weight divides out the proposal, so
-            # w/q ≈ 1 for a smooth density instead of spanning orders of magnitude.
-            cw = jnp.cumsum(grid_w)
-            u = random.uniform(pick_key, (Nphot,), minval=0.0, maxval=cw[-1])
-            bin_idx = jnp.clip(jnp.searchsorted(cw, u), 0, grid_w.shape[0] - 1)
-        else:
-            # --- seed region: bins at/above threshold * per-energy grid max.
-            # `>=` keeps the peak bin (threshold < 1) and degrades gracefully to
-            # the whole domain if the grid is all-zero (sub-threshold energy).
-            thresh = threshold * jnp.max(grid_w)
-            above = grid_w >= thresh                          # (g*g,) bool mask
-
-            # Uniformly pick Nphot of the M above-threshold bins. Drawing a rank in
-            # [0, M) and mapping it to a bin via searchsorted on the inclusive
-            # cumulative count keeps everything (Nphot,)- and (g*g,)-sized — unlike
-            # random.categorical, which would materialise a (Nphot, g*g) array.
-            csum = jnp.cumsum(above.astype(jnp.int32))        # (g*g,), runs 0..M
-            n_seed_bins = csum[-1]                            # M (traced scalar)
-            rank = random.randint(pick_key, (Nphot,), 0, n_seed_bins)
-            bin_idx = jnp.searchsorted(csum, rank + 1)        # r-th above-thresh bin
+        # --- seed bins ∝ grid density (importance sampling): the per-ray weight divides out
+        # the proposal, so w/q ≈ 1 for a smooth density and the full domain is kept at no
+        # variance cost.
+        total = jax.lax.cummax(jnp.cumsum(grid_w))[-1]
+        u = random.uniform(pick_key, (Nphot,), minval=0.0, maxval=total)
+        bin_idx, mass = draw_bins(grid_w, u)
 
         # --- LHS-stratified jitter within the chosen bins ---
         # Same role as the previous independent-uniform jitter, but the
@@ -258,15 +175,19 @@ def make_cherenkov_surrogate_fn(ctx):
         s_over_smax = grid_s[bin_idx] + jit_s * s_bin_w
 
         # --- pass 2: SIREN at the jittered seed points ---
-        w = _siren_weights(ctx, model_params, energy, angle, s_over_smax)
-        if ctx.seed_mode == 'importance':
-            # importance weight: target f(jittered point) / proposal q(bin) — the density
-            # cancels to ~1 within a bin, so ray weights stay O(1) across the whole domain.
-            w = w / jnp.maximum(grid_w[bin_idx], 1e-30)
+        w = density(emitter, model_params, energy, angle, s_over_smax)
+        # importance weight: target f(jittered point) / the mass the bin was drawn with — the
+        # density cancels to ~1 within a bin, so ray weights stay O(1) across the whole domain.
+        # The mass is detached: the draw is held fixed under differentiation, so the derivative
+        # of the expectation is E_q[(f'/q) g]. Differentiating the mass as well subtracts the
+        # proposal's score, and q ~ f cancels the shape's energy gradient (measured: dE[cos a]/dE
+        # ~0 instead of -1.9e-4 /MeV for a 300 MeV muon; an electron's dE[s]/dE 70% low).
+        drawn = mass > 0
+        mass = jax.lax.stop_gradient(mass)
+        w = jnp.where(drawn, w / jnp.where(drawn, mass, 1.0), 0.0)
 
-        # s/s_max -> physical distance along the track (mm -> m for origins).
-        physical_dist_mm = s_over_smax * ctx.s_max_fn(energy)
-        ranges_m = physical_dist_mm / 1000.0
+        # s/s_max -> physical distance along the track.
+        ranges_m = emitter.along_track_m(s_over_smax, energy)
         ray_origins = (track_origin[None, :]
                        + ranges_m[:, None] * normalize(track_direction)[None, :])
 
@@ -277,7 +198,7 @@ def make_cherenkov_surrogate_fn(ctx):
         # Shape (SIREN, normalised to a PMF) x absolute scale (N_photons(E)).
         # sum(intensities) == N_photons(E) by construction.
         pmf = w / jnp.maximum(jnp.sum(w), 1e-30)
-        intensities = pmf * ctx.n_photons_fn(energy)
+        intensities = pmf * emitter.n_photons(energy)
 
         return ray_vectors, ray_origins, intensities
 
@@ -306,22 +227,6 @@ def _sample_isotropic(key, n):
     return jnp.stack([sin_theta * jnp.cos(phi),
                       sin_theta * jnp.sin(phi),
                       cos_theta], axis=1)
-
-
-def _biexp_pdf(t, tau_rise, tau_fall):
-    """Rise+fall emission-time PDF.
-
-    ``g(t; τ_rise, τ_fall) = (exp(-t/τ_fall) - exp(-t/τ_rise)) / (τ_fall - τ_rise)``,
-    the density of ``T = T_rise + T_fall`` with ``T_rise ~ Exp(τ_rise)``,
-    ``T_fall ~ Exp(τ_fall)`` (hypoexponential sum). The simulator samples ``T``
-    directly via the reparametrization in :func:`_sample_hypoexp`; this PDF is
-    kept so it can be plotted / compared against an empirical histogram.
-
-    The ``τ_fall - τ_rise`` denominator gets a tiny epsilon to stay
-    differentiable at the (unphysical) degenerate point ``τ_fall == τ_rise``.
-    """
-    denom = (tau_fall - tau_rise) + 1e-9
-    return (jnp.exp(-t / tau_fall) - jnp.exp(-t / tau_rise)) / denom
 
 
 def _sample_hypoexp(key, n, tau_rise, tau_fall):
@@ -363,7 +268,8 @@ def _build_moyal_inverse_cdf(lambda_min, lambda_max, moyal_loc, moyal_scale,
     Built once at factory time (Python eval — the result is closed over as
     a JAX constant inside the jit'd ray fn). The truncation re-normalizes
     the CDF to span [0, 1] over the window — outside the window the
-    surrogate emits zero rays by construction.
+    surrogate emits zero rays by construction. The data-mode expander
+    (:mod:`lucid.sources.scintillation_photons`) samples on the same table.
     """
     lambda_grid = jnp.linspace(lambda_min, lambda_max, n_knots)
     pdf = _moyal_pdf(lambda_grid, moyal_loc, moyal_scale)
@@ -375,9 +281,10 @@ def _build_moyal_inverse_cdf(lambda_min, lambda_max, moyal_loc, moyal_scale,
     return cdf, lambda_grid
 
 
-def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max,
+def make_scintillation_surrogate_fn(emitter, scint_lambda_min, scint_lambda_max,
                                     moyal_loc: float, moyal_scale: float):
-    """Build the jitted scintillation ray generator for a dE/dx SIREN context.
+    """Build the jitted scintillation ray generator for a dE/dx
+    :class:`~lucid.siren.emitter.Emitter`.
 
     Fully 1-D-in-R surrogate (``R ≡ s / s_max``). A single SIREN grid pass is
     collapsed analytically over the dE/dx axis; the only stochastic axis left
@@ -432,10 +339,10 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
     is expected to add the Cherenkov ``predict_t0(s, E)`` baseline (the time
     the track itself reaches each deposit).
     """
-    g = dedx_ctx.grid_bins
+    g = emitter.grid_bins
     # Bin-center grid over (dE/dx, R), R ≡ s/s_max — constant, closed over.
-    d_edges = jnp.linspace(dedx_ctx.axis2_min, dedx_ctx.axis2_max, g + 1)
-    s_edges = jnp.linspace(dedx_ctx.smax_dist_min, dedx_ctx.smax_dist_max, g + 1)
+    d_edges = jnp.linspace(emitter.lo[1], emitter.hi[1], g + 1)
+    s_edges = jnp.linspace(emitter.lo[2], emitter.hi[2], g + 1)
     d_centers = 0.5 * (d_edges[:-1] + d_edges[1:])
     s_centers = 0.5 * (s_edges[:-1] + s_edges[1:])
     DD, SS = jnp.meshgrid(d_centers, s_centers, indexing='ij')
@@ -458,7 +365,7 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
         # --- single dE/dx SIREN pass on the (dE/dx, R) bin-center grid ---
         # `grid_w` is row-major from meshgrid(indexing='ij'), so
         # reshape(g, g)[i, j] = SIREN at (d_centers[i], s_centers[j]).
-        grid_w = _siren_weights(dedx_ctx, model_params, energy, grid_dedx, grid_s)
+        grid_w = density(emitter, model_params, energy, grid_dedx, grid_s)
         grid_w_2d = grid_w.reshape(g, g)                                # (g_d, g_R)
 
         # --- collapse the dE/dx axis analytically (Rao-Blackwell) ---
@@ -488,9 +395,8 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
         # sum(intensities) ≈ S·E·<1/(1+kB·<d>_R+...)>_lambda.
         intensities = (S * energy / Nphot) / (1.0 + kB * d_typ + C * d_typ ** 2)
 
-        # R -> physical distance along the track (mm -> m for origins).
-        physical_dist_mm = R_i * dedx_ctx.s_max_fn(energy)
-        ranges_m = physical_dist_mm / 1000.0
+        # R -> physical distance along the track.
+        ranges_m = emitter.along_track_m(R_i, energy)
         ray_origins = (track_origin[None, :]
                        + ranges_m[:, None] * normalize(track_direction)[None, :])
 
@@ -520,21 +426,23 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
 #
 # Three length-4 coefficient vectors total. The d/c term uses vacuum c
 # because the underlying PhotonSim hist stores delay relative to vacuum-c
-# (muon track time at β ≈ 1). Distance is in mm, energy in MeV, time in ns.
+# (muon track time at β ≈ 1). The fit is in mm and ns (λ in mm, c in mm/ns),
+# energy in MeV.
 # ---------------------------------------------------------------------------
 
-_C_MM_PER_NS = 299.792  # vacuum c in PhotonSim units
 
+@partial(jit, static_argnames=('c_mm_per_ns',))
+def predict_t0(distance_m, energy, t0, c_mm_per_ns):
+    """Photon emission time t(d, E) in ns at ``distance_m`` metres along the track.
 
-@jit
-def predict_t0(distance, energy, a_coeffs, l_coeffs, b_coeffs):
-    """Photon emission time t(d, E) for the Cherenkov vertex-time baseline.
-
-    log10 A, log10 λ and β are each a cubic in log10 E; a_coeffs, l_coeffs,
-    b_coeffs are length-4, ascending (c0 + c1·x + c2·x² + c3·x³). Returns
+    ``t0`` and ``c_mm_per_ns`` are the Cherenkov emitter's (``emitter.t0``,
+    ``emitter.c_mm_per_ns``): log10 A, log10 λ and β are each a cubic in
+    log10 E, length-4, ascending (c0 + c1·x + c2·x² + c3·x³). Returns
     d/c + delay, the stretched-exp parametrisation fit from
     PhotonHist_TimeDistanceNorm. JAX-jitted; vmaps cleanly over distance.
     """
+    distance = distance_m * 1000.0          # the fit's mm
+    a_coeffs, l_coeffs, b_coeffs = t0
     x = jnp.log10(energy)
 
     def _cubic(c):
@@ -545,14 +453,6 @@ def predict_t0(distance, energy, a_coeffs, l_coeffs, b_coeffs):
     beta = _cubic(b_coeffs)
     arg = jnp.power(jnp.clip(distance / lam, 1e-12, None), beta)
     delay = A * (jnp.exp(arg) - 1.0)
-    return distance / _C_MM_PER_NS + delay
+    return distance / c_mm_per_ns + delay
 
 
-def predict_t0_wrapper(distance, energy, params):
-    """Evaluate predict_t0 from a nested-dict params (the t0.json structure)."""
-    return predict_t0(
-        distance, energy,
-        params['A']['log10_poly_logE'],
-        params['lambda']['log10_poly_logE'],
-        params['beta']['poly_logE'],
-    )

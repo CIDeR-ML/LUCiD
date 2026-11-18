@@ -1,0 +1,68 @@
+# The lint and hooks of docs/development.md. Every version is pinned: an unpinned
+# hook rewrites the tree differently on two machines, and nbstripout in
+# particular must match the version any history rewrite uses or every notebook
+# re-serialises.
+#
+# Install:  pre-commit install
+# Run all:  pre-commit run --all-files
+#
+# Two hooks are advisory in CI today (the lint job, until its backlog clears);
+# they are NOT advisory here. Locally, they fail the commit.
+default_language_version:
+  python: python3
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      # Rule selection and the pydocstyle convention live in pyproject.toml,
+      # so `ruff check` outside pre-commit enforces the same standard.
+      - id: ruff
+        args: [--no-fix]          # a hook that silently rewrites code hides the finding
+      - id: ruff-format
+
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.9.1                    # == the version in develop.sif; see the note above
+    hooks:
+      - id: nbstripout
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # No allow-list. v1 commits no reference arrays and no fixtures, so
+      # anything over 1 MB arriving now is an accident.
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1                # the wheel: the shellcheck binary is not installed on S3DF
+    hooks:
+      - id: shellcheck
+        # SC2086 (quoting) stays ON. The only exclusions are the two "cannot
+        # follow a sourced file" notes, which user_paths.sh already disables
+        # in-file six times.
+        args: [--severity=warning, --external-sources, --exclude=SC1090,SC1091]
+        files: \.(sh|sbatch)$
+
+  - repo: local
+    hooks:
+      # S1 and S5, by grep, with no binary to install. *.sh only: .sbatch
+      # templates are rendered with placeholder bodies and stay covered by
+      # shellcheck alone.
+      - id: shell-header
+        name: shell scripts set -euo pipefail and write nowhere personal
+        entry: .github/scripts/shell_header_check.py
+        language: system
+        files: \.sh$
+
+      - id: no-binary-extensions
+        name: no binary assets in the repository
+        entry: .github/scripts/no_binary_extensions.py
+        language: system
+        pass_filenames: true

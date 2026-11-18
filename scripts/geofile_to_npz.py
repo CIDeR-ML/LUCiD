@@ -2,14 +2,15 @@
 
 `lucid.geometry.Cylinder.from_pmt_file()` reads a `.npz` conforming to
 `docs/reference/pmt-npz-schema.md`. The example detectors (SK/HK/WCTE) ship those `.npz` files,
-but the *converter* that produces them from the source `config/geofile_*.txt` was previously kept
-only locally — so users could not reproduce or add a measured detector. This is that converter.
+but the *converter* that produces them from the source WCSim `geofile_*.txt` dumps (shipped in the
+`detector-geometry-sources` asset, tools/assets/detector-geometry-sources.manifest) was previously
+kept only locally — so users could not reproduce or add a measured detector. This is that converter.
 
 Geofile format (cm): a header block ("Detector radius & height ...", "Type 1/2 ...", "OD ...",
 "Centre offset ...") followed by one row per PMT:
     pmt_id  pmt_id2  pmt_type  x  y  z  dx  dy  dz  [extra]
 
-Run:  python scripts/geofile_to_npz.py config/geofile_SuperK.txt config/sk_geometry.npz
+Run:  python scripts/geofile_to_npz.py geofile_SuperK.txt config/sk_geometry.npz
 
 Scope: validated to reproduce `config/sk_geometry.npz` byte-for-byte (single-type cylindrical
 geofile). Detectors with mPMT + outer-detector PMTs (HyperK, NuPRISM/WCTE) additionally split

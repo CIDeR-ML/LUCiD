@@ -1,91 +1,56 @@
-# LUCiD Test Suite
-
-## Running tests
+# Tests
 
 ```bash
-# Fast only — pure math, no JIT (~10s).
-# Every reproduction gate in the repo is marked slow (the tripwire included), so this command
-# runs the unit tests and none of the guarantees.
-pytest tests/ -m "not slow"
-
-# The default. NEVER COLLECTS the files listed in conftest's _SLOW_FILES (test_tripwire.py
-# among them), so it is not the whole suite. The terminal banner names what was dropped.
-pytest tests/
-
-# EVERYTHING. This is the one to run before believing the suite is green.
-pytest tests/ --slow
+pytest tests/ -q                          # fast tests (the default deselects `slow`)
+pytest tests/ -q --slow                   # all tests except `gpu`
+pytest tests/ -q -m slow                  # slow tests only
+pytest tests/path/test_x.py::test_name    # one test
 ```
 
-Two independent mechanisms hide tests here, and they are easy to confuse. `pytest.mark.slow`
-DESELECTS (the test is collected, then filtered out by `-m`). `_SLOW_FILES` in `conftest.py`
-makes `pytest_ignore_collect` refuse to collect the file at all, `-m` or no `-m`.
+`tests/conftest.py` sets `JAX_PLATFORMS=cpu` for the whole suite. Most physics tests run on a
+small detector (`helpers/tiny.py`: a 1 m radius water cylinder with 582 PMTs) whose simulators
+are built once per session. `physics/test_forward_golden.py` compares the forward model and its
+gradient on that detector with a stored reference; `LUCID_CAPTURE_GOLDEN=1` re-captures it.
 
-Tests that need downloaded data (`data/` is gitignored, so a fresh clone or worktree lacks it)
-skip rather than fail, and the end-of-run banner lists them. Set `LUCID_REQUIRE_DATA=1` to make a
-missing-data skip a failure, for a job that is supposed to have the data.
+## Markers
 
-## Test categories
+| marker | meaning |
+|---|---|
+| `slow` | an SK-scale detector, an extra simulator compile or a ROOT file; deselected by default |
+| `gpu` | needs a GPU; deselected unless `LUCID_GATE_GPU=1`, even with `--slow` |
+| `golden` | compares with a stored reference |
+| `requires_data(*paths)` | needs these files under `data/`; a tuple means any one of them |
+| `requires_emitter(particle, material, dedx=False)` | needs the trained SIREN emitter the simulator would load for that material |
 
-### Fast (~150 tests, <10s) — pure math, no JIT
+A test without its data is skipped with a reason that names the missing files, and the run ends
+with a list of them. `python scripts/download_data.py` installs the data;
+`LUCID_REQUIRE_DATA=1` turns those skips into failures. Declare data with these markers rather
+than with `skipif` or `pytest.skip`:
 
-These run without building detectors or compiling propagators.
+```python
+@pytest.mark.requires_data('water/muon/1000MeV_100events.root')
+@pytest.mark.requires_emitter('muon', 'wbls', dedx=True)
+```
 
-| File | Tests | What it covers |
-|------|-------|----------------|
-| test_imports.py | 1 (52 parametrized) | All lucid submodules import cleanly |
-| test_params.py | 8 | DetectorParams, ParticleParams, normalize/denormalize, bounds |
-| test_utils.py | 10 | Utility functions (spherical coords, smearing) |
-| test_optics.py | 26 | Optics: normalize, reflection, scatter direction |
-| test_optics_physics.py | 21 | Physics: law of reflection, orthonormal frames, Fresnel |
-| test_losses.py | 7 | Poisson NLL, energy loss, segment logsumexp |
-| test_losses_physics.py | 11 | Loss gradients and numerical stability |
-| test_photon_step.py | 6 | Photon iteration functions (sample, update_factors) |
-| test_photon_step_physics.py | 15 | Absorption, detection probability, TOF, step gradients |
-| test_sensor_response.py | 6 | make_hits_simulation/data/likelihood aggregation |
-| test_sensor_response_physics.py | 13 | Charge conservation, soft-min timing, differentiability |
-| test_pipeline_types.py | 13 | JAX pytree compat, lax.scan, vmap, jit |
-| test_wavelength_physics.py | 10 | Rayleigh scattering, Henyey-Greenstein, Mie phase functions |
-| test_integration.py | 18 | Optics -> photon_step -> sensor_response chain (unit-level) |
-| test_wavelength.py | 18 | Medium properties, QE curve loading, Cherenkov spectrum |
+```bash
+LUCID_GATE_GPU=1 pytest --slow tests/paper/test_published_resolution.py
+```
 
-### Slow (~150 tests, marked `@pytest.mark.slow`) — JIT compilation required
+## Layout
 
-These build detectors, compile propagators, or run full simulations.
+Tests are grouped by subject, not by cost; cost is a marker.
 
-**Geometry & propagator (3-30s each):**
+| directory | subject |
+|---|---|
+| `physics/` | the forward model: emission, optics, photon step, reflection, wavelength-dependent media, sensor response, the composed simulator, detector and physics configs |
+| `propagation/` | detector geometry, ray-surface intersection, sensor lookup, overlap tables, propagators and their gradients |
+| `siren/` | the SIREN emitters: loading, s_max(E), lookup tables, training, ray sampling |
+| `fitting/` | losses, Gauss-Newton and `minimize`, calibration, timing, reconstruction, fit analysis |
+| `production/` | digitizer, trigger, event generation, the PhotonSim reader, the dataset format, the dataprod jobs and cluster adapters |
+| `paper/` | the paper's figure entry points, study configs, and the published-resolution check |
+| `string/` | neutrino-telescope string detectors |
+| top level | imports, shell-script safety, `scripts/download_data.py` |
+| `helpers/` | shared fixtures and toy models (no tests); `helpers/paths.py` gives `REPO`, `CONFIG`, `DATA` |
 
-| File | Tests | What it covers |
-|------|-------|----------------|
-| test_containers.py | 11 | SimConfig, DetectorGeometry.from_config |
-| test_geometry.py | 13 | Detector construction (cylinder, sphere, box), sensor placement |
-| test_registry.py | 13 | Detector registry, factory lookup, JIT compat |
-| test_ray_intersection.py | 27 | Ray-geometry intersection for all detector types |
-| test_sensor_map_validation.py | 13 | Grid auto-derivation, overcrowding validation |
-| test_propagator_output.py | 9 | Propagator output structure (weights, positions, normals) |
-| test_shared_propagator.py | 5 | Shared propagator equivalence across geometries |
-| test_shared_propagator_differentiability.py | 8 | Gradient flow through shared propagator |
-| test_propagation_differentiability.py | 15 | Gradient flow through propagation + photon step |
-
-**Full simulation (30s+ each):**
-
-| File | Tests | What it covers |
-|------|-------|----------------|
-| test_sk_like_integration.py | 11 | SK_like simulator: laser, isotropic, SIREN track; K convergence; gradients |
-| test_wavelength_integration.py | 13 | Wavelength-mode simulation: scalar vs wavelength; QE weighting; physics consistency |
-
-## Fixtures (conftest.py)
-
-| Fixture | Scope | What it provides |
-|---------|-------|-----------------|
-| `key` | session | `jax.random.PRNGKey(42)` |
-| `small_cylinder_config` | session | Path to WCTE_like_geom_config.json |
-| `cylinder_detector` | session | Pre-built small generic cylinder (cached) |
-| `fixed_flat_hits` | session | Synthetic sensor hit data for unit tests |
-
-## Config dependencies
-
-Tests reference configs in `config/`:
-- Geometry: `WCTE_like_geom_config.json` (small, fast, algorithmic), `SK_like_geom_config.json` (large, slow). The real `WCTE_geom_config.json` loads measured PMT positions from a separate `.npz` file and is exercised on its own (it is not the generic small-cylinder fixture).
-- Physics: `SK_physics_config.json` (composable format with medium_model + qe_curve references)
-- Materials: `materials/water.json`
-- PMT curves: `pmt/SK_QE.json`, `pmt/HK_QE.json`
+A fixture goes in the `conftest.py` of the subject that uses it, or in `tests/conftest.py` when
+several subjects do. More on development and CI is in [development](../docs/development.md).

@@ -1,10 +1,8 @@
 """Gradient analysis sweep utilities for LUCiD."""
 
-import warnings
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional
 
-import jax.numpy as jnp
 import numpy as np
 from tqdm import tqdm
 
@@ -65,7 +63,7 @@ def _find_leaf(params, field):
     Returns ``(parent, attr)`` where ``getattr(parent, attr)`` is the leaf.
     Supports both flat NamedTuples (``ParticleParams``) and DetectorParams'
     physics-nested sub-tuples — ``field`` keys on the LEAF name (e.g.
-    ``'scatter_length'``, ``'gain'``).
+    ``'scatter_length'``, ``'tts'``).
     """
     if field in getattr(type(params), "_fields", ()):
         return params, field
@@ -103,6 +101,12 @@ def get_grad_component(grads, sp):
     parent, attr = _find_leaf(grads, sp.field)
     val = getattr(parent, attr)
     return float(val[sp.index]) if sp.index is not None else float(val)
+
+
+def _require_finite(where, *values):
+    """Raise if a sweep point's loss or gradient is not finite (a NaN would plot as a gap)."""
+    if not np.all(np.isfinite(values)):
+        raise FloatingPointError(f"non-finite loss or gradient {values} at {where}")
 
 
 def numerical_gradient(losses, values):
@@ -164,20 +168,13 @@ def sweep_1d(
         n = len(vals)
         losses = np.zeros(n)
         gradients = np.zeros(n)
-        warned = False
 
         for i, v in enumerate(tqdm(vals, desc=sp.name)):
             params = set_param_value(base_params, sp, float(v))
             loss, grads = loss_and_grad_fn(params)
-            l_val = float(loss)
-            g_val = get_grad_component(grads, sp)
-
-            if not warned and (not np.isfinite(l_val) or not np.isfinite(g_val)):
-                warnings.warn(f"NaN/Inf detected in sweep for '{sp.name}'")
-                warned = True
-
-            losses[i] = l_val if np.isfinite(l_val) else np.nan
-            gradients[i] = g_val if np.isfinite(g_val) else np.nan
+            losses[i] = float(loss)
+            gradients[i] = get_grad_component(grads, sp)
+            _require_finite(f"'{sp.name}' = {v}", losses[i], gradients[i])
 
         numerical_grads = numerical_gradient(losses, vals)
 
@@ -225,30 +222,17 @@ def sweep_2d(
     losses = np.zeros((nx, ny))
     grad_x_arr = np.zeros((nx, ny))
     grad_y_arr = np.zeros((nx, ny))
-    warned = False
 
     for i, vx in enumerate(tqdm(x_vals, desc=f"{px.name} x {py.name}")):
         for j, vy in enumerate(y_vals):
             params = set_param_value(base_params, px, float(vx))
             params = set_param_value(params, py, float(vy))
             loss, grads = loss_and_grad_fn(params)
-            l_val = float(loss)
-            gx = get_grad_component(grads, px)
-            gy = get_grad_component(grads, py)
-
-            if not warned and (
-                not np.isfinite(l_val)
-                or not np.isfinite(gx)
-                or not np.isfinite(gy)
-            ):
-                warnings.warn(
-                    f"NaN/Inf in 2D sweep for '{px.name}' x '{py.name}'"
-                )
-                warned = True
-
-            losses[i, j] = l_val if np.isfinite(l_val) else np.nan
-            grad_x_arr[i, j] = gx if np.isfinite(gx) else np.nan
-            grad_y_arr[i, j] = gy if np.isfinite(gy) else np.nan
+            losses[i, j] = float(loss)
+            grad_x_arr[i, j] = get_grad_component(grads, px)
+            grad_y_arr[i, j] = get_grad_component(grads, py)
+            _require_finite(f"'{px.name}' = {vx}, '{py.name}' = {vy}",
+                            losses[i, j], grad_x_arr[i, j], grad_y_arr[i, j])
 
     return SweepResult2D(
         param_x=px,

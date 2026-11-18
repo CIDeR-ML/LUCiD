@@ -1,18 +1,13 @@
+"""SIREN emitters: the network, the trained-emitter record and its loader.
+
+- :class:`SIREN`: the network;
+- :func:`load_emitter` / :class:`Emitter`: a trained emitter from ``data/<material>/<particle>/<kind>/``;
+- :func:`density`: the one evaluator.
+
+Training lives in ``lucid.siren.training`` (not imported here).
 """
-SIREN (Sinusoidal Representation Networks) module for photon simulation.
 
-This module provides:
-- Core SIREN model implementation
-- Training utilities for PhotonSim data
-- Validation tools for trained models
-"""
+from .net import SIREN, SineLayer
+from .emitter import Emitter, density, load_emitter
 
-from .core import (
-    SIREN, SineLayer, SirenContext,
-    build_cherenkov_context, build_dedx_context,
-)
-
-__all__ = [
-    'SIREN', 'SineLayer', 'SirenContext',
-    'build_cherenkov_context', 'build_dedx_context',
-]
+__all__ = ['SIREN', 'SineLayer', 'Emitter', 'density', 'load_emitter']

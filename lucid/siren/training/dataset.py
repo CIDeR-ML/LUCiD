@@ -1,26 +1,55 @@
 """
 PhotonSim Dataset Module for SIREN Training
 
-This module provides dataset classes for loading and managing PhotonSim data,
-including both HDF5 lookup tables and pre-sampled datasets.
+This module loads a PhotonSim HDF5 lookup table (as ``lucid-build-photon-table`` /
+``lucid-build-dedx-table`` write it) and serves normalized training batches.
+:func:`table_curves` reads the table's fitted s_max(E) and N_photons(E) back as ``emitter.json``
+blocks.
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Tuple, Dict, Any, Optional, Union
+from typing import Tuple, Union
 import h5py
 import numpy as np
 import jax
 import jax.numpy as jnp
 
+from lucid.siren.emitter import (SMAX_PARAMS, decode_target, encode_target, normalize_inputs,
+                                 target_range)
+
 logger = logging.getLogger(__name__)
+
+
+def _attr(v):
+    """An h5 attribute as a plain Python value."""
+    if isinstance(v, bytes):
+        return v.decode()
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, np.generic):
+        return v.item()
+    return v
+
+
+def table_curves(attrs: dict, kind: str):
+    """``(s_max_mm, n_photons)``: a table's fitted curves as ``emitter.json`` blocks.
+
+    ``n_photons`` is the Cherenkov photon-count fit, None for a dE/dx table.
+    """
+    attrs = {k: _attr(v) for k, v in attrs.items()}
+    smax = {k[len('smax_'):]: v for k, v in attrs.items() if k.startswith('smax_')}
+    form = smax.pop('form')
+    s_max_mm = {'form': form, 'params': {p: float(smax.pop(p)) for p in SMAX_PARAMS[form]}, **smax}
+    if kind == 'dedx':
+        return s_max_mm, None
+    return s_max_mm, {k[len('nphot_'):]: v for k, v in attrs.items() if k.startswith('nphot_')}
 
 
 class PhotonSimDataset:
     """
-    Base class for PhotonSim datasets that can load from either
-    HDF5 lookup tables or pre-sampled dataset directories.
+    A PhotonSim photon or dE/dx lookup table, normalized and split for training.
     """
     
     def __init__(self, data_path: Union[str, Path], val_split: float = 0.1,
@@ -32,7 +61,7 @@ class PhotonSimDataset:
         Initialize dataset.
 
         Args:
-            data_path: Path to HDF5 file or dataset directory
+            data_path: Path to the HDF5 lookup table
             val_split: Fraction of data to use for validation
             zero_threshold: Targets below this value are treated as "zero".
                 Used both as the log offset in ``log10(targets + zero_threshold)``
@@ -82,17 +111,12 @@ class PhotonSimDataset:
         self.zero_keep_frac = float(zero_keep_frac)
         self.energy_balance = energy_balance
         self.target_importance = float(target_importance)
-        self.data_type = None
         self.data = {}
         self.normalized_bounds = {}
         
-        # Load data based on type
-        if self.data_path.is_file() and self.data_path.suffix == '.h5':
-            self._load_h5_lookup_table()
-        elif self.data_path.is_dir():
-            self._load_sampled_dataset()
-        else:
-            raise ValueError(f"Invalid data path: {data_path}")
+        if not (self.data_path.is_file() and self.data_path.suffix == '.h5'):
+            raise ValueError(f"Not an .h5 lookup table: {data_path}")
+        self._load_h5_lookup_table()
             
     def _load_h5_lookup_table(self):
         """Load data from HDF5 lookup table and prepare for training."""
@@ -109,7 +133,6 @@ class PhotonSimDataset:
                 dedx_centers = f['coordinates/dedx_centers'][:]
                 distance_centers = f['coordinates/distance_centers'][:]
                 second_dim_centers = dedx_centers
-                second_dim_name = 'dedx'
             elif 'data/photon_table_average' in f:
                 # This is a photon lookup table
                 self.table_type = 'photon'
@@ -118,7 +141,6 @@ class PhotonSimDataset:
                 angle_centers = f['coordinates/angle_centers'][:]
                 distance_centers = f['coordinates/distance_centers'][:]
                 second_dim_centers = angle_centers
-                second_dim_name = 'angle'
             else:
                 raise ValueError(f"Unknown lookup table format in {self.data_path}")
 
@@ -139,8 +161,21 @@ class PhotonSimDataset:
 
         # Store metadata
         self.metadata = metadata
+        self.kind = 'dedx' if self.table_type == 'dedx' else 'cherenkov'      # the emitter kind
+        if self.kind == 'cherenkov':
+            # The emitter's N_photons(E) is the table's fit; check it before any training, not
+            # when the finished run is written.
+            form = _attr(metadata.get('nphot_form', b''))
+            if form != 'logpoly':
+                raise ValueError(
+                    f"{self.data_path}: its N_photons(E) fit has form {form!r}, but an emitter needs "
+                    "'logpoly'; the table predates the current builder. Rebuild it with "
+                    "lucid-build-photon-table (stage 2).")
         self.energy_range = (energy_centers.min(), energy_centers.max())
         self.distance_range = (distance_centers.min(), distance_centers.max())
+        # The input domain (bin-centre ranges): the emitter's normalisation bounds.
+        self.domain = tuple((float(a.min()), float(a.max()))
+                            for a in (energy_centers, second_dim_centers, distance_centers))
 
         # Distance axis label: new tables use s/s_max ∈ [0,1] and tag it via
         # metadata.attrs['distance_axis']. Older tables had absolute s in mm.
@@ -173,64 +208,20 @@ class PhotonSimDataset:
         # Normalize inputs and prepare bounds
         self._normalize_data()
         
-    def _load_sampled_dataset(self):
-        """Load pre-sampled dataset from directory."""
-        logger.info(f"Loading sampled dataset from {self.data_path}")
-        self.data_type = 'sampled'
-        
-        # Load data arrays
-        inputs_path = self.data_path / 'inputs.npy'
-        targets_path = self.data_path / 'targets.npy'
-        
-        if not inputs_path.exists() or not targets_path.exists():
-            raise FileNotFoundError(f"Dataset files not found in {self.data_path}")
-            
-        self.data['inputs'] = np.load(inputs_path).astype(np.float32)
-        self.data['targets'] = np.load(targets_path).astype(np.float32)
-        
-        # Load metadata if available
-        metadata_path = self.data_path / 'metadata.json'
-        if metadata_path.exists():
-            import json
-            with open(metadata_path, 'r') as f:
-                self.metadata = json.load(f)
-        else:
-            self.metadata = {}
-            
-        # Load normalization bounds
-        bounds_path = self.data_path / 'normalization_bounds.npz'
-        if bounds_path.exists():
-            bounds = np.load(bounds_path)
-            self.normalized_bounds = {
-                'input_min': bounds['input_min'],
-                'input_max': bounds['input_max'],
-                'target_min': bounds['target_min'],
-                'target_max': bounds['target_max']
-            }
-            
-        logger.info(f"Loaded {len(self.data['inputs']):,} data points from sampled dataset")
-        
     def _normalize_data(self):
         """Normalize input and target data."""
-        # Normalize inputs to [-1, 1]
-        self.normalized_bounds['input_min'] = self.data['inputs'].min(axis=0)
-        self.normalized_bounds['input_max'] = self.data['inputs'].max(axis=0)
+        # Normalize inputs to [-1, 1], with the emitter's own normalisation (the domain bounds)
+        self.normalized_bounds['input_min'] = np.array([lo for lo, _ in self.domain])
+        self.normalized_bounds['input_max'] = np.array([hi for _, hi in self.domain])
+        self.data['inputs_normalized'] = self.normalize(self.data['inputs'])
         
-        self.data['inputs_normalized'] = 2 * (
-            (self.data['inputs'] - self.normalized_bounds['input_min']) / 
-            (self.normalized_bounds['input_max'] - self.normalized_bounds['input_min'])
-        ) - 1
-        
-        # Log-normalize targets: offset avoids log(0) while staying small relative to typical target values
+        # The training target, encode_target (lucid.siren.emitter): log10(t + offset) scaled to
+        # [0, 1] over the table; the offset avoids log(0) and is small against typical targets.
         self.data['targets_log'] = np.log10(self.data['targets'] + self.zero_threshold)
-        self.normalized_bounds['target_min'] = self.data['targets_log'].min()
-        self.normalized_bounds['target_max'] = self.data['targets_log'].max()
-        
-        # Normalize log targets to [0, 1] range for training
-        self.data['targets_log_normalized'] = (
-            (self.data['targets_log'] - self.normalized_bounds['target_min']) / 
-            (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min'])
-        )
+        lo, hi = target_range(self.data['targets'], self.zero_threshold)
+        self.normalized_bounds['target_min'], self.normalized_bounds['target_max'] = lo, hi
+        self.data['targets_log_normalized'] = encode_target(self.data['targets'], lo, hi,
+                                                            self.zero_threshold)
         
         # Filter data but keep a fraction of zero values as low-density anchors.
         # "Zero" is defined as target <= self.zero_threshold (which is also the
@@ -372,6 +363,11 @@ class PhotonSimDataset:
             self._train_cdf_jnp = None
             self._val_cdf_jnp   = None
 
+    def normalize(self, inputs: np.ndarray) -> np.ndarray:
+        """Physical ``(n, 3)`` inputs ``[E, axis2, s/s_max]`` to the net's ``[-1, 1]`` inputs."""
+        (e0, e1), (a0, a1), (r0, r1) = self.domain
+        return np.asarray(normalize_inputs(jnp.asarray(inputs, jnp.float32), e0, e1, a0, a1, r0, r1))
+
     def get_sample_input(self) -> jax.Array:
         """Get a sample input for model initialization."""
         return jnp.array(self.data['inputs_normalized'][:1])
@@ -467,71 +463,16 @@ class PhotonSimDataset:
             self.normalized_bounds['input_min']
         )
         
-    def denormalize_targets(self, targets_log: np.ndarray) -> np.ndarray:
-        """Convert log-normalized targets back to original scale."""
-        return 10 ** targets_log - self.zero_threshold
-
     def denormalize_targets_from_normalized(self, targets_normalized: np.ndarray) -> np.ndarray:
-        """Convert normalized log targets [0,1] back to original scale."""
-        # First denormalize from [0,1] to log scale
-        targets_log = (
-            targets_normalized * (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min']) +
-            self.normalized_bounds['target_min']
-        )
-        # Then convert from log to linear scale
-        return 10 ** targets_log - self.zero_threshold
+        """Net outputs back to targets, with inference's own :func:`decode_target`."""
+        return np.asarray(decode_target(jnp.asarray(targets_normalized),
+                                        self.normalized_bounds['target_min'],
+                                        self.normalized_bounds['target_max'], self.zero_threshold))
         
     @property
     def has_validation(self) -> bool:
         """Check if dataset has validation split."""
         return len(self.val_indices) > 0
-        
-    def save_sampled_dataset(self, output_dir: Path, n_samples: int = 1000000):
-        """
-        Save a sampled version of the dataset for faster loading.
-        
-        Args:
-            output_dir: Directory to save dataset
-            n_samples: Number of samples to save
-        """
-        output_dir = Path(output_dir)
-        output_dir.mkdir(exist_ok=True, parents=True)
-        
-        # Sample data if needed
-        if n_samples < len(self.data['inputs']):
-            rng = np.random.RandomState(42)
-            sample_indices = rng.choice(len(self.data['inputs']), n_samples, replace=False)
-            inputs = self.data['inputs'][sample_indices]
-            targets = self.data['targets'][sample_indices]
-        else:
-            inputs = self.data['inputs']
-            targets = self.data['targets']
-            
-        # Save arrays
-        np.save(output_dir / 'inputs.npy', inputs)
-        np.save(output_dir / 'targets.npy', targets)
-        
-        # Save normalization bounds
-        np.savez(
-            output_dir / 'normalization_bounds.npz',
-            input_min=self.normalized_bounds['input_min'],
-            input_max=self.normalized_bounds['input_max'],
-            target_min=self.normalized_bounds.get('target_min', 0),
-            target_max=self.normalized_bounds.get('target_max', 1)
-        )
-        
-        # Save metadata
-        import json
-        metadata = {
-            'n_samples': len(inputs),
-            'data_type': self.data_type,
-            'source': str(self.data_path),
-            **self.metadata
-        }
-        with open(output_dir / 'metadata.json', 'w') as f:
-            json.dump(metadata, f, indent=2)
-            
-        logger.info(f"Saved sampled dataset to {output_dir}")
         
     def get_total_counts_for_energy(self, energy: float) -> float:
         """

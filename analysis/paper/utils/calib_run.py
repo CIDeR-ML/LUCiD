@@ -8,10 +8,10 @@ typed and explicit, so nothing is read from the environment and a variable expor
 caller's shell cannot change the estimator. Several seeds can run in one process and share one
 compiled forward.
 
-The published numbers depend on these being preserved exactly: the key arithmetic (truth at
-``5000 + 131*b``, residual at ``1000 + 777*seed + 13*step``, Jacobian at
-``9_000_000 + 1_234_567*seed + ...``), the three-stage start perturbation and the order of its
-random draws, the gain readout at forward key 999, and the ``(S, NS)`` row layout.
+The published numbers depend on these being preserved exactly: the keys (the library's scheme,
+:mod:`lucid.fitting.calib`: truth on ``truth_seed``'s truth stream, the fit and the gain readout
+on ``seed``'s forward, Jacobian and readout streams), the three-stage start perturbation and the
+order of its random draws, and the ``(S, NS)`` row layout.
 """
 import time
 
@@ -20,60 +20,50 @@ import jax
 import jax.numpy as jnp
 
 from analysis.paper.utils import calibration as C
-from lucid.simulation import setup_event_simulator
-from lucid.fitting import CalibrationParams, CalibrationForward, calibrate, closure_data
+from lucid.fitting import (CalibrationParams, CalibrationForward, CalibrationProblem, calibrate,
+                           closure_data, gauss_newton_tx)
+from lucid.fitting.calib import ROLE_READOUT
 
-__all__ = ['make_map_fn', 'build_start', 'run_seed', 'recipe_to_kwargs']
+__all__ = ['make_map_fn', 'map_mode', 'build_start', 'run_seed', 'build_shared']
 
 
 def make_map_fn(n_group=7):
-    """``map_fn`` for the forward: pmap across devices when there are enough, else a serial loop.
+    """``map_fn`` for the forward: a pmap across devices when there are enough, else ``None``,
+    the forward's own serial loop over the group (the same per-source jit, stacked).
 
-    With fewer devices than ``n_group`` a pmap would fail, so the fallback runs the same
-    per-source computation serially and stacks the results. The fallback is NOT bit-identical to
-    the pmap: trajectories differ at ~1e-3 relative, well inside the published seed-to-seed spread,
-    so one device reproduces the published numbers to within run-to-run noise, not bit for bit.
+    The serial loop is NOT bit-identical to the pmap: trajectories differ at ~1e-3 relative, well
+    inside the published seed-to-seed spread, so one device reproduces the published numbers to
+    within run-to-run noise, not bit for bit.
     """
     devices = jax.devices()
+    if len(devices) < n_group:
+        return None
 
     def map_fn(fn, in_axes):
-        if len(devices) >= n_group:
-            pm = jax.pmap(fn, in_axes=in_axes)
+        pm = jax.pmap(fn, in_axes=in_axes)
 
-            def mapped(*args):
-                # Chunk when the group is larger than the device count: `pmap` needs one device
-                # per element and otherwise raises at call time, minutes into a fit. The
-                # published layout (seven sources) takes the single-shot path.
-                d = len(devices)
-                n = next((int(jax.tree_util.tree_leaves(a)[0].shape[0])
-                          for a, ax in zip(args, in_axes) if ax == 0), 1)
-                if n <= d:
-                    return pm(*args)
-                out = [pm(*[jax.tree_util.tree_map(lambda x: x[i:i + d], a) if ax == 0 else a
-                            for a, ax in zip(args, in_axes)])
-                       for i in range(0, n, d)]
-                return jnp.concatenate(out, axis=0)
+        def mapped(*args):
+            # Chunk when the group is larger than the device count: `pmap` needs one device
+            # per element and otherwise raises at call time, minutes into a fit. The
+            # published layout (seven sources) takes the single-shot path.
+            d = len(devices)
+            n = next((int(jax.tree_util.tree_leaves(a)[0].shape[0])
+                      for a, ax in zip(args, in_axes) if ax == 0), 1)
+            if n <= d:
+                return pm(*args)
+            out = [pm(*[jax.tree_util.tree_map(lambda x: x[i:i + d], a) if ax == 0 else a
+                        for a, ax in zip(args, in_axes)])
+                   for i in range(0, n, d)]
+            return jnp.concatenate(out, axis=0)
 
-            return mapped
-        jf = jax.jit(fn)
-
-        def serial(*args):
-            # Infer the count from the batched argument rather than using `n_group`:
-            # CalibrationForward groups sources by pytree structure and may map over a group of
-            # any size.
-            n = n_group
-            for arg, ax in zip(args, in_axes):
-                if ax == 0:
-                    n = int(jax.tree_util.tree_leaves(arg)[0].shape[0])
-                    break
-            outs = []
-            for i in range(n):
-                a = [jax.tree_util.tree_map(lambda x: x[i], arg) if ax == 0 else arg
-                     for arg, ax in zip(args, in_axes)]
-                outs.append(jf(*a))
-            return jnp.stack(outs)
-        return serial
+        return mapped
     return map_fn
+
+
+def map_mode(n_group=7):
+    """Which forward ``make_map_fn`` runs here, for the record: the two are not bit-identical."""
+    n = len(jax.devices())
+    return dict(map_mode='pmap' if n >= n_group else 'serial', n_devices=n)
 
 
 def build_start(theta_true, params, seed, *, pert=0.4, pert_ls=2.0, pert_refl=1.2):
@@ -99,18 +89,15 @@ def build_start(theta_true, params, seed, *, pert=0.4, pert_ls=2.0, pert_refl=1.
     return start
 
 
-def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
-             refresh=20, polyak=50, lam=0.01, mu=0.1, step_max=0.5, qfloor_frac=0.01,
-             pert=0.4, pert_ls=2.0, pert_refl=1.2, gauge='log', basis='rlogit',
-             intensity=1e8, truth_key_base=5000, gain_key=999,
-             sim=None, sources=None, verbose=True, on_step=None, progress_every=0,
-             deposit_leg_bound=False,
-             tx=None):
+def run_seed(seed, *, steps, n_ph, k, grid, intensity, btruth, n_forward_draws, jacobian_draws,
+             refresh, polyak, lam, mu, max_step, q_floor_frac, gauge, basis, mie_scatter_length,
+             g, pert, pert_ls, pert_refl, truth_seed,
+             sim=None, sources=None, verbose=True, on_step=None, progress_every=0):
     """Fit one seed and return the record the convergence figure reads.
 
-    ``sim`` and ``sources`` are accepted so that several seeds can share one compiled forward;
-    when omitted they are built here. Everything else is the published recipe, defaulted to the
-    published values so that calling this with only a seed reproduces the paper.
+    Every recipe value is required: the published values live in ``calibration.CALIB`` and
+    nowhere else. ``sim`` and ``sources`` are accepted so that several seeds can share one
+    compiled forward; when omitted they are built here.
 
     ``progress_every`` prints the step, the objective and the worst parameter every N steps, and
     ``on_step`` forwards a callback to the loop. Without either, a run reports only when the truth
@@ -121,23 +108,14 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
     """
     t_start = time.time()
     W, NS = len(C.WAVELENGTHS), C.NS
-    params = CalibrationParams(n_wavelengths=W, basis=basis)
+    params = CalibrationParams(n_wavelengths=W, basis=basis,
+                               mie_scatter_length=mie_scatter_length, g=g)
     map_fn = make_map_fn()
 
     if sim is None:
-        # `deposit_leg_bound` reaches the deposit regardless of temperature=None -- the bound is
-        # on the ray PARAMETER, not the overlap width -- so the hard-step calibration forward is
-        # exposed to it like any other. Default False keeps the published calibration
-        # bit-identical.
-        sim = setup_event_simulator(C.GEOM, n_ph, temperature=None, K=k, is_calibration=True,
-                                    hit_mode='aggregated', wavelength_mode=False,
-                                    reflection_model='scalar_mix',
-                                    deposit_leg_bound=deposit_leg_bound)
+        sim = build_shared(n_ph, k, grid)
     if sources is None:
-        # `intensity` defaults to the published value, not to `calibration.INTEN`: that global is
-        # read from the environment at import, so defaulting to it would let the caller's shell
-        # change what a bare `run_seed(seed)` computes.
-        sources = C._laser_sources(intensity=intensity)
+        sources = C._laser_sources(intensity)
 
     truths = [C.effective_truth(w) for w in C.WAVELENGTHS]
     theta_true = params.theta_from_physical(truths, C.WALL_R_MIX, C.WALL_FSPEC,
@@ -145,12 +123,14 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
     truth_k = jnp.asarray(C.TRUTH_K)
 
     # Truth: the expected forward at truth with the truth gains baked in, averaged over `btruth`
-    # draws. Identical across seeds by design — the seed varies the FIT's noise, not the data's,
-    # which is what isolates forward Monte-Carlo noise as the thing the ensemble spread measures.
-    fwd = CalibrationForward(sim, sources, params, NS, map_fn=map_fn)
-    data = closure_data(fwd, theta_true, truth_k, n_draws=btruth, key_base=truth_key_base)
+    # draws on `truth_seed`. Identical across seeds by design — the seed varies the FIT's noise,
+    # not the data's, which is what isolates forward Monte-Carlo noise as the thing the ensemble
+    # spread measures.
+    fwd = CalibrationForward(sim, sources, params, map_fn=map_fn)
+    data = closure_data(fwd, theta_true, truth_k, n_draws=btruth, seed=truth_seed)
     if verbose:
-        print(f'[cfg] seed{seed} N_PH={n_ph:,} NB_RES={nb_res} BTRUTH={btruth} P={params.P}; '
+        print(f'[cfg] seed{seed} N_PH={n_ph:,} n_forward_draws={n_forward_draws} BTRUTH={btruth} '
+              f'P={params.P}; '
               f'truth built ({time.time() - t_start:.0f}s)', flush=True)
 
     start = build_start(theta_true, params, seed, pert=pert, pert_ls=pert_ls, pert_refl=pert_refl)
@@ -168,27 +148,20 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
             if on_step is not None:
                 on_step(step, theta, g, H, loss)
 
-    # `tx` routes the SAME problem through an optax transformation instead of the damped
-    # Gauss-Newton solve. None (the default, used by every published figure) takes the damped
-    # Gauss-Newton path. lam/mu are forwarded only in that case; with a transformation they belong
-    # inside it and calibrate() raises rather than double-apply them.
-    step_kw = {} if tx is not None else dict(lam=lam, mu=mu)
-    res = calibrate(sim, sources, params, data, start, steps=steps,
-                    max_step=step_max, refresh=refresh, n_forward_draws=nb_res,
-                    jacobian_draws=nbh, q_floor_frac=qfloor_frac, gauge=gauge, seed=seed,
-                    readout='polyak' if polyak else 'final', polyak=polyak, map_fn=map_fn,
-                    on_step=cb, tx=tx,
-                    # the forward built above for the truth data, reused rather than re-traced
-                    forward=fwd, **step_kw)
+    problem = CalibrationProblem(fwd, data, seed=seed, q_floor_frac=q_floor_frac, gauge=gauge,
+                                 n_forward_draws=n_forward_draws, jacobian_draws=jacobian_draws)
+    res = calibrate(problem, start, tx=gauss_newton_tx(lam=lam, mu=mu), steps=steps,
+                    refresh=refresh, max_step=max_step, polyak=polyak, on_step=cb)
 
     theta_fit = np.asarray(res['theta'], dtype=float)
-    # Gains at the answer, from a SINGLE forward draw at a key outside the fit's stream, so the
-    # reported map is not the one the last step happened to be conditioned on.
+    # Gains at the answer, from a SINGLE forward draw on the seed's readout stream, outside the
+    # fit's, so the reported map is not the one the last step happened to be conditioned on.
     #
     # Done in numpy, not jnp: jnp's summation order (as in `profile_gains`) differs from numpy's at
     # float32 epsilon, and the published gain map was reduced in numpy. `data.sum(0)` stays a jnp
     # reduction for the same reason: that is how the published readout computed it.
-    m_final = np.asarray(fwd(jnp.asarray(theta_fit, dtype=jnp.float32), gain_key, jnp.ones(NS)))
+    readout_key = jax.random.fold_in(jax.random.PRNGKey(seed), ROLE_READOUT)
+    m_final = np.asarray(fwd(jnp.asarray(theta_fit, dtype=jnp.float32), readout_key, jnp.ones(NS)))
     khat = np.clip(np.asarray(data.sum(0)) / (m_final.sum(0) + 1e-12), 1e-6, None)
     khat = khat / np.mean(khat) if gauge == 'linear' else khat / np.exp(np.mean(np.log(khat)))
     # From C.TRUTH_K directly, NOT from the float32 `truth_k` cast used for the forward: the
@@ -212,91 +185,12 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
         print(f'[conv] seed{seed}: worst {worst:.1%}  k_RMS {np.std(khat / tk - 1) * 100:.2f}%  '
               f'{time.time() - t_start:.0f}s', flush=True)
 
-    # The record is meant to be self-describing: a saved run must state the ESTIMATOR it used, not
-    # only its cost knobs, or it cannot be checked against the recipe without trusting the driver
-    # that wrote it. This driver implements one arm, so it records that arm's settings explicitly.
     return dict(seed=seed, truth=tvec, theta0=np.asarray(theta_true), hist=hist,
                 fit=np.asarray(res['real']), fit_rlogit=theta_fit, chi2=np.asarray(res['loss']),
-                khat=khat, truth_k=tk, W=W, NG=params.NG, P=params.P, N_PH=n_ph,
-                wls=np.asarray(C.WAVELENGTHS), steps=steps, refresh=refresh, nbh=nbh,
-                btruth=btruth, nb_res=nb_res, polyak=polyak, lam=lam, mu=mu, gauge=gauge,
-                basis=basis, k_bounces=k,
-                # estimator provenance
-                loss='neyman', gains_mode='profiled', metric='neyman', solver='solve',
-                hcorr=0, tau=0.0, hfreeze=0, sample_truth=0, truth_random_iso=0, diff_high=0,
-                jkey_seed=1, fixed_fwd=0,
-                # the rest of what defines the run
-                intensity=float(intensity), qfloor_frac=qfloor_frac, step_max=step_max,
-                pert=pert, pert_ls=pert_ls, pert_refl=pert_refl,
-                truth_key_base=truth_key_base, gain_key=gain_key,
-                driver='calib_run.run_seed')
+                khat=khat, truth_k=tk, W=W, NG=params.NG, P=params.P,
+                wls=np.asarray(C.WAVELENGTHS))
 
 
-def build_shared(n_ph, k, intensity=None, deposit_leg_bound=False):
-    """The simulator and sources, built once so several seeds share one compiled forward."""
-    sim = setup_event_simulator(C.GEOM, n_ph, temperature=None, K=k, is_calibration=True,
-                                hit_mode='aggregated', wavelength_mode=False,
-                                reflection_model='scalar_mix',
-                                deposit_leg_bound=deposit_leg_bound)
-    return sim, C._laser_sources(intensity=intensity)
-
-
-_INT = {'STEPS': 'steps', 'K': 'k', 'BTRUTH': 'btruth', 'NB_RES': 'nb_res', 'NBH': 'nbh',
-        'REFRESH': 'refresh', 'POLYAK': 'polyak'}
-_FLOAT = {'LAM': 'lam', 'MU': 'mu', 'STEP_MAX': 'step_max', 'QFLOOR_FRAC': 'qfloor_frac',
-          'PERT': 'pert', 'PERT_LS': 'pert_ls', 'PERT_REFL': 'pert_refl', 'INTEN': 'intensity'}
-_STR = {'GAUGE': 'gauge', 'REFL': 'basis'}
-# Arms this driver does not implement, with the only value it can honour. Two groups: estimator
-# arms the engine offers and this does not, and knobs that reach the ENGINE's simulator but not
-# this one (GRID_MANUAL and the grid trio; FLOOR and HCORR_MIN are consumed only by the
-# SOLVER=marq and HCORR=1 branches, which are themselves refused).
-_REQUIRED = {'SAMPLE_TRUTH': '0', 'COMPUTE_CRB': '0', 'LOSS': 'neyman', 'GAINS': 'profiled',
-             'SOLVER': 'solve', 'METRIC': 'neyman', 'TAU': '0', 'HCORR': '0', 'HFREEZE': '0',
-             'DIFF_HIGH': '0', 'TRUTH_RANDOM_ISO': '0', 'FIXED_FWD_SEED': '', 'JKEY_SEED': '1',
-             'GRID_MANUAL': '0', 'NCAP': '100', 'NANG': '150', 'NHGT': '100',
-             'FLOOR': '1e-5', 'HCORR_MIN': '0.03'}
-
-
-def recipe_to_kwargs(recipe):
-    """Translate the environment-string recipe into typed arguments.
-
-    Narrow by design: every key must be either translated or explicitly pinned, and anything else
-    RAISES. Ignoring what it does not understand is how a configuration silently stops meaning what
-    it says (e.g. under `GRID_MANUAL` the engine applies a manual photon grid, which this driver
-    cannot).
-
-    Note what ``_REQUIRED`` pins: the value of the PUBLISHED arm, which for `LOSS`, `SOLVER` and
-    `JKEY_SEED` is NOT the engine's own default. It states what this driver implements, not what
-    the engine does in the absence of configuration.
-    """
-    kw = {}
-    for env, name in _INT.items():
-        if env in recipe:
-            kw[name] = int(float(recipe[env]))
-    for env, name in _FLOAT.items():
-        if env in recipe:
-            kw[name] = float(recipe[env])
-    for env, name in _STR.items():
-        if env in recipe:
-            kw[name] = recipe[env]
-    if 'N_PH' in recipe:
-        kw['n_ph'] = int(float(recipe['N_PH']))
-
-    bad = {k: recipe[k] for k, v in _REQUIRED.items() if k in recipe and recipe[k] != v}
-    if bad:
-        raise ValueError(f'calib_run implements the published arm only; these differ: {bad}')
-
-    # Truth is generated at the fitted photon count. Compared NUMERICALLY, so '1e6' equals
-    # '1000000', and unconditionally, so a lone TRUTH_NPH is not silently ignored.
-    t_nph = float(recipe.get('TRUTH_NPH', recipe.get('N_PH', 0)))
-    n_ph_v = float(recipe.get('N_PH', 0))
-    if t_nph != n_ph_v:
-        raise ValueError('calib_run generates truth at the fitted photon count; '
-                         f'TRUTH_NPH={t_nph:g} != N_PH={n_ph_v:g}')
-
-    unknown = sorted(set(recipe) - set(_INT) - set(_FLOAT) - set(_STR) - set(_REQUIRED)
-                     - {'N_PH', 'TRUTH_NPH', 'SEED', 'OUTDIR'})
-    if unknown:
-        raise ValueError(f'calib_run does not know what to do with {unknown}. Every recipe key '
-                         'must be translated or explicitly pinned, or it is silently ignored.')
-    return kw
+def build_shared(n_ph, k, grid):
+    """The calibration simulator, built once so several seeds share one compiled forward."""
+    return C._cal_sim(n_ph, k, grid)

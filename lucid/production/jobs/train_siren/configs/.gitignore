@@ -1,3 +1,0 @@
-# Personal scan configs stay untracked; only example_*.json is committed.
-*.json
-!example_*.json

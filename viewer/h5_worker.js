@@ -1,9 +1,9 @@
 // LUCiD HDF5 worker.
 //
-// Streams four v3 files (sensor, hits, step, labl) via h5wasm + HTTP Range,
-// and decodes per-event bundles for the main viewer thread.
+// Fetches the four files of one batch (sensor, hits, step, labl) via h5wasm and
+// decodes per-event bundles for the main viewer thread.
 //
-// Schema reference: docs/reference/dataset-schema.md (v3, post-migration).
+// Schema reference: docs/reference/dataset-schema.md.
 
 import h5wasm from 'https://cdn.jsdelivr.net/npm/h5wasm@0.10.1/dist/esm/hdf5_hl.js';
 
@@ -41,6 +41,21 @@ function readString(grp, name) {
 function readDsFloat32(grp, name) {
   const d = grp.get(name); if (!d) return null;
   return new Float32Array(d.value);
+}
+// Times are stored float64: a supernova burst puts absolute times at 1e9-1e10 ns, where float32
+// steps are 64-1024 ns. The viewer works in float32, so per-digit, per-row and per-segment times
+// are sent relative to the event's t0, subtracted in float64 before narrowing.
+function readDsTimeSince(grp, name, origin) {
+  const d = grp.get(name); if (!d) return null;
+  const v = d.value;
+  const out = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = v[i] - origin;
+  return out;
+}
+// The few absolute times the viewer only prints (window edges, interaction t0) stay float64.
+function readDsFloat64(grp, name) {
+  const d = grp.get(name); if (!d) return null;
+  return new Float64Array(d.value);
 }
 function readDsInt32(grp, name) {
   const d = grp.get(name); if (!d) return null;
@@ -137,16 +152,19 @@ function decodeEvent(idx) {
     }
   }
 
+  const perEvtGrp = lEvt.get('per_event');
+  const t0 = perEvtGrp ? readAttrOrScalar(perEvtGrp, 't0') : 0;
+
   // Sensor file.
   const sensorSIdx = readDsUint16(sEvt, 'sensor_idx');
   const sensorPE = readDsFloat32(sEvt, 'PE');
-  const sensorT = readDsFloat32(sEvt, 'T');
+  const sensorT = readDsTimeSince(sEvt, 'T', t0);
 
   // Hits file.
   const hitsParticle = readDsInt32(hEvt, 'particle_idx');
   const hitsSIdx = readDsUint16(hEvt, 'sensor_idx');
   const hitsPE = readDsFloat32(hEvt, 'PE');
-  const hitsT = readDsFloat32(hEvt, 'T');
+  const hitsT = readDsTimeSince(hEvt, 'T', t0);
   // digit_idx: FK into sensor.h5's per-event digit list (which recorded hit
   // each decomposition row belongs to). Absent on pre-digitizer datasets —
   // synthesize all-zeros (one digit per sensor) so the HIT slice degrades to
@@ -170,7 +188,7 @@ function decodeEvent(idx) {
   const edepEndX = readDsFloat32(eEvt, 'end_x');
   const edepEndY = readDsFloat32(eEvt, 'end_y');
   const edepEndZ = readDsFloat32(eEvt, 'end_z');
-  const edepTime = readDsFloat32(eEvt, 'time');
+  const edepTime = readDsTimeSince(eEvt, 'time', t0);
   const edepEdep = readDsFloat32(eEvt, 'edep');
   const edepBeta = readDsFloat32(eEvt, 'beta_start');
   const edepNCh = readDsInt32(eEvt, 'n_cherenkov');
@@ -191,18 +209,16 @@ function decodeEvent(idx) {
       segment_idx:      readDsInt32(shGrp,   'segment_idx'),
       sensor_idx:       shSIdx,
       PE:               readDsFloat32(shGrp, 'PE'),
-      T:                readDsFloat32(shGrp, 'T'),
+      T:                readDsTimeSince(shGrp, 'T', t0),
       emission_process: shEmission,
     };
   }
 
   // Labl file.
-  const perEvtGrp = lEvt.get('per_event');
   const perIntGrp = lEvt.get('per_interaction');
   const perPartGrp = lEvt.get('per_particle');
   const perTrkGrp = lEvt.get('per_track');
 
-  const t0 = perEvtGrp ? readAttrOrScalar(perEvtGrp, 't0') : 0;
   const contained = perEvtGrp ? readScalarBool(perEvtGrp, 'contained') : false;
 
   // per_window (triggered datasets only): readout gates + CSR digit_offsets
@@ -211,8 +227,8 @@ function decodeEvent(idx) {
   let perWindow = null;
   if (perWinGrp) {
     perWindow = {
-      window_start:  readDsFloat32(perWinGrp, 'window_start'),
-      window_end:    readDsFloat32(perWinGrp, 'window_end'),
+      window_start:  readDsFloat64(perWinGrp, 'window_start'),
+      window_end:    readDsFloat64(perWinGrp, 'window_end'),
       digit_offsets: readDsInt32(perWinGrp,   'digit_offsets'),
     };
   }
@@ -224,7 +240,7 @@ function decodeEvent(idx) {
   if (perIntGrp) {
     perInteraction = {
       source_type:             readDsUint8(perIntGrp,   'source_type'),
-      t0:                      readDsFloat32(perIntGrp, 't0'),
+      t0:                      readDsFloat64(perIntGrp, 't0'),
       vertex_x:                readDsFloat32(perIntGrp, 'vertex_x'),
       vertex_y:                readDsFloat32(perIntGrp, 'vertex_y'),
       vertex_z:                readDsFloat32(perIntGrp, 'vertex_z'),

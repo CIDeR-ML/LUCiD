@@ -1,156 +1,64 @@
-# Local production — produce events on any machine
+# Produce a dataset on your machine
 
-> **On macOS, or prefer a container?** See
-> [container.md](container.md) — one pull,
-> then one `docker run`, with GEANT4 + ROOT + GENIE already set up.
+This builds PhotonSim against your own GEANT4 and ROOT. On macOS, or to skip the build, use
+[the container](container.md).
 
-Three steps to a working dataset with no S3DF, no SLURM, no
-singularity.
+You need GEANT4 11.3 or later, ROOT 6, and Python 3.10 or later. On Linux,
+`conda install -c conda-forge geant4 root` is the quickest route. GENIE is needed only for a
+neutrino-flux config (none ships); the container has it.
 
-## Prerequisites
-
-- **GEANT4 11.3+** and **ROOT 6.0+** installed on your system. On
-  Linux, `conda install -c conda-forge geant4 root` is the fastest
-  path.
-- **Python 3.9+**.
-- **GENIE v3** (only if you write a neutrino-flux config; none ship in the
-  repo today). Easiest: use the unified container — see the bottom of this doc.
-
-## 1. Build PhotonSim (once)
+## 1. Build PhotonSim
 
 ```bash
 git clone https://github.com/cesarjesusvalls/PhotonSim.git
-cd PhotonSim
-mkdir build && cd build
+cd PhotonSim && mkdir build && cd build
 cmake -DGeant4_DIR=$(geant4-config --prefix)/lib/cmake/Geant4 ..
-make -j$(nproc)
-# Result: ./PhotonSim (binary)
+make -j$(nproc)          # builds ./PhotonSim
 ```
 
 ## 2. Install LUCiD
 
-```bash
-git clone https://github.com/CIDeR-ML/LUCiD.git
-cd LUCiD
-pip install -e .
-# The console script `lucid-run-job` is now on your PATH.
-```
+[Install](../../getting-started/install.md) it; `lucid-run-job` is then on your `PATH`.
 
 ## 3. Run one job
 
 ```bash
-# Tell lucid-run-job where the PhotonSim binary lives:
 export PHOTONSIM_BIN=/absolute/path/to/PhotonSim/build/PhotonSim
-
-# Pick any of the bundled configs:
-CONFIG=$(python3 -c "from importlib.resources import files; \
-    print(files('lucid.production.configs').joinpath('GeV/02_mu.json'))")
-
-# Run:
-mkdir -p /tmp/my_dataset
-lucid-run-job \
-    --config "$CONFIG" \
-    --detector SK_WAND \
-    --output-dir /tmp/my_dataset \
-    --job-id 1 \
-    --test
+lucid-run-job --config lucid/production/dataprod/configs/GeV/02_mu.json \
+    --detector SK_WAND --output-dir /tmp/my_dataset --job-id 1 --test
 ```
 
-Output structure under `/tmp/my_dataset/`:
+`--test` runs 2 events. The job writes a GEANT4 macro, runs PhotonSim, runs the LUCiD writer,
+checks the four output files, and deletes the ROOT file unless the config sets
+`"cleanup_root_files": false` or you pass `--keep-root`. `/tmp/my_dataset/` then holds
+`{sensor,hits,step,labl}/wc_*_0000.h5` ([schema](../../reference/dataset-schema.md)).
 
-```
-sensor/wc_sensor_0000.h5
-hits/wc_hits_0000.h5
-step/wc_step_0000.h5
-labl/wc_labl_0000.h5
-```
-
-See [../../reference/dataset-schema.md](../../reference/dataset-schema.md) for the schema.
-
-## 4. Inspect in a browser (optional)
+To look at it in a browser:
 
 ```bash
-python3 viewer/serve_viewer.py /tmp/my_dataset --open
+python viewer/serve_viewer.py /tmp/my_dataset --open      # http://127.0.0.1:8765/
 ```
 
-Opens the interactive PMT + segment display on
-`http://127.0.0.1:8765/`.
+## More events
 
-## Running a full dataset locally
-
-Drop `--test` and add `--n-events N` to run the config's full event
-count. Run one job per batch via shell loop:
+Drop `--test` and set `--n-events` (default 100). Each job is one batch; give each a different
+`--job-id`:
 
 ```bash
 for i in {1..10}; do
-    mkdir -p /tmp/my_dataset
-    lucid-run-job --config "$CONFIG" --detector SK_WAND --output-dir /tmp/my_dataset \
-        --job-id $i --n-events 100
-done
-# → 10 parallel batches: wc_*_0000.h5 through wc_*_0009.h5 in each subdir.
+    lucid-run-job --config lucid/production/dataprod/configs/GeV/02_mu.json --detector SK_WAND \
+        --output-dir /tmp/my_dataset --job-id $i --n-events 100
+done        # batches wc_*_0000.h5 to wc_*_0009.h5
 ```
 
-For SLURM or HPC submission on S3DF, see
-[deploy-s3df.md](deploy-s3df.md).
-
-## Neutrino-flux configs (GENIE chain)
-
-A config with `"primary_source": "genie"` chains
-**gevgen → gntpc → PhotonSim → LUCiD**
-per job. Dependencies are GEANT4 + ROOT + GENIE v3 + the LUCiD Python
-env. The simplest way to cover all of those is the published container:
-
-```bash
-# Docker
-docker pull ghcr.io/cider-ml/lucid:latest
-docker run --rm --platform linux/amd64 \
-    -v /tmp/genie_test:/out \
-    -e GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz \
-    ghcr.io/cider-ml/lucid:latest \
-    lucid-run-job \
-        --config /path/to/your_genie_config.json \
-        --detector SK_WAND \
-        --output-dir /out --job-id 1 --test
-
-# Apptainer
-apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest
-apptainer exec lucid.sif lucid-run-job \
-    --config /path/to/your_genie_config.json \
-    --detector SK_WAND \
-    --output-dir /tmp/genie_test --job-id 1 --test
-```
-
-The image ships PhotonSim pre-built, LUCiD pip-installed, and GENIE
-3.04 with xsec splines for the `AR23_20i_00_000`, `G18_10a_02_11b`,
-and `G21_11a_00_000` tunes pre-baked. All in-repo GENIE configs
-use
-`G18_10a_02_11b` so they work in-container out of the box. For other
-tunes, point `GENIE_XSEC_FILE` at your own spline.
-
-See [container.md](container.md) for more container
-details (bind-mount dev loop, Rosetta setup, etc.).
+For SLURM or HTCondor, see [on a cluster](clusters.md).
 
 ## Troubleshooting
 
-- **`lucid-run-job: command not found`** — did you run `pip install -e .`
-  from the LUCiD repo root?
-- **`Error: PHOTONSIM_BIN env var must point to the built PhotonSim binary`** —
-  export the absolute path.
-- **PhotonSim complains about missing `libG4…` shared libs** — your
-  `LD_LIBRARY_PATH` is missing the GEANT4 install. Either `source
-  $GEANT4_PREFIX/bin/geant4.sh` or rebuild PhotonSim with RPATHs.
-- **LUCiD complains about missing JAX** — `pip install -e .` should
-  have pulled JAX. If not, `pip install jax jaxlib`. For GPU,
-  `pip install -U "jax[cuda12]"`.
-
-## What the runner does
-
-1. Parse the JSON config.
-2. Generate a Geant4 macro (`job_<id>.mac`).
-3. Run `$PHOTONSIM_BIN <macro>` (subprocess) → ROOT file.
-4. Run the LUCiD writer in-process → four `wc_*_NNNN.h5` files.
-5. Verify the four files open cleanly and carry the right provenance.
-6. Delete the ROOT file if `cleanup_root_files: true` in the config.
-
-Under the hood it's `lucid/production/run_job.py`; inspect that file to
-add custom steps or swap components.
+- `lucid-run-job: command not found`: LUCiD is not installed in the active environment.
+- `Error: PHOTONSIM_BIN env var must point to the built PhotonSim binary`: export the absolute
+  path.
+- PhotonSim cannot find `libG4...` libraries: `source $GEANT4_PREFIX/bin/geant4.sh`, or rebuild
+  PhotonSim with RPATHs.
+- `no 'digitizer' block`: the detector has no readout; see
+  [detectors](container.md#4-detectors).

@@ -41,7 +41,6 @@ pre-step ``dice_dep`` to the deposit and accumulates ``log_p``.
 
 import jax
 import jax.numpy as jnp
-from functools import partial
 
 from lucid.utils import normalize
 from lucid.simulation.optics import (
