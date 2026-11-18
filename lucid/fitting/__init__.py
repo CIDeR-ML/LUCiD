@@ -116,6 +116,8 @@ __all__ = [
     "gauss_newton_tx",
     "damped_gauss_newton",
     "scale_by_damped_gauss_newton",
+    "scale_by_driver_schedule",
+    "annealed_learning_rate",
     "minimize",
     # reconstruction
     "ReconModel",

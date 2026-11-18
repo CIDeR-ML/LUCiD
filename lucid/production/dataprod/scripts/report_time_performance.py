@@ -37,7 +37,7 @@ def get_config_name(config_dir):
                 for line in f:
                     if "**Configuration Name**:" in line:
                         return line.split(":")[-1].strip()
-        except:
+        except OSError:
             pass
     return os.path.basename(config_dir)
 
@@ -183,8 +183,6 @@ def plot_histograms(results, output_file=None):
         color = colors[i % len(colors)]
 
         # Create histogram with auto-scaled bins
-        # Use range parameter to set bin edges, which ensures proper bin distribution
-        p99 = np.percentile(times, 99)
         n, bins, patches = ax.hist(
             times, bins=15, color=color, edgecolor="white", alpha=0.8, linewidth=0.5
         )

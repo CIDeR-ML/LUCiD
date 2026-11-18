@@ -25,8 +25,8 @@ class TestDetectorGeometry:
         dg = DetectorGeometry.from_config(small_cylinder_config)
         pts = jnp.array([[0.0, 0.0, 0.0], [100.0, 100.0, 100.0]])
         result = dg.detector.bounds_check(pts)
-        assert result[0] == True
-        assert result[1] == False
+        assert bool(result[0]) is True
+        assert bool(result[1]) is False
 
     def test_no_qe_curve_in_geometry(self, small_cylinder_config):
         dg = DetectorGeometry.from_config(small_cylinder_config)

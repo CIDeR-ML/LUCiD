@@ -169,7 +169,6 @@ def calibrate_timing(
     fa_mean_obs = np.asarray(fa_mean_obs, float)
     fa_var_obs = np.asarray(fa_var_obs, float)
     t_geo = np.asarray(t_geo, float)
-    NS = mu.shape[0]
     W = (mu > 0).astype(float) if weights is None else np.asarray(weights, float)
     lit = W > 0
     n_lit = int(lit.sum())

@@ -305,7 +305,6 @@ def write_markdown(report: dict, out_md: Path) -> None:
                     f"| `{cfg}` | {stage} | {_fmt(wall)} | {_fmt(init)} | {_fmt(mean)} | {mm} |"
                 )
             elif stage == "photonsim":
-                init_elapsed = sd.get("internal_elapsed_s")
                 mean = sd.get("per_event_avg_s")
                 lines.append(
                     f"| `{cfg}` | {stage} | "

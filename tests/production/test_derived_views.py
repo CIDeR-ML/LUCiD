@@ -17,12 +17,10 @@ from lucid.dataset.layout import batch_paths
 from lucid.dataset.schema import EMISSION_PROCESS_DARK
 from lucid.production.dataprod import drivers
 from lucid.simulation.readout import Readout
-from tests.production.test_event_generation import (  # noqa: F401 (fixtures)
+from tests.production.test_event_generation import (
     SKI_NO_DARK,
     _muon_michel_event,
     _StubSimulator,
-    detector,
-    fake_root,
 )
 
 REPO = Path(__file__).resolve().parents[2]

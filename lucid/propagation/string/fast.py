@@ -57,15 +57,11 @@ def create_fast_string_simulator(
     string_axes = tables["string_axes"]
     dom_s_offsets = tables["dom_s_offsets"]  # (n_str, max_dom), sorted, +inf padded
     dom_global_ids = tables["dom_global_ids"]  # (n_str, max_dom), -1 padded
-    string_s_min = tables["string_s_min"]
-    string_s_max = tables["string_s_max"]
 
     sensor_positions = jnp.array(detector.all_points)
     n_str = detector.n_str
     n_sensors = detector.n_sensors
     max_dom = dom_s_offsets.shape[1]
-
-    n_dom_per_str = jnp.array(detector.n_dom_per_str_np)
 
     env_r_sq = detector.envelope_radius**2
     env_z_min = detector.envelope_z_min

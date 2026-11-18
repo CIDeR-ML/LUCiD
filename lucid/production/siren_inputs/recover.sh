@@ -25,7 +25,7 @@
 #     -n N       pack bins for the resubmit (default 1: one node drains the lot)
 #     --force    proceed even if siren jobs are still queued (unsafe mid-wave)
 
-set -eu -o pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 USER_PATHS="${SCRIPT_DIR}/../platform/user_paths.sh"

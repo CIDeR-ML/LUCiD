@@ -1,8 +1,9 @@
 #!/bin/bash
 # Script to monitor PhotonSim jobs on a SLURM cluster (S3DF, NERSC/Perlmutter): squeue
 
+set -euo pipefail
+
 # Colors for output
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
@@ -28,7 +29,7 @@ while getopts "awo:h" opt; do
 done
 
 function show_jobs() {
-    clear
+    clear || true  # no terminal (e.g. piped to a file)
     echo -e "${GREEN}=== PhotonSim Job Monitor ===${NC}"
     echo -e "Time: $(date)"
     echo ""
@@ -76,7 +77,7 @@ function show_jobs() {
         echo -e "${YELLOW}Recently completed (last 5):${NC}"
         find "$OUTPUT_DIR" -name "job-*.out" -type f -mmin -60 2>/dev/null | \
             xargs -I {} sh -c 'echo -n "  "; basename {} | cut -d. -f1; grep "Job ended at:" {} | tail -1' | \
-            tail -5
+            tail -5 || true
     fi
 }
 

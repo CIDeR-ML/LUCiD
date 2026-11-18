@@ -47,7 +47,7 @@ repos:
         # SC2086 (quoting) stays ON. The only exclusions are the two "cannot
         # follow a sourced file" notes, which user_paths.sh already disables
         # in-file six times.
-        args: [--severity=warning, --external-sources, --exclude=SC1090,SC1091]
+        args: [--severity=warning, --external-sources, "--exclude=SC1090,SC1091"]
         files: \.(sh|sbatch)$
 
   - repo: local

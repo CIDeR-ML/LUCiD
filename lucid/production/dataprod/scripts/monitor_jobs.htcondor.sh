@@ -6,6 +6,8 @@
 # its own monitor; the rest of the production pipeline is cluster-
 # agnostic (see ../../../../docs/guides/production/cluster-abstraction.md).
 
+set -euo pipefail
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
 SHOW_ALL=false
@@ -27,7 +29,7 @@ while getopts "awo:h" opt; do
 done
 
 show_jobs() {
-    clear
+    clear || true  # no terminal (e.g. piped to a file)
     echo -e "${GREEN}=== PhotonSim Job Monitor (HTCondor) ===${NC}"
     echo -e "Time: $(date)"
     echo ""
@@ -41,9 +43,9 @@ show_jobs() {
 
     echo ""
     echo -e "${YELLOW}Job Statistics:${NC}"
-    RUNNING=$(condor_q $USER -hold:false -running -af ClusterId 2>/dev/null | wc -l)
-    IDLE=$(condor_q $USER -idle -af ClusterId 2>/dev/null | wc -l)
-    HELD=$(condor_q $USER -hold -af ClusterId 2>/dev/null | wc -l)
+    RUNNING=$(condor_q $USER -hold:false -running -af ClusterId 2>/dev/null | wc -l || true)
+    IDLE=$(condor_q $USER -idle -af ClusterId 2>/dev/null | wc -l || true)
+    HELD=$(condor_q $USER -hold -af ClusterId 2>/dev/null | wc -l || true)
     echo -e "Jobs running: ${GREEN}${RUNNING:-0}${NC}"
     echo -e "Jobs idle:    ${YELLOW}${IDLE:-0}${NC}"
     echo -e "Jobs held:    ${RED}${HELD:-0}${NC}"
@@ -65,7 +67,7 @@ show_jobs() {
         echo -e "${YELLOW}Recently completed (last 5):${NC}"
         find "$OUTPUT_DIR" -name "job-*.out" -type f -mmin -60 2>/dev/null | \
             xargs -I {} sh -c 'echo -n "  "; basename {} | cut -d. -f1; grep "Job ended" {} | tail -1' | \
-            tail -5
+            tail -5 || true
     fi
 }
 
