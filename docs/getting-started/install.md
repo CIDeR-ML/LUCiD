@@ -13,13 +13,13 @@ python3.10 -m venv .venv && . .venv/bin/activate
 pip install -e . -c tests/constraints.txt
 ```
 
-`tests/constraints.txt` pins the versions CI and the published numbers use (jax 0.5.3, Python
-3.10); `pyproject.toml` allows `jax>=0.5.3,<0.6` and Python 3.10 or later.
+`tests/constraints.txt` pins the versions CI uses (jax 0.6.2, Python 3.10); the published numbers
+used jax 0.5.3. `pyproject.toml` allows `jax>=0.6.2,<0.7` and Python 3.10 or later.
 
 JAX runs on the CPU unless a GPU build is installed:
 
 ```bash
-pip install "jax[cuda12]==0.5.3" -c tests/constraints.txt
+pip install "jax[cuda12]==0.6.2" -c tests/constraints.txt
 ```
 
 A visible GPU is then used automatically. `JAX_PLATFORMS=cpu` keeps a run on the CPU.

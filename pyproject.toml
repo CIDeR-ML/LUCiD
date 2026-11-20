@@ -7,7 +7,7 @@ name = "lucid-sim"
 dynamic = ["version"]
 description = "Differentiable photon simulation for optical particle detectors"
 readme = "README.md"
-requires-python = ">=3.10"   # jax 0.5.3, the pinned toolchain, requires 3.10
+requires-python = ">=3.10"   # jax 0.6.2, the pinned toolchain, requires 3.10
 license = "Apache-2.0"
 license-files = ["LICENSE", "LICENSES/*"]
 authors = [
@@ -34,8 +34,8 @@ dependencies = [
     # tests/constraints.txt (read out of develop.sif, docs/getting-started/install.md);
     # the upper bound is there because a jax minor release has moved forward
     # numerics before.
-    "jax>=0.5.3,<0.6",
-    "jaxlib>=0.5.3,<0.6",
+    "jax>=0.6.2,<0.7",
+    "jaxlib>=0.6.2,<0.7",
     "flax>=0.8.0",
     "optax>=0.1.7",
     "numpy>=1.24",

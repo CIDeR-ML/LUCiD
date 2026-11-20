@@ -190,9 +190,10 @@ rebalance a queued wave, cancel and resubmit it.
 
 ### The reference environment (develop.sif)
 
-The paper's numbers and the test gate come from `/sdf/group/neutrino/images/develop.sif`
-(Python 3.10.12, jax 0.5.3). The image has no flax or optax, so install LUCiD into a virtual
-environment that sees the image's packages:
+The paper's numbers come from `/sdf/group/neutrino/images/develop.sif` (Python 3.10.12, jax
+0.5.3). The image has no flax or optax, so install LUCiD into a virtual environment that sees the
+image's packages. `-c tests/constraints.txt` installs jax 0.6.2, the version CI tests, into it;
+the `jax[cuda12]` line gives that jax the GPU:
 
 ```bash
 IMAGE=/sdf/group/neutrino/images/develop.sif
@@ -200,6 +201,7 @@ VENV=/sdf/data/<facility>/<you>/lucid-venv      # a data or group path
 export APPTAINERENV_PYTHONNOUSERSITE=1          # keep ~/.local off sys.path
 apptainer exec -B /sdf "$IMAGE" python3 -m venv --system-site-packages "$VENV"
 apptainer exec -B /sdf "$IMAGE" "$VENV/bin/pip" install -e . -c tests/constraints.txt
+apptainer exec -B /sdf "$IMAGE" "$VENV/bin/pip" install "jax[cuda12]==0.6.2" -c tests/constraints.txt
 apptainer exec --nv -B /sdf "$IMAGE" "$VENV/bin/python" examples/hello_simulate.py
 ```
 
@@ -212,7 +214,7 @@ numbers.
 ### Running the JAX stack on a GPU
 
 The production image's `jaxlib` is CPU-only (`jax.devices()` shows `CpuDevice` even with
-`--nv`); its jax is 0.5.3. GPU work
+`--nv`); its jax is 0.6.2. GPU work
 layers a user-site environment holding `jax-cuda12-plugin`, the matching `nvidia-*-cu12` wheels
 and optax onto the image, through `APPTAINERENV_PYTHONUSERBASE`, plus `--nv`:
 

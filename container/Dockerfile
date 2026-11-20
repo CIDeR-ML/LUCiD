@@ -37,10 +37,10 @@ ENV PATH=/opt/conda/bin:${PATH}
 # in Geant4 11.0 (the Ubuntu 22.04 apt package ships 10.7, which lacks it).
 # -----------------------------------------------------------------------------
 RUN mamba install -y -n base -c conda-forge \
-        geant4=11.3 \
+        geant4=11.3.2 clhep=2.4.7.1 \
         python=3.11 \
         cmake make \
-        jax=0.5.3 jaxlib=0.5.3 flax optax numpy scipy h5py uproot awkward matplotlib \
+        jax=0.6.2 jaxlib=0.6.2 flax optax numpy scipy h5py uproot awkward matplotlib \
         pandas seaborn plotly ipython ipywidgets scikit-learn pillow \
         pytest tqdm pyyaml \
  && mamba clean -afy

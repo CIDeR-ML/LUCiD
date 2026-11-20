@@ -4,18 +4,19 @@
 #
 #     pip install -e . -c tests/constraints.txt
 #
-# pyproject.toml states the supported RANGE (`jax>=0.5.3,<0.6`, ...); this file states the ONE point
+# pyproject.toml states the supported RANGE (`jax>=0.6.2,<0.7`, ...); this file states the ONE point
 # in that range the CI jobs run at, and the one a reported number should be read against. Every
 # version below was read out of the reference container /sdf/group/neutrino/images/develop.sif
-# (python 3.10.12) with importlib.metadata, except the four the container lacks (below).
+# (python 3.10.12) with importlib.metadata, except the four the container lacks (below) and jax and
+# jaxlib, which follow the production image and the T1-LArTPC image (0.6.2; develop.sif ships 0.5.3).
 #
 # Changing a line here is a numerics change. jax, jaxlib, numpy and scipy in particular reassociate
 # reductions between releases, and lucid pins neither the matmul precision (it runs at JAX's
 # default) nor the reduction order.
 
 # --- the JAX stack: jax and jaxlib move together, and ml_dtypes/opt_einsum come with them
-jax==0.5.3
-jaxlib==0.5.3
+jax==0.6.2
+jaxlib==0.6.2
 ml_dtypes==0.5.1
 opt_einsum==3.4.0
 

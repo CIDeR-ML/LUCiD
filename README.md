@@ -17,7 +17,7 @@ nanoseconds and MeV.
 ## Getting started
 
 Simulation, calibration and reconstruction need only JAX and a few Python packages. LUCiD is
-installed from a clone; Python 3.10 with jax 0.5.3 is the tested version.
+installed from a clone; Python 3.10 with jax 0.6.2 is the tested version.
 
 ```bash
 git clone https://github.com/CIDeR-ML/LUCiD.git && cd LUCiD
