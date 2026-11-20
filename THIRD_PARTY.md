@@ -43,7 +43,7 @@ comment records what that base carries. The image therefore redistributes, in on
 | the whole LUCiD source tree (`COPY LUCiD /opt/LUCiD` in `container/Dockerfile`) | Apache-2.0 ([`LICENSE`](LICENSE)) | an editable install of the tree |
 | PhotonSim, pinned to `v1.0.3` (`container.yml` `PHOTONSIM_REF_DEFAULT`) | see the PhotonSim repository | separate repository, separate terms |
 | ROOT, GENIE 3.04 + xsec splines, Pythia6, NUISANCE, NEUT, NuWro, LHAPDF (base image) | mixed; **several are not freely redistributable**: GENIE's splines, NEUT and NuWro in particular are collaboration-restricted | the strictest terms in the project are in this layer, which has not been inventoried |
-| Geant4 11.3 data sets | Geant4 licence | pulled by the Dockerfile's `G4*DATA` setup |
+| Geant4 11.3.2 data sets | Geant4 licence | installed with conda-forge's Geant4 in the image's `photonsim` environment |
 
 `container.yml` builds with `sbom: true`, so BuildKit attaches an SBOM (an inventory of those
 layers) to each pushed image. Outstanding: stop pushing `:latest` from a public repository until

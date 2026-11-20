@@ -14,11 +14,14 @@ apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest      # Apptainer
 
 - Base image `nuisancemc/tutorial:nuint2024`: ROOT 6.30 with Pythia6, GENIE 3.04, and cross-section
   splines for the tunes `AR23_20i_00_000`, `G18_10a_02_11b` and `G21_11a_00_000`.
-- Miniforge Python 3.11 at `/opt/conda` with Geant4 11.3.2 (CLHEP 2.4.7.1) and LUCiD's Python
-  dependencies, including jax and a CPU-only jaxlib 0.6.2, the version `tests/constraints.txt` pins.
+- Miniforge at `/opt/conda` with LUCiD's Python dependencies at the T1-LArTPC image's versions:
+  Python 3.11.17, jax with a CPU-only jaxlib 0.6.2 (the version `tests/constraints.txt` pins),
+  numpy 2.4.6, scipy 1.17.1, h5py 3.16.0 with HDF5 1.14.6.
 - LUCiD installed editable at `/opt/LUCiD` with `pip install --no-deps`, so the conda pins above
   are the image's dependency versions.
-- PhotonSim built at `/opt/PhotonSim/build`.
+- PhotonSim at `/opt/PhotonSim`, built in the conda environment `photonsim` with Geant4 11.3.2
+  (CLHEP 2.4.7.1), ROOT 6.32.16, g++ 14.3 and CMake 3.31.8. Run it as `/opt/PhotonSim/photonsim`
+  (`PHOTONSIM_BIN`), which keeps the base image's ROOT 6.30 out of its environment.
 - PMT overlap tables pre-computed for the `*_WAND` detectors. Production jobs do not use them.
 - `/opt/VERSIONS`: the LUCiD and PhotonSim commits and release tags, whether the LUCiD build
   context had uncommitted changes (`lucid_dirty`), the build date and the Geant4 version. Every

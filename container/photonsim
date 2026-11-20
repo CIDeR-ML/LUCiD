@@ -1,0 +1,13 @@
+#!/bin/bash
+# PhotonSim, in its own conda environment: Geant4 11.3.2 and ROOT 6.32.16 (container/Dockerfile, layer 3).
+#
+# The base image's ROOT 6.30 serves the event generators. Its variables (ROOTSYS, ROOT_INCLUDE_PATH and
+# its library directories on LD_LIBRARY_PATH) would point this ROOT 6.32 process at the wrong headers and
+# libraries, so they are cleared here. Everything else in the environment is kept, Kerberos tickets for
+# EOS included.
+unset ROOTSYS ROOT_INCLUDE_PATH
+export LD_LIBRARY_PATH=/opt/conda/envs/photonsim/lib
+# shellcheck disable=SC1091
+source /opt/conda/etc/profile.d/conda.sh
+conda activate photonsim
+exec /opt/PhotonSim/build/PhotonSim "$@"

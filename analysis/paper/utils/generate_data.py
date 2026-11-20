@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))  # LUCiD/ on path
 from analysis.paper.utils import paths  # noqa: E402
 
-PHOTONSIM_BIN = "/opt/PhotonSim/build/PhotonSim"
+PHOTONSIM_BIN = "/opt/PhotonSim/photonsim"
 ACCOUNT = "mli:cider-ml"
 PARTITION = "milano"
 BEAM_ON = 500
